@@ -11,6 +11,7 @@ const {
   hasMatchingMacTeam,
   hasMatchingWindowsPublisher,
   isSameOrigin,
+  macTeamIdentifier,
   normalizeHost,
 } = require('./security.cjs');
 
@@ -698,7 +699,7 @@ function notifyUpToDate(verbose) {
   });
 }
 
-function notifyUpdateAvailable(verbose = true) {
+function notifyUpdateAvailable(verbose = true, { autoDownload = true } = {}) {
   sendUpdateStatus({
     type: 'available',
     data: {
@@ -714,7 +715,9 @@ function notifyUpdateAvailable(verbose = true) {
 
   notifyUpdateStatus({
     title: 'Update Available',
-    message: 'MailFlow is downloading the newest version for you.',
+    message: autoDownload
+      ? 'MailFlow is downloading the newest version for you.'
+      : 'A new version of MailFlow is available to download.',
   });
 }
 
@@ -899,6 +902,44 @@ async function verifyDownloadedUpdate(filePath) {
   verifyPlatformSignature(filePath);
 }
 
+// Whether this install can auto-download and install its own updates.
+//
+// Auto-install depends on verifyPlatformSignature pinning the download to the installed
+// app's own publisher. An UNSIGNED build has no publisher to pin to, so that check can
+// never pass: every auto-downloaded update would be fetched and then discarded as
+// unverifiable. Rather than relax signature checking for an app that holds mail
+// credentials, unsigned builds notify and link to the release instead. The user still
+// stops hand-building every version (#441), and verification stays strict for everyone
+// who does have a signed install.
+//
+// This has to cover macOS as well as Windows. The darwin branch of
+// verifyPlatformSignature runs `spctl --assess`, which an unsigned or ad-hoc signed app
+// fails by definition, so without this check an unsigned Mac install would download every
+// update, fail verification and silently discard it, with no link offered.
+//
+// Linux is unaffected: verifyPlatformSignature has no Linux branch, so those updates are
+// gated by the SHA-256 digest from the release metadata and auto-install normally.
+function canAutoInstallUpdates() {
+  try {
+    if (process.platform === 'win32') {
+      const installed = readWindowsSignature(process.execPath);
+      return installed?.status === 'Valid' && Boolean(installed.subject);
+    }
+
+    if (process.platform === 'darwin') {
+      // A real Developer ID signature carries a team identifier; an ad-hoc or unsigned
+      // build reports "not set", which macTeamIdentifier returns as null.
+      return Boolean(macTeamIdentifier(readMacSignatureDetails(process.execPath)));
+    }
+
+    return true;
+  } catch {
+    // Cannot read our own signature — treat as unsigned and link out rather than
+    // download something we will not be able to verify.
+    return false;
+  }
+}
+
 function isUpdateDownloadItem(item) {
   if (!pendingUpdateDownloadUrl && !updateInfo?.updateUrl) return false;
 
@@ -988,6 +1029,14 @@ async function checkForUpdates(verbose = false) {
       releaseDate: release.published_at,
       updateUrl: asset.browser_download_url,
     };
+
+    // An unsigned install cannot verify what it downloads, so it links to the release
+    // rather than fetching an installer it would have to throw away. See
+    // canAutoInstallUpdates.
+    if (!canAutoInstallUpdates()) {
+      notifyUpdateAvailable(verbose, { autoDownload: false });
+      return { updateAvailable: true, downloadAvailable: false, manual: true };
+    }
 
     notifyUpdateAvailable(verbose);
     downloadUpdate(asset.browser_download_url);
