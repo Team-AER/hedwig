@@ -712,6 +712,9 @@ function notifyUpdateAvailable(verbose = true, { autoDownload = true } = {}) {
       releaseUrl: updateInfo.releaseUrl,
       updateUrl: updateInfo.updateUrl,
       manual: true,
+      // False when this install cannot verify what it downloads, so the renderer offers a
+      // link to the release rather than waiting for a download that will never arrive.
+      canAutoInstall: autoDownload,
     },
   });
 
