@@ -12,8 +12,9 @@ vi.mock('../utils/redact.js', () => ({ redactEmail: vi.fn() }));
 vi.mock('./hostValidation.js', () => ({ resolveForConnection: vi.fn(), createPinnedLookup: vi.fn() }));
 vi.mock('./connectionPolicy.js', () => ({ getConnectionPolicy: vi.fn() }));
 vi.mock('./spamPipeline.js', () => ({ classifyAndTagMessage: vi.fn() }));
+vi.mock('./mailAccess.js', () => ({ getAccountAddresses: vi.fn(async () => []) }));
 
-import { ImapManager, MIN_SYNC_INTERVAL_MS, AUTO_IDLE_DELAY_MS, countMissingInboxCopies, fetchBackfillBatch, providerProfile, makeClientCfg, relocateExemptGuard, insertCopiedSibling, deleteMessageCopyRow, emitSectionsChanged, ensureMailbox, createKeyedSemaphore, isConnectionRefusal, connectCooldownMs, effectiveSyncIntervalMs, folderSyncDue, planModseqSync, connectStaggerFor, walkStructure, extractBodyFromMsg, bodyFallbackApplies, parsePersistentCap, resolvePersistentCap, persistentEligible, shouldRetryIPv4, classifyMoveBySearch } from './imapManager.js';
+import { ImapManager, MIN_SYNC_INTERVAL_MS, AUTO_IDLE_DELAY_MS, countMissingInboxCopies, fetchBackfillBatch, providerProfile, makeClientCfg, relocateExemptGuard, insertCopiedSibling, deleteMessageCopyRow, emitSectionsChanged, ensureMailbox, createKeyedSemaphore, isConnectionRefusal, connectCooldownMs, effectiveSyncIntervalMs, folderSyncDue, planModseqSync, connectStaggerFor, walkStructure, extractBodyFromMsg, bodyFallbackApplies, parsePersistentCap, resolvePersistentCap, persistentEligible, shouldRetryIPv4, classifyMoveBySearch, computeThreadId } from './imapManager.js';
 import { pluginRegistry } from '../plugins/registry.js';
 import { EventEmitter } from 'node:events';
 import { ImapFlow } from 'imapflow';
@@ -23,6 +24,7 @@ import { getConnectionPolicy } from './connectionPolicy.js';
 import { invalidateGtdConfigCache } from '../plugins/gtd/gtdConfig.js';
 import { parseMessage } from './messageParser.js';
 import { classifyAndTagMessage } from './spamPipeline.js';
+import { getAccountAddresses } from './mailAccess.js';
 
 const account = (imap_host, oauth_provider = null) => ({ imap_host, oauth_provider });
 
@@ -2508,5 +2510,178 @@ describe('maybeClassifyNewMessage — antispam ingest hook', () => {
     // A failed move must not wedge the account: the next one goes through.
     await expect(imap.moveMessage({ id: 'acct' }, 2, 'INBOX', 'Junk')).resolves.toBe(42);
     move.mockRestore();
+  });
+});
+
+describe('computeThreadId subject fallback requires a shared correspondent (#468)', () => {
+  const ACCOUNT = 'acct-1';
+  const OWNER = 'me@example.com';
+
+  // The fallback only runs for messages with no References and no In-Reply-To, so every
+  // case here passes null for both.
+  const noHeaders = [null, null];
+
+  beforeEach(() => {
+    query.mockReset();
+    getAccountAddresses.mockReset();
+    getAccountAddresses.mockResolvedValue([OWNER]);
+  });
+
+  it('does not merge two senders who only have the account owner in common', async () => {
+    // The report: PayPal and an unrelated sender used the same subject, and MailFlow
+    // threaded them together.
+    query.mockResolvedValueOnce({
+      rows: [{
+        thread_id: 'paypal-thread',
+        from_email: 'service@paypal.com',
+        to_addresses: [{ email: OWNER }],
+        cc_addresses: [],
+      }],
+    });
+
+    const id = await computeThreadId(ACCOUNT, '<new@other.com>', ...noHeaders, 'Login attempt', {
+      fromEmail: 'alerts@other.com',
+      to: [{ email: OWNER }],
+      cc: [],
+      own: OWNER,
+    });
+
+    expect(id).toBe('<new@other.com>'); // its own message id: a new thread
+  });
+
+  it('still threads a reply from the other party, which is why the fallback exists', async () => {
+    query.mockResolvedValueOnce({
+      rows: [{
+        thread_id: 'project-thread',
+        from_email: 'anna@partner.com',
+        to_addresses: [{ email: OWNER }],
+        cc_addresses: [],
+      }],
+    });
+
+    // Our own reply, sent to Anna, with the headers stripped by the client.
+    const id = await computeThreadId(ACCOUNT, '<reply@example.com>', ...noHeaders, 'RE: Project update', {
+      fromEmail: OWNER,
+      to: [{ email: 'anna@partner.com' }],
+      cc: [],
+      own: OWNER,
+    });
+
+    expect(id).toBe('project-thread');
+  });
+
+  it('matches on a cc participant, not just from and to', async () => {
+    query.mockResolvedValueOnce({
+      rows: [{
+        thread_id: 'cc-thread',
+        from_email: 'anna@partner.com',
+        to_addresses: [{ email: OWNER }],
+        cc_addresses: [{ email: 'bob@partner.com' }],
+      }],
+    });
+
+    const id = await computeThreadId(ACCOUNT, '<x@partner.com>', ...noHeaders, 'Quarterly numbers', {
+      fromEmail: 'bob@partner.com',
+      to: [{ email: OWNER }],
+      cc: [],
+      own: OWNER,
+    });
+
+    expect(id).toBe('cc-thread');
+  });
+
+  it('skips a non-matching candidate and joins a later one that does share a correspondent', async () => {
+    query.mockResolvedValueOnce({
+      rows: [
+        { thread_id: 'stranger', from_email: 'noreply@bank.com', to_addresses: [{ email: OWNER }], cc_addresses: [] },
+        { thread_id: 'real', from_email: 'anna@partner.com', to_addresses: [{ email: OWNER }], cc_addresses: [] },
+      ],
+    });
+
+    const id = await computeThreadId(ACCOUNT, '<y@partner.com>', ...noHeaders, 'Status', {
+      fromEmail: 'anna@partner.com',
+      to: [{ email: OWNER }],
+      cc: [],
+      own: OWNER,
+    });
+
+    expect(id).toBe('real');
+  });
+
+  it('is case insensitive about addresses', async () => {
+    query.mockResolvedValueOnce({
+      rows: [{ thread_id: 't', from_email: 'Anna@Partner.com', to_addresses: [{ email: OWNER }], cc_addresses: [] }],
+    });
+
+    const id = await computeThreadId(ACCOUNT, '<z@partner.com>', ...noHeaders, 'Status', {
+      fromEmail: 'anna@PARTNER.COM', to: [], cc: [], own: OWNER.toUpperCase(),
+    });
+
+    expect(id).toBe('t');
+  });
+
+  it('parses address columns that arrive as JSON strings', async () => {
+    query.mockResolvedValueOnce({
+      rows: [{
+        thread_id: 'legacy',
+        from_email: 'anna@partner.com',
+        to_addresses: JSON.stringify([{ email: OWNER }]),
+        cc_addresses: '[]',
+      }],
+    });
+
+    const id = await computeThreadId(ACCOUNT, '<w@partner.com>', ...noHeaders, 'Status', {
+      fromEmail: 'anna@partner.com', to: [], cc: [], own: OWNER,
+    });
+
+    expect(id).toBe('legacy');
+  });
+
+  it('starts a new thread when the message has no correspondent but the owner', async () => {
+    // A message to nobody but the account itself cannot be matched on participants, so it
+    // must not fall back to subject-only matching.
+    const id = await computeThreadId(ACCOUNT, '<self@example.com>', ...noHeaders, 'Notes to self', {
+      fromEmail: OWNER, to: [{ email: OWNER }], cc: [], own: OWNER,
+    });
+
+    expect(id).toBe('<self@example.com>');
+    expect(query).not.toHaveBeenCalled(); // no point querying with nothing to match on
+  });
+
+  it('treats an alias as the account\'s own address, not a shared correspondent', async () => {
+    // An alias is typically a shared address like support@, which is exactly where unrelated
+    // automated mail lands. If it counted as a correspondent it would merge that mail back
+    // together and reintroduce the bug for alias users.
+    // A fresh account id, because the own-address lookup is memoized per account for five
+    // minutes and the earlier cases already cached acct-1 without an alias.
+    const ALIAS_ACCOUNT = 'acct-alias';
+    getAccountAddresses.mockResolvedValue([OWNER, 'support@example.com']);
+    query.mockResolvedValueOnce({
+      rows: [{
+        thread_id: 'paypal-thread',
+        from_email: 'service@paypal.com',
+        to_addresses: [{ email: 'support@example.com' }],
+        cc_addresses: [],
+      }],
+    });
+
+    const id = await computeThreadId(ALIAS_ACCOUNT, '<new@other.com>', ...noHeaders, 'Login attempt', {
+      fromEmail: 'alerts@other.com',
+      to: [{ email: 'support@example.com' }],
+      cc: [],
+      own: OWNER,
+    });
+
+    expect(id).toBe('<new@other.com>'); // a new thread, not paypal-thread
+  });
+
+  it('never reaches the fallback when the message carries threading headers', async () => {
+    query.mockResolvedValueOnce({ rows: [{ message_id: '<root@x.com>', thread_id: 'header-thread' }] });
+
+    const id = await computeThreadId(ACCOUNT, '<reply@x.com>', '<root@x.com>', '<root@x.com>', 'Anything', {
+      fromEmail: 'someone@nowhere.com', to: [], cc: [], own: OWNER,
+    });
+
+    expect(id).toBe('header-thread');
   });
 });

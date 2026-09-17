@@ -13,6 +13,7 @@ import { decrypt } from './encryption.js';
 import { sendPushToUser } from './pushNotifications.js';
 import { redactEmail } from '../utils/redact.js';
 import { adjustFolderCounts, resolveSpamFolder } from '../utils/mailUtils.js';
+import { getAccountAddresses } from './mailAccess.js';
 import { resolveForConnection, createPinnedLookup } from './hostValidation.js';
 import { getConnectionPolicy } from './connectionPolicy.js';
 import { applyInboxRules, applyBlockList } from './inboxRules.js';
@@ -1084,7 +1085,7 @@ function normalizeSubject(subject) {
 // Compute the thread_id for an incoming message.
 // Primary: RFC 5322 References / In-Reply-To header chain.
 // Fallback: subject normalization when headers are absent (e.g. Outlook RE: replies).
-async function computeThreadId(accountId, messageId, inReplyTo, references, subject) {
+export async function computeThreadId(accountId, messageId, inReplyTo, references, subject, participants = null) {
   if (!messageId) return null;
 
   const refIds = parseReferences(references);
@@ -1116,13 +1117,28 @@ async function computeThreadId(accountId, messageId, inReplyTo, references, subj
     return candidates[0] || messageId;
   }
 
-  // No RFC 5322 threading headers — fall back to subject normalization.
-  // Looks for the earliest message in the same account with the same normalized subject
-  // within the past 90 days and joins that thread.
+  // No RFC 5322 threading headers — fall back to subject normalization. This exists for
+  // clients that strip References/In-Reply-To from replies, so it must still join a genuine
+  // reply from the other party.
+  //
+  // Subject alone is not enough. Two unrelated automated notifications that happen to share
+  // a subject ("Security alert", "Your login") were being merged into one thread (#468), and
+  // the same weakness lets a single subject collect hundreds of messages. So a candidate
+  // must also share a correspondent: some participant other than this account's own address.
+  // A reply from the other party still matches, because that party is on both messages;
+  // two senders who have only the account owner in common no longer do.
+  //
+  // Candidates are scanned oldest first and capped. Finding no match simply starts a new
+  // thread, which is the safe direction to fail in: a thread that did not merge is a much
+  // smaller problem than unrelated mail merged together.
   const normalized = normalizeSubject(subject);
-  if (normalized) {
-    const subjectRow = await query(
-      `SELECT thread_id FROM messages
+  const own = normalized && participants
+    ? await ownAddressesFor(accountId, participants.own)
+    : new Set();
+  const mine = participantSet(participants, own);
+  if (normalized && mine.size > 0) {
+    const candidates = await query(
+      `SELECT thread_id, from_email, to_addresses, cc_addresses FROM messages
        WHERE account_id = $1
          AND is_deleted = false
          AND message_id IS DISTINCT FROM $2
@@ -1130,13 +1146,90 @@ async function computeThreadId(accountId, messageId, inReplyTo, references, subj
          AND normalized_subject = $3
          AND date > NOW() - INTERVAL '90 days'
        ORDER BY date ASC
-       LIMIT 1`,
-      [accountId, messageId, normalized]
+       LIMIT $4`,
+      [accountId, messageId, normalized, SUBJECT_THREAD_CANDIDATE_LIMIT]
     );
-    if (subjectRow.rows.length > 0) return subjectRow.rows[0].thread_id;
+    for (const row of candidates.rows) {
+      const theirs = participantSet({
+        fromEmail: row.from_email,
+        to: parseAddressColumn(row.to_addresses),
+        cc: parseAddressColumn(row.cc_addresses),
+      }, own);
+      for (const p of theirs) {
+        if (mine.has(p)) return row.thread_id;
+      }
+    }
   }
 
   return messageId;
+}
+
+// How many same-subject candidates the fallback will examine. A subject shared by more
+// messages than this is an automated notification, not a conversation.
+const SUBJECT_THREAD_CANDIDATE_LIMIT = 200;
+
+// Addresses on a message other than the account's own, lowercased. The account's own
+// addresses are excluded because they appear on every message in the mailbox and so cannot
+// distinguish one correspondent from another.
+function participantSet(msg, ownAddresses) {
+  const out = new Set();
+  if (!msg) return out;
+  const add = (entry) => {
+    const email = typeof entry === 'string' ? entry : entry?.email;
+    const v = String(email || '').trim().toLowerCase();
+    if (v && !ownAddresses.has(v)) out.add(v);
+  };
+  add(msg.fromEmail);
+  for (const a of Array.isArray(msg.to) ? msg.to : []) add(a);
+  for (const a of Array.isArray(msg.cc) ? msg.cc : []) add(a);
+  return out;
+}
+
+// "Own" has to include the account's aliases, not just its login address. An alias is
+// typically a shared address like support@, which is exactly where unrelated automated mail
+// lands; leaving it in would let it act as the shared correspondent and merge that mail back
+// together, reintroducing #468 for alias users.
+//
+// Only the subject fallback needs this, and that runs for a minority of messages, so the
+// lookup is lazy and memoized rather than loaded on every sync. A stale entry can only mean
+// an alias added in the last few minutes is not yet excluded.
+const OWN_ADDRESS_TTL_MS = 5 * 60 * 1000;
+const ownAddressCache = new Map();
+
+async function ownAddressesFor(accountId, primaryAddress) {
+  const cached = ownAddressCache.get(accountId);
+  if (cached && Date.now() - cached.at < OWN_ADDRESS_TTL_MS) return cached.addresses;
+
+  const addresses = new Set();
+  const add = (v) => {
+    const s = String(v || '').trim().toLowerCase();
+    if (s) addresses.add(s);
+  };
+  add(primaryAddress);
+  try {
+    for (const addr of await getAccountAddresses(accountId)) add(addr);
+  } catch (err) {
+    // Falling back to the primary address alone only costs alias precision, so this must
+    // not stop a message being threaded at all.
+    logger.warn(`Alias lookup failed while threading for account ${accountId}: ${err.message}`);
+  }
+  ownAddressCache.set(accountId, { at: Date.now(), addresses });
+  return addresses;
+}
+
+// to_addresses / cc_addresses are JSONB; pg returns them parsed, but a legacy row may hold
+// a JSON string.
+function parseAddressColumn(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
 }
 
 // Ensure OAuth token is fresh before connecting
@@ -3155,7 +3248,8 @@ export class ImapManager {
             const msgId = sanitizeStr(parsed.messageId);
             const inReplyTo = sanitizeStr(parsed.inReplyTo);
             const refs = sanitizeStr(parsed.references);
-            const threadId = await computeThreadId(account.id, msgId, inReplyTo, refs, sanitizeStr(parsed.subject));
+            const threadId = await computeThreadId(account.id, msgId, inReplyTo, refs, sanitizeStr(parsed.subject),
+              { fromEmail: parsed.fromEmail, to: parsed.to, cc: parsed.cc, own: account.email_address });
 
             // Upsert only this server UID. Shared Message-IDs do not prove a move,
             // including self-mail and duplicate deliveries within one mailbox.
@@ -3785,7 +3879,8 @@ export class ImapManager {
                 const bfMsgId    = sanitizeStr(parsed.messageId);
                 const bfReplyTo  = sanitizeStr(parsed.inReplyTo);
                 const bfRefs     = sanitizeStr(parsed.references);
-                const bfThreadId = await computeThreadId(account.id, bfMsgId, bfReplyTo, bfRefs, sanitizeStr(parsed.subject));
+                const bfThreadId = await computeThreadId(account.id, bfMsgId, bfReplyTo, bfRefs, sanitizeStr(parsed.subject),
+                  { fromEmail: parsed.fromEmail, to: parsed.to, cc: parsed.cc, own: account.email_address });
 
                 let bfCategory = null;
                 if (account.categorization_enabled || await getGlobalCategorizationEnabled(account.user_id)) {
@@ -4372,7 +4467,8 @@ export class ImapManager {
     // Self-rooting orphaned every sent message into its own thread, showing as a duplicate
     // "shadow" separate from the conversation (#378).
     const threadId = msgId
-      ? await computeThreadId(account.id, msgId, sanitizeStr(inReplyTo), sanitizeStr(references), sanitizeStr(subject))
+      ? await computeThreadId(account.id, msgId, sanitizeStr(inReplyTo), sanitizeStr(references), sanitizeStr(subject),
+        { fromEmail, to, cc, own: account.email_address })
       : null;
     await query(`
       INSERT INTO messages (
