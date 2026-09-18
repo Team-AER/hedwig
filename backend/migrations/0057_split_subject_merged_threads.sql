@@ -20,9 +20,11 @@
 -- Threads containing any message with References or In-Reply-To are skipped entirely: that
 -- threading came from headers and was always correct.
 --
--- Runs in a transaction like the other bulk backfills (0002, 0017). The runner splits a
--- no-transaction migration on semicolons, which would shred the PL/pgSQL below, and it
--- disables statement_timeout for migrations so the duration is not a problem.
+-- Runs in a transaction like the other bulk backfills (0002, 0017), and must: a migration
+-- marked to skip its transaction is executed statement by statement, split on semicolons,
+-- which would shred the dollar-quoted blocks below. The runner detects that marker with a
+-- multiline regex, so no line here may begin with it. The runner also disables
+-- statement_timeout for migrations, so the duration is not a problem.
 --
 -- Idempotent: a second run finds every thread already correctly partitioned and changes
 -- nothing.
