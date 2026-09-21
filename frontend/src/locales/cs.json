@@ -1199,6 +1199,8 @@
       "threadingOffDesc": "Každá zpráva se zobrazuje samostatně",
       "threadingOn": "Zapnuto",
       "threadingOnDesc": "Odpovědi se seskupují do konverzací",
+      "threadingPane": "Podokno čtení",
+      "threadingPaneDesc": "Celá konverzace se otevře najednou",
       "composeFormat": "Formát zpráv",
       "composeRichText": "Formátovaný text",
       "composeRichTextDesc": "Odesílá HTML — podporuje formátování a stylované podpisy",
@@ -1226,9 +1228,6 @@
       "defaultMailAppError": "Prohlížeč požadavek zablokoval.",
       "markReadDelayLabel": "Prodleva",
       "markReadDelaySeconds": "{{count}} sekunda",
-      "markReadDelaySeconds_one": "{{count}} sekunda",
-      "markReadDelaySeconds_few": "{{count}} sekundy",
-      "markReadDelaySeconds_many": "{{count}} sekundy",
       "markReadDelaySeconds_other": "{{count}} sekund",
       "hoverQuickActionsMode": "Rychlé akce při najetí",
       "hoverQuickActionsOff": "Vypnuto",
@@ -1249,7 +1248,10 @@
       "gravatarOff": "Vypnuto",
       "gravatarOffDesc": "Soukromé — nikdy nekontaktuje třetí stranu.",
       "gravatarOn": "Zapnuto",
-      "gravatarOnDesc": "Načítat fotografie odesílatelů z Gravataru — sdílí hashované adresy odesílatelů s třetí stranou."
+      "gravatarOnDesc": "Načítat fotografie odesílatelů z Gravataru — sdílí hashované adresy odesílatelů s třetí stranou.",
+      "markReadDelaySeconds_one": "{{count}} sekunda",
+      "markReadDelaySeconds_few": "{{count}} sekundy",
+      "markReadDelaySeconds_many": "{{count}} sekundy"
     },
     "gtd": {
       "description": "Proměňte MailFlow v systém GTD. Zapněte jej pro jednotlivé účty a potom přiřaďte každý stav ke složce IMAP, která obsahuje jeho štítek.",

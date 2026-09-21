@@ -921,6 +921,8 @@
       "threadingOffDesc": "Każda wiadomość jest wyświetlana osobno",
       "threadingOn": "Włączone",
       "threadingOnDesc": "Odpowiedzi grupowane w rozmowy",
+      "threadingPane": "Okienko odczytu",
+      "threadingPaneDesc": "Cała rozmowa otwiera się razem",
       "composeFormat": "Format tworzenia wiadomości",
       "composeRichText": "Tekst sformatowany",
       "composeRichTextDesc": "Wysyłaj HTML — obsługuje formatowanie i sformatowane podpisy",
@@ -948,9 +950,6 @@
       "defaultMailAppError": "Przeglądarka zablokowała żądanie.",
       "markReadDelayLabel": "Opóźnienie",
       "markReadDelaySeconds": "{{count}} sekunda",
-      "markReadDelaySeconds_one": "{{count}} sekunda",
-      "markReadDelaySeconds_few": "{{count}} sekundy",
-      "markReadDelaySeconds_many": "{{count}} sekund",
       "markReadDelaySeconds_other": "{{count}} sekund",
       "hoverQuickActionsMode": "Szybkie działania po najechaniu",
       "hoverQuickActionsOff": "Wyłączone",
@@ -971,7 +970,10 @@
       "gravatarOff": "Wyłączone",
       "gravatarOffDesc": "Prywatne — brak kontaktu z podmiotami trzecimi.",
       "gravatarOn": "Włączone",
-      "gravatarOnDesc": "Pobieraj zdjęcia nadawców z usługi Gravatar — do zewnętrznej usługi wysyłane są skrócone adresy nadawców."
+      "gravatarOnDesc": "Pobieraj zdjęcia nadawców z usługi Gravatar — do zewnętrznej usługi wysyłane są skrócone adresy nadawców.",
+      "markReadDelaySeconds_one": "{{count}} sekunda",
+      "markReadDelaySeconds_few": "{{count}} sekundy",
+      "markReadDelaySeconds_many": "{{count}} sekund"
     },
     "notifications": {
       "title": "Powiadomienia",

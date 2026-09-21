@@ -905,6 +905,8 @@
       "threadingOffDesc": "Each message shown individually",
       "threadingOn": "On",
       "threadingOnDesc": "Replies grouped into conversations",
+      "threadingPane": "Reading pane",
+      "threadingPaneDesc": "The whole conversation opens together",
       "composeFormat": "Compose format",
       "composeRichText": "Rich text",
       "composeRichTextDesc": "Sends HTML — supports formatting and styled signatures",

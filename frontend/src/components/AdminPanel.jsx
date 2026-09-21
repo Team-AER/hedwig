@@ -1618,7 +1618,7 @@ function SwipeActionIcon({ action, size = 17 }) {
 function LayoutsTab() {
   const { t } = useTranslation();
   const isMobile = useMobile();
-  const { layout, setLayout, pageSize, setPageSize, scrollMode, setScrollMode, swipeActions, setSwipeAction, syncInterval, setSyncInterval, folderSyncInterval, setFolderSyncInterval, threadedView, setThreadedView, plaintextEmail, setPlaintextEmail, hoverQuickActions, setHoverQuickActions, showMobileAvatars, setShowMobileAvatars, gravatarAvatars, setGravatarAvatars, replyDefault, setReplyDefault, markReadBehavior, setMarkReadBehavior, markReadDelay, setMarkReadDelay, senderFavicons, senderFaviconsSaving, setSenderFavicons, showMessagePreviews, setShowMessagePreviews, accounts, defaultSender, setDefaultSender } = useStore();
+  const { layout, setLayout, pageSize, setPageSize, scrollMode, setScrollMode, swipeActions, setSwipeAction, syncInterval, setSyncInterval, folderSyncInterval, setFolderSyncInterval, conversationMode, setConversationMode, plaintextEmail, setPlaintextEmail, hoverQuickActions, setHoverQuickActions, showMobileAvatars, setShowMobileAvatars, gravatarAvatars, setGravatarAvatars, replyDefault, setReplyDefault, markReadBehavior, setMarkReadBehavior, markReadDelay, setMarkReadDelay, senderFavicons, senderFaviconsSaving, setSenderFavicons, showMessagePreviews, setShowMessagePreviews, accounts, defaultSender, setDefaultSender } = useStore();
   const [senderFaviconsError, setSenderFaviconsError] = useState('');
 
   // "Set MailFlow as your default email app": registerProtocolHandler is the
@@ -2078,14 +2078,15 @@ function LayoutsTab() {
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           {[
-            { id: false, label: t('admin.messageList.threadingOff'), desc: t('admin.messageList.threadingOffDesc') },
-            { id: true,  label: t('admin.messageList.threadingOn'),  desc: t('admin.messageList.threadingOnDesc') },
+            { id: 'off',  label: t('admin.messageList.threadingOff'),  desc: t('admin.messageList.threadingOffDesc') },
+            { id: 'list', label: t('admin.messageList.threadingOn'),   desc: t('admin.messageList.threadingOnDesc') },
+            { id: 'pane', label: t('admin.messageList.threadingPane'), desc: t('admin.messageList.threadingPaneDesc') },
           ].map(({ id, label, desc }) => {
-            const active = threadedView === id;
+            const active = conversationMode === id;
             return (
               <button
-                key={String(id)}
-                onClick={() => setThreadedView(id)}
+                key={id}
+                onClick={() => setConversationMode(id)}
                 style={{
                   flex: 1, padding: '10px 12px', textAlign: 'left',
                   background: active ? 'var(--bg-hover)' : 'var(--bg-tertiary)',

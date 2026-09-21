@@ -905,6 +905,8 @@
       "threadingOffDesc": "Cada mensagem exibida individualmente",
       "threadingOn": "Ativado",
       "threadingOnDesc": "Respostas agrupadas em conversas",
+      "threadingPane": "Painel de leitura",
+      "threadingPaneDesc": "A conversa inteira abre junta",
       "composeFormat": "Formato de composição",
       "composeRichText": "Texto formatado",
       "composeRichTextDesc": "Envia HTML — suporta formatação e assinaturas estilizadas",
