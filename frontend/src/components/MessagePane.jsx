@@ -8,12 +8,13 @@ import { getEffectiveShortcuts, parseModKey, modCompactLabel } from '../utils/de
 import { useMobile } from '../hooks/useMobile.js';
 import { clearDeleteGuard, clearPendingDelete, setCompletedDelete, setPendingDelete } from '../utils/pendingDeletes.js';
 import { pendingMarkReadMap, completedMarkReadMap, setPending } from '../utils/pendingReads.js';
+import { applyMarkRead, scheduleMarkRead } from '../utils/markRead.js';
 import DOMPurify from 'dompurify';
 import { BUILTIN_SUMMARIZE, summarizePromptForLocale } from '../aiActions.js';
 import { getResults, saveResult, removeResult } from '../aiResults.js';
 import { aiRuns } from '../utils/aiRunRegistry.js';
 import { renderMarkdown } from '../utils/renderMarkdown.js';
-import { pickReplyAlias } from '../utils/replyAlias.js';
+import { openReplyFromMessage, openForwardFromMessage } from '../utils/composeFromMessage.js';
 import MessageBodyView from './MessageBodyView.jsx';
 import { copyToClipboard } from '../utils/clipboard.js';
 import { folderMatchesQuery } from '../utils/folderDisplay.js';
@@ -48,13 +49,6 @@ import FolderIcon from './FolderIcon.jsx';
 import TodoistTaskModal from './TodoistTaskModal.jsx';
 import SenderAvatarImage from './SenderAvatarImage.jsx';
 import ContextMenu from './ContextMenu.jsx';
-
-function parseAddressField(raw) {
-  try {
-    const arr = Array.isArray(raw) ? raw : JSON.parse(raw || '[]');
-    return arr.map(a => a.name ? `${a.name} <${a.email}>` : a.email).filter(Boolean).join(', ');
-  } catch { return ''; }
-}
 
 function linkifyText(text) {
   const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -141,36 +135,8 @@ export default function MessagePane({ windowMessageId = null, onWindowClose = nu
     api.getMessageBody(msg.id).catch(() => {});
     setSelectedMessage(msg.id);
     clearTimeout(autoMarkReadTimerRef.current);
-    autoMarkReadTimerRef.current = null;
-    if (!msg.is_read) {
-      const { markReadBehavior, markReadDelay } = useStore.getState();
-      if (markReadBehavior === 'manual') return;
-      const doMarkRead = () => {
-        updateMessage(msg.id, { is_read: true });
-        decrementUnread(msg.account_id);
-        adjustCategoryCount(msg.category, -1);
-        setPending(msg.id, msg.account_id);
-        api.bulkRead([msg.id], true)
-          .then(() => {
-            pendingMarkReadMap.delete(msg.id);
-            completedMarkReadMap.set(msg.id, msg.account_id);
-            setTimeout(() => completedMarkReadMap.delete(msg.id), 10000);
-          })
-          .catch(e => {
-            console.error('markRead failed:', e.message);
-            updateMessage(msg.id, { is_read: false });
-            incrementUnread(msg.account_id);
-            adjustCategoryCount(msg.category, 1);
-            pendingMarkReadMap.delete(msg.id);
-          });
-      };
-      if (markReadBehavior === 'delay') {
-        autoMarkReadTimerRef.current = setTimeout(doMarkRead, (markReadDelay || 1) * 1000);
-      } else {
-        doMarkRead();
-      }
-    }
-  }, [setSelectedMessage, updateMessage, decrementUnread, incrementUnread, adjustCategoryCount]);
+    autoMarkReadTimerRef.current = scheduleMarkRead(msg);
+  }, [setSelectedMessage]);
 
   const paneRef = useRef(null);
   const mountedRef = useRef(true);
@@ -794,114 +760,20 @@ export default function MessagePane({ windowMessageId = null, onWindowClose = nu
     };
   }, [isMobile, setSelectedMessage, resetPaneSwipeStyles]);
 
+  // Both drafts are built by the shared util, so replying from the list, from the
+  // reading pane, from a conversation and from GTD triage all produce the same draft.
+  // The body is already loaded here, so it is handed over rather than refetched.
+  const loadedBody = async () => body;
+
   const handleReply = (replyAll = false) => {
     if (!message) return;
-    const date = message.date ? new Date(message.date).toLocaleString() : '';
-    const safeName = (message.from_name || '').replace(/[\r\n]+/g, ' ');
-    const fromStr = safeName
-      ? `${safeName} <${message.from_email}>`
-      : message.from_email || '';
-    const quotedText = body?.text
-      ? `\n\n---\nOn ${date}, ${fromStr} wrote:\n${body.text.split('\n').map(l => '> ' + l).join('\n')}`
-      : '';
-    const quotedBodyHtml = body?.html
-      ? `<div style="border-left:3px solid var(--border,#ccc);padding-left:12px;margin-top:12px;color:var(--text-secondary,#666)"><p style="margin:0 0 6px;font-size:12px">On ${date}, ${fromStr} wrote:</p>${body.html}</div>`
-      : null;
-
-    const replyToArr = Array.isArray(message.reply_to)
-      ? message.reply_to
-      : (() => { try { return JSON.parse(message.reply_to || '[]'); } catch { return []; } })();
-    const replyTarget = (replyToArr.length && replyToArr[0].email)
-      ? replyToArr[0]
-      : { name: message.from_name || '', email: message.from_email || '' };
-    const sender = replyTarget.email ? [replyTarget] : [];
-
-    const myAccount = accounts.find(a => a.id === message.account_id);
-    const myEmail = myAccount?.email_address || '';
-
-    const replyAliasId = pickReplyAlias({
-      aliases: myAccount?.aliases || [],
-      deliveryAddresses: message.delivery_addresses,
-      toAddresses: message.to_addresses,
-      ccAddresses: message.cc_addresses,
-      fromEmail: message.from_email,
-    });
-
-    const myAddresses = new Set([
-      myEmail.toLowerCase(),
-      ...(myAccount?.aliases || []).map(al => al.email.toLowerCase()),
-    ]);
-    const allRecipients = (() => {
-      try {
-        const toArr = Array.isArray(message.to_addresses)
-          ? message.to_addresses
-          : JSON.parse(message.to_addresses || '[]');
-        const ccArr = Array.isArray(message.cc_addresses)
-          ? message.cc_addresses
-          : JSON.parse(message.cc_addresses || '[]');
-        return [...toArr, ...ccArr].filter(
-          t => t.email && !myAddresses.has(t.email.toLowerCase()) && t.email !== replyTarget.email
-        );
-      } catch { return []; }
-    })();
-
-    const referencesChain = [message.in_reply_to, message.message_id]
-      .filter(Boolean).join(' ').trim() || null;
-
-    const rawSubject = (message.subject || '').trim();
-    const reSubject = rawSubject.startsWith('Re:') ? rawSubject : rawSubject ? `Re: ${rawSubject}` : 'Re:';
-
     setShowReplyMenu(false);
-    openCompose({
-      to: sender,
-      cc: replyAll ? allRecipients : [],
-      subject: reSubject,
-      body: '',
-      quotedBody: quotedText,
-      quotedBodyHtml,
-      inReplyTo: message.message_id,
-      references: referencesChain,
-      accountId: message.account_id,
-      aliasId: replyAliasId,
-      isReply: true,
-      isReplyAll: replyAll,
-      originalFrom: sender,
-      allRecipients,
-      threadId: message.thread_id,
-    });
+    openReplyFromMessage(message, { accounts, openCompose, getMessageBody: loadedBody, replyAll });
   };
 
   const handleForward = () => {
     if (!message) return;
-    const date = message.date ? new Date(message.date).toLocaleString() : '';
-    const safeName = (message.from_name || '').replace(/[\r\n]+/g, ' ');
-    const fromStr = safeName
-      ? `${safeName} <${message.from_email}>`
-      : message.from_email || '';
-    const safeSubject = (message.subject || '').replace(/[\r\n]+/g, ' ');
-
-    const toStr = parseAddressField(message.to_addresses);
-    const ccStr = parseAddressField(message.cc_addresses);
-
-    const fwdText = `\n\n---------- Forwarded message ----------\nFrom: ${fromStr}\nDate: ${date}\nSubject: ${safeSubject}${toStr ? `\nTo: ${toStr}` : ''}${ccStr ? `\nCc: ${ccStr}` : ''}\n\n${body?.text || ''}`;
-    const fwdHtml = body?.html
-      ? `<div style="border-left:3px solid var(--border,#ccc);padding-left:12px;margin-top:12px;color:var(--text-secondary,#666)"><p style="margin:0 0 6px;font-size:12px">---------- Forwarded message ----------<br>From: ${fromStr}<br>Date: ${date}<br>Subject: ${safeSubject}${toStr ? `<br>To: ${toStr}` : ''}${ccStr ? `<br>Cc: ${ccStr}` : ''}</p>${body.html}</div>`
-      : null;
-    openCompose({
-      subject: message.subject?.startsWith('Fwd:') ? message.subject : `Fwd: ${message.subject}`,
-      body: '',
-      quotedBody: fwdText,
-      quotedBodyHtml: fwdHtml,
-      accountId: message.account_id,
-      isForward: true,
-      forwardedAttachments: (body?.attachments || []).map(att => ({
-        messageId: message.id,
-        part: att.part,
-        filename: att.filename || 'attachment',
-        type: att.type || 'application/octet-stream',
-        size: att.size || 0,
-      })),
-    });
+    openForwardFromMessage(message, { openCompose, getMessageBody: loadedBody });
   };
 
   const handleStarToggle = async () => {
@@ -1469,19 +1341,8 @@ ${bodyContent}
         handlePrint();
         break;
       case 'markRead':
-        if (!message.is_read) {
-          updateMessage(message.id, { is_read: true });
-          decrementUnread(message.account_id);
-          adjustCategoryCount(message.category, -1);
-          setPending(message.id, message.account_id);
-          api.bulkRead([message.id], true).catch(e => {
-            console.error('markRead failed:', e.message);
-            updateMessage(message.id, { is_read: false });
-            incrementUnread(message.account_id);
-            adjustCategoryCount(message.category, 1);
-            pendingMarkReadMap.delete(message.id);
-          });
-        }
+        // Explicit "mark read" ignores markReadBehavior: the user just asked for it.
+        applyMarkRead(message);
         break;
       case 'markUnread':
         handleMarkUnread();

@@ -8,7 +8,7 @@ import { LAYOUTS } from '../layouts.js';
 import { updateFaviconBadge } from '../themes.js';
 import { installResumeRefresh } from '../utils/resumeRefresh.js';
 import { shortcutBus } from '../utils/shortcutBus.js';
-import { setPending, pendingMarkReadMap, completedMarkReadMap } from '../utils/pendingReads.js';
+import { applyMarkRead } from '../utils/markRead.js';
 import { buildKeyMap, buildModKeyMap, getEffectiveShortcuts, getGroupedActions, parseModKey, modLabel, SPECIAL_KEYS, SPECIAL_KEY_LABELS } from '../utils/defaultShortcuts.js';
 import Sidebar from './Sidebar.jsx';
 import MessageList from './MessageList.jsx';
@@ -314,25 +314,10 @@ export default function MailApp() {
         // selectAndMarkRead — so mark it read here too. Mirrors that logic exactly,
         // including the pending-read guard that stops a concurrent sync from
         // reverting the optimistic flag. Respects the user's manual-mark preference.
-        const st = useStore.getState();
-        if (msg.is_read || st.markReadBehavior === 'manual') return;
-        st.updateMessage(msg.id, { is_read: true });
-        st.decrementUnread(msg.account_id);
-        st.adjustCategoryCount(msg.category, -1);
-        setPending(msg.id, msg.account_id);
-        api.bulkRead([msg.id], true)
-          .then(() => {
-            pendingMarkReadMap.delete(msg.id);
-            completedMarkReadMap.set(msg.id, msg.account_id);
-            setTimeout(() => completedMarkReadMap.delete(msg.id), 10000);
-          })
-          .catch(e => {
-            console.error('Deep-link markRead failed:', e.message);
-            st.updateMessage(msg.id, { is_read: false });
-            st.incrementUnread(msg.account_id);
-            st.adjustCategoryCount(msg.category, 1);
-            pendingMarkReadMap.delete(msg.id);
-          });
+        // A deep-link is an explicit open, so it marks read immediately rather than
+        // honoring markReadDelay, but it still respects the manual preference.
+        if (useStore.getState().markReadBehavior === 'manual') return;
+        applyMarkRead(msg);
       })
       .catch(err => console.warn('Deep link message not found:', err.message));
   }, [setSelectedMessage]);
