@@ -239,17 +239,20 @@
       "failTitle": "Falha ao arquivar",
       "failBody": "Não foi possível arquivar a mensagem.",
       "noFolderTitle": "Sem pasta de arquivo",
-      "noFolderBody": "Nenhuma pasta de arquivo configurada para esta conta. Defina uma em Configurações → Contas → Mapeamento de pastas."
+      "noFolderBody": "Nenhuma pasta de arquivo configurada para esta conta. Defina uma em Configurações → Contas → Mapeamento de pastas.",
+      "conversationTitle": "Conversa arquivada"
     },
     "moved": {
       "title": "Mensagem movida",
       "failTitle": "Falha ao mover",
-      "failBody": "Não foi possível mover a mensagem."
+      "failBody": "Não foi possível mover a mensagem.",
+      "conversationTitle": "Conversa movida"
     },
     "snoozed": {
       "title": "Mensagem adiada",
       "failTitle": "Falha ao adiar",
-      "failBody": "Não foi possível adiar esta mensagem."
+      "failBody": "Não foi possível adiar esta mensagem.",
+      "conversationTitle": "Conversa adiada"
     },
     "whitelistFail": {
       "title": "Não foi possível salvar a preferência",
@@ -301,7 +304,8 @@
       "title": "Mensagem excluída",
       "body": "Removida.",
       "failTitle": "Falha ao excluir",
-      "failBody": "Não foi possível excluir a mensagem."
+      "failBody": "Não foi possível excluir a mensagem.",
+      "conversationTitle": "Conversa excluída"
     },
     "bulkDeleted": {
       "title_one": "{{count}} mensagem excluída",
@@ -1577,7 +1581,8 @@
     "rulesFiredTitle": "Regras acionadas",
     "noRulesFired": "Nenhuma regra acionada",
     "mlTokensTitle": "Principais tokens contribuintes",
-    "noMlTokens": "Nenhum token de ML"
+    "noMlTokens": "Nenhum token de ML",
+    "conversationMovedToSpam": "Conversa movida para Spam"
   },
   "contacts": {
     "title": "Contatos",

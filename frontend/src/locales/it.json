@@ -239,17 +239,20 @@
       "failTitle": "Archiviazione fallita",
       "failBody": "Impossibile archiviare il messaggio.",
       "noFolderTitle": "Nessuna cartella di archivio",
-      "noFolderBody": "Nessuna cartella di archivio configurata per questo account. Impostane una in Impostazioni → Account → Mappatura cartelle."
+      "noFolderBody": "Nessuna cartella di archivio configurata per questo account. Impostane una in Impostazioni → Account → Mappatura cartelle.",
+      "conversationTitle": "Conversazione archiviata"
     },
     "moved": {
       "title": "Messaggio spostato",
       "failTitle": "Spostamento fallito",
-      "failBody": "Impossibile spostare il messaggio."
+      "failBody": "Impossibile spostare il messaggio.",
+      "conversationTitle": "Conversazione spostata"
     },
     "snoozed": {
       "title": "Messaggio posticipato",
       "failTitle": "Posticipa fallito",
-      "failBody": "Impossibile posticipare questo messaggio."
+      "failBody": "Impossibile posticipare questo messaggio.",
+      "conversationTitle": "Conversazione posticipata"
     },
     "whitelistFail": {
       "title": "Impossibile salvare la preferenza",
@@ -301,7 +304,8 @@
       "title": "Messaggio eliminato",
       "body": "Spostato nel Cestino.",
       "failTitle": "Eliminazione fallita",
-      "failBody": "Impossibile eliminare il messaggio."
+      "failBody": "Impossibile eliminare il messaggio.",
+      "conversationTitle": "Conversazione eliminata"
     },
     "bulkDeleted": {
       "title_one": "{{count}} messaggio eliminato",
@@ -1577,7 +1581,8 @@
     "rulesFiredTitle": "Regole attivate",
     "noRulesFired": "Nessuna regola attivata",
     "mlTokensTitle": "Token principali",
-    "noMlTokens": "Nessun token ML"
+    "noMlTokens": "Nessun token ML",
+    "conversationMovedToSpam": "Conversazione spostata in Spam"
   },
   "contacts": {
     "title": "Contatti",

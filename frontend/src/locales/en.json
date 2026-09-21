@@ -239,17 +239,20 @@
       "failTitle": "Archive failed",
       "failBody": "Could not archive message.",
       "noFolderTitle": "No archive folder",
-      "noFolderBody": "No archive folder configured for this account. Set one in Settings → Accounts → Folder Mappings."
+      "noFolderBody": "No archive folder configured for this account. Set one in Settings → Accounts → Folder Mappings.",
+      "conversationTitle": "Conversation archived"
     },
     "moved": {
       "title": "Message moved",
       "failTitle": "Move failed",
-      "failBody": "Could not move message."
+      "failBody": "Could not move message.",
+      "conversationTitle": "Conversation moved"
     },
     "snoozed": {
       "title": "Message snoozed",
       "failTitle": "Snooze failed",
-      "failBody": "Could not snooze this message."
+      "failBody": "Could not snooze this message.",
+      "conversationTitle": "Conversation snoozed"
     },
     "whitelistFail": {
       "title": "Could not save preference",
@@ -301,7 +304,8 @@
       "title": "Message deleted",
       "body": "Removed.",
       "failTitle": "Delete failed",
-      "failBody": "Could not delete message."
+      "failBody": "Could not delete message.",
+      "conversationTitle": "Conversation deleted"
     },
     "bulkDeleted": {
       "title_one": "{{count}} message deleted",
@@ -1577,7 +1581,8 @@
     "rulesFiredTitle": "Rules that fired",
     "noRulesFired": "No rules fired",
     "mlTokensTitle": "Top contributing tokens",
-    "noMlTokens": "No ML tokens"
+    "noMlTokens": "No ML tokens",
+    "conversationMovedToSpam": "Conversation moved to Spam"
   },
   "contacts": {
     "title": "Contacts",

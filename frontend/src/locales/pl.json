@@ -241,17 +241,20 @@
       "failTitle": "Archiwizowanie nie powiodło się",
       "failBody": "Nie udało się zarchiwizować wiadomości.",
       "noFolderTitle": "Brak folderu archiwum",
-      "noFolderBody": "Nie skonfigurowano folderu archiwum dla tego konta. Ustaw go w Ustawienia → Konta → Mapowanie folderów."
+      "noFolderBody": "Nie skonfigurowano folderu archiwum dla tego konta. Ustaw go w Ustawienia → Konta → Mapowanie folderów.",
+      "conversationTitle": "Konwersacja zarchiwizowana"
     },
     "moved": {
       "title": "Wiadomość przeniesiona",
       "failTitle": "Przenoszenie nie powiodło się",
-      "failBody": "Nie udało się przenieść wiadomości."
+      "failBody": "Nie udało się przenieść wiadomości.",
+      "conversationTitle": "Konwersacja przeniesiona"
     },
     "snoozed": {
       "title": "Wiadomość odłożona",
       "failTitle": "Odkładanie nie powiodło się",
-      "failBody": "Nie udało się odłożyć tej wiadomości."
+      "failBody": "Nie udało się odłożyć tej wiadomości.",
+      "conversationTitle": "Konwersacja odłożona"
     },
     "whitelistFail": {
       "title": "Nie udało się zapisać ustawienia",
@@ -303,7 +306,8 @@
       "title": "Wiadomość usunięta",
       "body": "Usunięto.",
       "failTitle": "Usuwanie nie powiodło się",
-      "failBody": "Nie udało się usunąć wiadomości."
+      "failBody": "Nie udało się usunąć wiadomości.",
+      "conversationTitle": "Konwersacja usunięta"
     },
     "bulkDeleted": {
       "title_one": "Usunięto {{count}} wiadomość",
@@ -1596,7 +1600,8 @@
     "rulesFiredTitle": "Aktywowane reguły",
     "noRulesFired": "Nie aktywowano żadnej reguły",
     "mlTokensTitle": "Najważniejsze tokeny",
-    "noMlTokens": "Brak tokenów ML"
+    "noMlTokens": "Brak tokenów ML",
+    "conversationMovedToSpam": "Konwersacja przeniesiona do spamu"
   },
   "contacts": {
     "title": "Kontakty",

@@ -1,11 +1,33 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { api } from '../utils/api.js';
+import { useStore } from '../store/index.js';
 import {
   normalizeConversation,
   initialExpandedMessageIds,
   conversationMembershipKey,
+  newestConversationMessage,
 } from '../utils/conversation.js';
+import { archiveThread, deleteThread, spamThread, moveThread, snoozeThread } from '../utils/threadActions.js';
 import ConversationMessageCard from './ConversationMessageCard.jsx';
+import ContextMenu from './ContextMenu.jsx';
+
+function ThreadBtn({ onClick, title, children }) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      aria-label={title}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 10px',
+        background: 'none', border: '1px solid var(--border)', borderRadius: 4,
+        color: 'var(--text-primary)', font: 'inherit', fontSize: 13, cursor: 'pointer',
+      }}
+    >
+      {children}
+    </button>
+  );
+}
 
 // The whole conversation, stacked, with only what the reader has opened rendered.
 //
@@ -15,10 +37,17 @@ import ConversationMessageCard from './ConversationMessageCard.jsx';
 //
 // Design from #317 by YunQue0912.
 export default function ConversationPane({ threadId, folder, unified = false }) {
+  const { t } = useTranslation();
+  const addNotification = useStore(s => s.addNotification);
+  const accounts = useStore(s => s.accounts);
+  const setSelectedMessage = useStore(s => s.setSelectedMessage);
   const [messages, setMessages] = useState([]);
   const [expanded, setExpanded] = useState(() => new Set());
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
+  // { x, y, view } — the move and snooze pickers are ContextMenu's, opened straight
+  // into the relevant sub-view rather than reimplemented here.
+  const [picker, setPicker] = useState(null);
 
   useEffect(() => {
     if (!threadId) { setMessages([]); return; }
@@ -46,6 +75,25 @@ export default function ConversationPane({ threadId, folder, unified = false }) 
     return next;
   });
 
+  // Acting on the conversation empties the reading pane: every message it was showing
+  // has just been removed from the list behind it.
+  const runAction = (action) => {
+    action(messages, {
+      t,
+      addNotification,
+      accounts,
+      // The authoritative list, re-read when the action actually commits, so a reply
+      // that arrived while this conversation was open is not left behind.
+      fetchThread: () => api.getThread(threadId, folder, unified),
+    });
+    setSelectedMessage(null);
+  };
+
+  const openPicker = (event, view) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    setPicker({ x: rect.left, y: rect.bottom + 4, view });
+  };
+
   if (error) return <div style={{ padding: 16, color: 'var(--red, #e03131)' }}>{error}</div>;
   if (loading && !messages.length) {
     return (
@@ -64,6 +112,49 @@ export default function ConversationPane({ threadId, folder, unified = false }) 
       key={conversationMembershipKey(messages)}
       style={{ padding: 12, overflowY: 'auto', height: '100%' }}
     >
+      {/* Thread-level actions, the way Gmail does it: archiving a conversation archives
+          all of it, so the reader does not file the same thread message by message. */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+        <ThreadBtn onClick={() => runAction(archiveThread)} title={t('message.archive')}>
+          {t('message.archive')}
+        </ThreadBtn>
+        <ThreadBtn onClick={() => runAction(deleteThread)} title={t('message.delete')}>
+          {t('message.delete')}
+        </ThreadBtn>
+        <ThreadBtn onClick={() => runAction(spamThread)} title={t('contextMenu.markAsSpam')}>
+          {t('contextMenu.markAsSpam')}
+        </ThreadBtn>
+        <ThreadBtn
+          onClick={e => openPicker(e, 'move')}
+          title={t('contextMenu.moveToFolder')}
+        >
+          {t('contextMenu.moveToFolder')}
+        </ThreadBtn>
+        <ThreadBtn
+          onClick={e => openPicker(e, 'snooze')}
+          title={t('contextMenu.snooze.label')}
+        >
+          {t('contextMenu.snooze.label')}
+        </ThreadBtn>
+      </div>
+
+      {picker && (
+        <ContextMenu
+          x={picker.x}
+          y={picker.y}
+          message={newestConversationMessage(messages)}
+          variant="conversation"
+          defaultMoveView={picker.view === 'move'}
+          defaultSnoozeView={picker.view === 'snooze'}
+          onClose={() => setPicker(null)}
+          onAction={(action, data) => {
+            if (action === 'moveTo') runAction((list, opts) => moveThread(list, data, opts));
+            else if (action === 'snooze') runAction((list, opts) => snoozeThread(list, data, opts));
+            setPicker(null);
+          }}
+        />
+      )}
+
       {messages.map(message => (
         <ConversationMessageCard
           key={message.id}

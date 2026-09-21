@@ -239,17 +239,20 @@
       "failTitle": "Échec de l'archivage",
       "failBody": "Impossible d'archiver le message.",
       "noFolderTitle": "Aucun dossier d'archive",
-      "noFolderBody": "Aucun dossier d'archive configuré pour ce compte. Définissez-en un dans Paramètres → Comptes → Mappage des dossiers."
+      "noFolderBody": "Aucun dossier d'archive configuré pour ce compte. Définissez-en un dans Paramètres → Comptes → Mappage des dossiers.",
+      "conversationTitle": "Conversation archivée"
     },
     "moved": {
       "title": "Message déplacé",
       "failTitle": "Échec du déplacement",
-      "failBody": "Impossible de déplacer le message."
+      "failBody": "Impossible de déplacer le message.",
+      "conversationTitle": "Conversation déplacée"
     },
     "snoozed": {
       "title": "Message mis en attente",
       "failTitle": "Échec de la mise en attente",
-      "failBody": "Impossible de mettre ce message en attente."
+      "failBody": "Impossible de mettre ce message en attente.",
+      "conversationTitle": "Conversation mise en attente"
     },
     "whitelistFail": {
       "title": "Impossible d'enregistrer la préférence",
@@ -301,7 +304,8 @@
       "title": "Message supprimé",
       "body": "Déplacé vers la corbeille.",
       "failTitle": "Échec de la suppression",
-      "failBody": "Impossible de supprimer le message."
+      "failBody": "Impossible de supprimer le message.",
+      "conversationTitle": "Conversation supprimée"
     },
     "bulkDeleted": {
       "title_one": "{{count}} message supprimé",
@@ -1577,7 +1581,8 @@
     "rulesFiredTitle": "Règles déclenchées",
     "noRulesFired": "Aucune règle déclenchée",
     "mlTokensTitle": "Principaux tokens",
-    "noMlTokens": "Aucun token ML"
+    "noMlTokens": "Aucun token ML",
+    "conversationMovedToSpam": "Conversation déplacée dans le dossier Spam"
   },
   "contacts": {
     "title": "Contacts",

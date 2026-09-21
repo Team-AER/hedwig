@@ -192,7 +192,8 @@
       "title": "Zpráva smazána",
       "body": "Odstraněno.",
       "failTitle": "Smazání se nezdařilo",
-      "failBody": "Zprávu se nepodařilo smazat."
+      "failBody": "Zprávu se nepodařilo smazat.",
+      "conversationTitle": "Konverzace smazána"
     },
     "bulkDeleted": {
       "title_one": "Smazána {{count}} zpráva",
@@ -330,17 +331,20 @@
       "failTitle": "Archivace se nezdařila",
       "failBody": "Zprávu se nepodařilo archivovat.",
       "noFolderTitle": "Chybí složka archivu",
-      "noFolderBody": "Pro tento účet není nastavena složka archivu. Nastavte ji v Nastavení → Účty → Mapování složek."
+      "noFolderBody": "Pro tento účet není nastavena složka archivu. Nastavte ji v Nastavení → Účty → Mapování složek.",
+      "conversationTitle": "Konverzace archivována"
     },
     "moved": {
       "title": "Zpráva přesunuta",
       "failTitle": "Přesunutí se nezdařilo",
-      "failBody": "Zprávu se nepodařilo přesunout."
+      "failBody": "Zprávu se nepodařilo přesunout.",
+      "conversationTitle": "Konverzace přesunuta"
     },
     "snoozed": {
       "title": "Zpráva odložena",
       "failTitle": "Odložení se nezdařilo",
-      "failBody": "Tuto zprávu se nepodařilo odložit."
+      "failBody": "Tuto zprávu se nepodařilo odložit.",
+      "conversationTitle": "Konverzace odložena"
     },
     "whitelistFail": {
       "title": "Předvolbu se nepodařilo uložit",
@@ -759,7 +763,8 @@
     "rulesFiredTitle": "Aktivovaná pravidla",
     "noRulesFired": "Neaktivovalo se žádné pravidlo",
     "mlTokensTitle": "Nejvýznamnější tokeny",
-    "noMlTokens": "Žádné ML tokeny"
+    "noMlTokens": "Žádné ML tokeny",
+    "conversationMovedToSpam": "Konverzace přesunuta do spamu"
   },
   "todoist": {
     "title": "Vytvořit úkol v Todoistu",

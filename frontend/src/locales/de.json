@@ -239,17 +239,20 @@
       "failTitle": "Archivierung fehlgeschlagen",
       "failBody": "Nachricht konnte nicht archiviert werden.",
       "noFolderTitle": "Kein Archivordner",
-      "noFolderBody": "Kein Archivordner für dieses Konto konfiguriert. In Einstellungen → Konten → Ordnerzuordnungen festlegen."
+      "noFolderBody": "Kein Archivordner für dieses Konto konfiguriert. In Einstellungen → Konten → Ordnerzuordnungen festlegen.",
+      "conversationTitle": "Konversation archiviert"
     },
     "moved": {
       "title": "Nachricht verschoben",
       "failTitle": "Verschieben fehlgeschlagen",
-      "failBody": "Nachricht konnte nicht verschoben werden."
+      "failBody": "Nachricht konnte nicht verschoben werden.",
+      "conversationTitle": "Konversation verschoben"
     },
     "snoozed": {
       "title": "Nachricht zurückgestellt",
       "failTitle": "Zurückstellen fehlgeschlagen",
-      "failBody": "Diese Nachricht konnte nicht zurückgestellt werden."
+      "failBody": "Diese Nachricht konnte nicht zurückgestellt werden.",
+      "conversationTitle": "Konversation zurückgestellt"
     },
     "whitelistFail": {
       "title": "Einstellung konnte nicht gespeichert werden",
@@ -301,7 +304,8 @@
       "title": "Nachricht gelöscht",
       "body": "In den Papierkorb verschoben.",
       "failTitle": "Löschen fehlgeschlagen",
-      "failBody": "Nachricht konnte nicht gelöscht werden."
+      "failBody": "Nachricht konnte nicht gelöscht werden.",
+      "conversationTitle": "Konversation gelöscht"
     },
     "bulkDeleted": {
       "title_one": "{{count}} Nachricht gelöscht",
@@ -1577,7 +1581,8 @@
     "rulesFiredTitle": "Ausgelöste Regeln",
     "noRulesFired": "Keine Regeln ausgelöst",
     "mlTokensTitle": "Wichtigste Token",
-    "noMlTokens": "Keine ML-Token"
+    "noMlTokens": "Keine ML-Token",
+    "conversationMovedToSpam": "Konversation in Spam verschoben"
   },
   "contacts": {
     "title": "Kontakte",

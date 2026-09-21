@@ -54,6 +54,7 @@ Object.assign(globalThis, {
 dom.window.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} });
 dom.window.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
 globalThis.requestAnimationFrame ??= cb => setTimeout(() => cb(Date.now()), 0);
+globalThis.cancelAnimationFrame ??= id => clearTimeout(id);
 globalThis.__VITE_ENV__ = { MODE: 'test', DEV: false, PROD: true };
 
 const THREAD = [
@@ -62,9 +63,14 @@ const THREAD = [
   { id: 'm3', account_id: 'acct', folder: 'INBOX', message_id: '<3@x>', subject: 'Re: Welcome', from_email: 'a@x.z', from_name: 'Ana', date: '2026-01-03T10:00:00Z', is_read: false, snippet: 'newest' },
 ];
 const bodyRequests = [];
-globalThis.fetch = async (url) => {
+const bulkReads = [];
+globalThis.fetch = async (url, opts = {}) => {
   const u = String(url);
   if (u.includes('/mail/thread/')) return { ok: true, status: 200, json: async () => ({ messages: THREAD }) };
+  if (u.includes('/mail/messages/bulk-read')) {
+    bulkReads.push(JSON.parse(opts.body));
+    return { ok: true, status: 200, json: async () => ({}) };
+  }
   const id = /\/messages\/([^/]+)\/body/.exec(u)?.[1];
   if (id) { bodyRequests.push(id); return { ok: true, status: 200, json: async () => ({ html: `<p>body of ${id}</p>`, text: '', attachments: [] }) }; }
   return { ok: true, status: 200, json: async () => ({}) };
@@ -94,9 +100,27 @@ describe('conversation pane', () => {
     assert.match(document.getElementById('root').innerHTML, /Me/, 'the sent reply appears in the thread');
   });
 
+  test('the opened message actually renders its body, not a permanent skeleton', async () => {
+    // The request going out is not enough. An earlier version listed the loading flag in
+    // the fetch effect's dependencies, so setLoading re-ran the effect and its cleanup
+    // cancelled the request it had just started: the body arrived and was thrown away,
+    // and every card sat on the skeleton forever. Only asserting the rendered body catches
+    // that, which is why this asserts the frame and not the fetch.
+    const html = document.getElementById('root').innerHTML;
+    assert.ok(/<iframe/.test(html), 'the opened message rendered a body frame');
+    assert.ok(!/skeleton-line/.test(html), 'and is no longer showing the loading skeleton');
+  });
+
   test('only the opened message fetches a body', async () => {
     // A collapsed card must cost nothing: no request, no frame, no document.
     assert.deepEqual(bodyRequests, ['m3'], 'exactly the newest message was fetched');
+  });
+
+  test('the message that opens is marked read', async () => {
+    // m3 is the unread one, and it is the card that opens on arrival. Opening a
+    // conversation has to clear its unread state the same way opening a single
+    // message does, or the badge never goes down.
+    assert.deepEqual(bulkReads, [{ ids: ['m3'], read: true }], 'the newest, unread message was marked read');
   });
 
   test('opening another card renders a second body', async () => {
@@ -106,6 +130,9 @@ describe('conversation pane', () => {
 
     assert.equal(openCards().length, 2, 'two messages can be open at once');
     assert.equal(bodyRequests.length, 2, 'the newly opened message fetched its own body');
+    // The card that just opened was already read, so it must not send a second
+    // mark-read and decrement a badge that was never counting it.
+    assert.equal(bulkReads.length, 1, 'expanding an already-read message marks nothing');
   });
 
   test('collapsing and reopening does not refetch', async () => {
