@@ -1,5 +1,6 @@
 import { useStore } from '../store/index.js';
 import { resolveConversationMode } from '../utils/conversationMode.js';
+import { resolveConversationSelection, shouldUseConversationPane } from '../utils/conversation.js';
 import ConversationPane from './ConversationPane.jsx';
 import MessagePane from './MessagePane.jsx';
 
@@ -19,14 +20,24 @@ export default function ReadingPane() {
   const searchResults = useStore(s => s.searchResults);
   const selectedFolder = useStore(s => s.selectedFolder);
   const selectedAccountId = useStore(s => s.selectedAccountId);
+  const searchQuery = useStore(s => s.searchQuery);
+  const threadMessages = useStore(s => s.threadMessages);
 
   const mode = resolveConversationMode({ conversationMode });
-  if (mode !== 'pane' || !selectedMessageId) return <MessagePane />;
+  if (!selectedMessageId) return <MessagePane />;
 
-  const selected = [...(messages || []), ...(searchResults || [])]
-    .find(m => m.id === selectedMessageId);
-  // A message with no thread of its own is just a message.
-  if (!selected?.thread_id) return <MessagePane />;
+  // threadMessages is consulted too, because a message opened from a deep link or a
+  // notification tap is parked there and never enters the list: looking only at the list
+  // meant those always fell back to the single-message pane.
+  const { selectedMessage: selected } = resolveConversationSelection({
+    selectedMessageId,
+    pool: [...(messages || []), ...(searchResults || [])],
+    threadMessages: threadMessages || {},
+  });
+
+  // A message with no thread of its own is just a message, and a search deliberately shows
+  // the one matched message rather than its conversation.
+  if (!shouldUseConversationPane({ mode, searchQuery, message: selected })) return <MessagePane />;
 
   return (
     <ConversationPane
