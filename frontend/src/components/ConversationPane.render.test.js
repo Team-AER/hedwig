@@ -147,6 +147,23 @@ describe('conversation pane', () => {
     assert.equal(bulkReads.length, 1, 'expanding an already-read message marks nothing');
   });
 
+  test('picking a different message in the same thread opens that message', async () => {
+    // Selecting another message in an open thread does not change threadId, so the pane
+    // re-rendered with identical props and nothing happened: clicking a message in the
+    // list looked like a dead click. m2 is the one still collapsed at this point.
+    const opened = () => [...openCards()].map(c => c.closest('[data-message-id]')?.dataset.messageId);
+    assert.ok(!opened().includes('m2'), 'm2 starts collapsed');
+
+    await React.act(async () => {
+      root.render(React.createElement(ConversationPane, {
+        threadId: '<1@x>', folder: 'INBOX', selectedMessageId: 'm2',
+      }));
+    });
+    await React.act(async () => { await new Promise(r => setTimeout(r, 50)); });
+
+    assert.ok(opened().includes('m2'), 'the message the reader picked is now open');
+  });
+
   test('collapsing and reopening does not refetch', async () => {
     const before = bodyRequests.length;
     const open = document.querySelector('[aria-expanded="true"]');

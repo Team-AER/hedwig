@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../utils/api.js';
 import { useStore } from '../store/index.js';
@@ -36,7 +36,7 @@ function ThreadBtn({ onClick, title, children }) {
 // its own.
 //
 // Design from #317 by YunQue0912.
-export default function ConversationPane({ threadId, folder, unified = false }) {
+export default function ConversationPane({ threadId, folder, unified = false, selectedMessageId = null }) {
   const { t } = useTranslation();
   const addNotification = useStore(s => s.addNotification);
   const accounts = useStore(s => s.accounts);
@@ -68,6 +68,19 @@ export default function ConversationPane({ threadId, folder, unified = false }) 
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [threadId, folder, unified]);
+
+  // Opening a message from the list opens it here too. Picking a different message in the
+  // same thread leaves threadId untouched, so the pane used to re-render with identical
+  // props and nothing happened on screen, which read as the click being ignored.
+  const stackRef = useRef(null);
+  useEffect(() => {
+    if (!selectedMessageId || !messages.some(message => message.id === selectedMessageId)) return;
+    setExpanded(prev => (prev.has(selectedMessageId) ? prev : new Set(prev).add(selectedMessageId)));
+    // Long threads run past the fold, so the message that was asked for is brought into
+    // view rather than being opened somewhere off screen.
+    const card = stackRef.current?.querySelector(`[data-message-id="${selectedMessageId}"]`);
+    card?.scrollIntoView?.({ block: 'nearest' });
+  }, [selectedMessageId, messages]);
 
   const toggle = (id) => setExpanded(prev => {
     const next = new Set(prev);
@@ -114,6 +127,7 @@ export default function ConversationPane({ threadId, folder, unified = false }) 
       // Remounts the stack when the thread's membership changes, so expansion state from a
       // previous conversation can never be applied to this one's message ids.
       key={conversationMembershipKey(messages)}
+      ref={stackRef}
       // flex: 1 and minWidth: 0 are load-bearing. The reading area is a flex row, so
       // without them this pane is sized shrink-to-fit by its contents: collapsed cards
       // are narrow, an expanded newsletter is as wide as the newsletter, and the pane
@@ -174,6 +188,7 @@ export default function ConversationPane({ threadId, folder, unified = false }) 
           key={message.id}
           message={message}
           expanded={expanded.has(message.id)}
+          selected={message.id === selectedMessageId}
           onToggle={toggle}
         />
       ))}

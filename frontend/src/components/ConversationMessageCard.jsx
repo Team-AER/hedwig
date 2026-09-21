@@ -30,7 +30,7 @@ function CardBtn({ onClick, children }) {
 }
 
 // Design from #317 by YunQue0912.
-export default function ConversationMessageCard({ message, expanded, onToggle }) {
+export default function ConversationMessageCard({ message, expanded, onToggle, selected = false }) {
   const { t } = useTranslation();
   const accounts = useStore(s => s.accounts);
   const openCompose = useStore(s => s.openCompose);
@@ -103,7 +103,14 @@ export default function ConversationMessageCard({ message, expanded, onToggle })
   const who = message.from_name || message.from_email || '';
 
   return (
-    <div style={{ border: '1px solid var(--border)', borderRadius: 6, marginBottom: 8, background: 'var(--bg-primary)' }}>
+    <div
+      // The pane scrolls to this when the reader picks this message in the list.
+      data-message-id={message.id}
+      style={{
+        border: `1px solid ${selected ? 'var(--accent)' : 'var(--border)'}`,
+        borderRadius: 6, marginBottom: 8, background: 'var(--bg-primary)',
+      }}
+    >
       <button
         onClick={() => onToggle(message.id)}
         aria-expanded={expanded}

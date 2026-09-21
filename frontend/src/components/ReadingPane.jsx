@@ -44,6 +44,10 @@ export default function ReadingPane() {
       threadId={selected.thread_id}
       folder={selectedFolder}
       unified={!selectedAccountId}
+      // Which message the reader picked. Selecting a different message inside the same
+      // thread does not change threadId, so without this the pane had no way to know a
+      // click had happened and nothing opened.
+      selectedMessageId={selectedMessageId}
     />
   );
 }
