@@ -192,13 +192,17 @@ const BACKGROUND_CONN_MAX_PER_HOST = 2;
 // Concurrent auto-moves (spamPipeline's move to the spam folder) allowed per account.
 //
 // The classification itself is cheap and stays concurrent; only the IMAP move is queued. A move
-// goes through the pooled connection (POOL_SIZE = 2) and each loser of its 10s overflow timeout
-// opens a FRESH login, so a burst of classifications used to fan out that many concurrent moves
-// and fresh logins on a single account — the connection-storm pattern providers throttle accounts
-// for. Bursts are real: an ingest pass classifies up to 100 new messages at once on the
-// folder-status/reindex-driven paths. Serializing per account keeps at most one auto-move in
-// flight, with the rest queued FIFO on the same connection budget the user's own work uses.
-// PR review, 2026-09-15.
+// goes through the pooled connection, and a burst of classifications used to fan out that many
+// concurrent moves and fresh logins on a single account — the connection-storm pattern providers
+// throttle accounts for. Bursts are real: an ingest pass classifies up to 100 new messages at
+// once on the folder-status/reindex-driven paths. Serializing per account keeps at most one
+// auto-move in flight, with the rest queued FIFO on the same connection budget the user's own
+// work uses. PR review, 2026-09-15.
+//
+// The fan-out this describes is gone as of #474: a full pool now queues rather than opening a
+// connection per waiter. This limit stays regardless. It bounds the QUEUE as well as the
+// sockets, so a 100-message classification burst cannot occupy every pooled connection and
+// starve the reader's own clicks behind it.
 const AUTO_MOVE_MAX_CONCURRENT_PER_ACCOUNT = 1;
 
 // How long a queued auto-move waits for its per-account slot before giving up. The verdict is
@@ -1046,7 +1050,22 @@ export function connectStaggerFor(profile, accountCount) {
 
 // Per-account connection pool for body fetches — avoids TLS handshake on every click
 const connectionPools = new Map(); // accountId -> { clients: [], waiting: [] }
-const POOL_SIZE = 2;
+// Pooled connections per account, alongside the one persistent IDLE connection, so an
+// account's steady-state ceiling is 5. That is Thunderbird's per-server default, it sits
+// under Dovecot's mail_max_userip_connections default of 10, and it is above Evolution's
+// 3 and offlineimap's advice of never more than 5.
+//
+// Raised from 2 in the same change that made a full pool queue instead of opening extra
+// sockets (#474). The two go together: while the overflow existed the pool size was not a
+// ceiling at all, just the point where fan-out began, so a small pool made storms MORE
+// likely. Now that it is a real ceiling, 2 would funnel every operation on the account
+// through two connections.
+export const POOL_SIZE = 4;
+
+// How long an operation waits for a pooled connection before giving up. Longer than the
+// 30s commandTimeout that frees a stalled connection, so a caller queued behind a stall
+// normally gets served rather than failing just before the slot frees.
+export const ACQUIRE_TIMEOUT_MS = 35000;
 
 // Retained as a plugin compatibility helper. Ordinary ingestion never relocates a
 // cached row by Message-ID; explicit move operations use confirmed folder/UID mappings.
@@ -1373,20 +1392,30 @@ export async function acquirePooledClient(account) {
     return client;
   }
 
-  // Pool full — queue a waiter; on 10s timeout fall back to a temporary client
+  // Pool full — wait for a slot. drainWaiters hands the next freed connection to the
+  // head of this queue, so the pool degrades into a queue rather than into more sockets.
+  //
+  // This used to open a temporary connection after 10 seconds instead of waiting, which
+  // is what #474 is. Two stalled body fetches were enough: every operation queued behind
+  // them (mark-read, bulk-read, a folder status cycle that queues one per folder, pool
+  // pre-warm) gave up after 10s and opened its own login, so demand became sockets with
+  // nothing bounding the count. Providers answer that by refusing everything, which is
+  // why the reported failure was not confined to the fetches that stalled.
+  //
+  // Every mature client queues or blocks here instead: Thunderbird queues the URL,
+  // Evolution waits on a condition variable, offlineimap blocks on a bounded semaphore.
+  // RFC 2683 3.1.1 asks clients not to open extra connections to the same mailbox.
   return new Promise((resolve, reject) => {
     const entry = { resolve, reject, timer: null };
-    entry.timer = setTimeout(async () => {
+    entry.timer = setTimeout(() => {
       pool.waiters = pool.waiters.filter(w => w !== entry);
-      try {
-        const freshAccount = await ensureFreshToken(account);
-        const { resolved, policy } = await resolveAccountHost(freshAccount);
-        const tmp = await connectImapClient(freshAccount, resolved, { policy }, 30000, 'IMAP temp connect');
-        resolve(tmp);
-      } catch (err) {
-        reject(err);
-      }
-    }, 10000);
+      // Give up on the operation rather than on the limit. A stalled connection is
+      // released by its own commandTimeout at 30s, so a wait longer than that usually
+      // gets served; past it, the honest answer is that the account is saturated.
+      const err = new Error('IMAP connections busy, please retry');
+      err.poolExhausted = true;
+      reject(err);
+    }, ACQUIRE_TIMEOUT_MS);
     pool.waiters.push(entry);
   });
 }

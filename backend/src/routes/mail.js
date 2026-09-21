@@ -503,6 +503,14 @@ router.get('/messages/:id/body', async (req, res) => {
         timeout: true,
       });
     }
+    // Our own connection budget, not the provider's. Saying so beats a generic 500:
+    // the account is busy, the request is worth retrying, and nothing is broken.
+    if (err.poolExhausted) {
+      return res.status(503).json({
+        error: 'This account is busy with other mail operations. Please try again in a moment.',
+        busy: true,
+      });
+    }
     res.status(500).json({ error: msg });
   }
 });
