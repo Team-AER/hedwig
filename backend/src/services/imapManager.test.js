@@ -749,6 +749,11 @@ describe('isConnectionRefusal', () => {
     'THROTTLED: too many requests',
     'rate limit exceeded',
     'Fresh sync connect timeout (30000ms)',
+    // Real capture of Yahoo refusing a connection burst (Mozilla bug 1727971), which is
+    // the provider and the symptom reported in #474. Reaches us via extractImapError.
+    '[LIMIT] CAPABILITY Rate limit hit.',
+    // A bare [LIMIT] with wording we have never seen still means back off.
+    '[LIMIT] Some limit we have not seen before',
   ])('flags a refusal: %s', (msg) => {
     expect(isConnectionRefusal(msg)).toBe(true);
   });

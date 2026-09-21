@@ -238,7 +238,15 @@ const CONNECT_COOLDOWN_MAX_MS = 15 * 60 * 1000;  // capped at 15 min
 // connection limit and can fire on ordinary slow responses, where a backoff would only
 // delay recovery.
 export function isConnectionRefusal(detail) {
-  return /connection not available|too many|maximum number|number of connections|rate.?limit|temporarily|try again|connection limit|over quota|throttl|connect timeout/i.test(String(detail || ''));
+  // \[LIMIT\] is RFC 9051's response code for "ran up against an implementation limit".
+  // It is generic rather than connection-specific, but backing off is the right answer to
+  // any of them. Yahoo answers a connection burst with `NO [LIMIT] ... Rate limit hit`
+  // (Mozilla bug 1727971), which is the shape reported in #474.
+  //
+  // Note this is only reachable because extractImapError now surfaces the server's text:
+  // while every refusal was flattened to "Command failed", nothing here ever matched and
+  // no cooldown was ever armed against a provider that was actively refusing us.
+  return /\[LIMIT\]|connection not available|too many|maximum number|number of connections|rate.?limit|temporarily|try again|connection limit|over quota|throttl|connect timeout/i.test(String(detail || ''));
 }
 
 // Stamp an account's last successful sync. Shared by both exits of syncMessages so they cannot
@@ -1328,7 +1336,8 @@ function drainWaiters(pool) {
   }
 }
 
-async function acquirePooledClient(account) {
+// Exported for imapPool.test.js, which pins how many connections a stalled pool opens.
+export async function acquirePooledClient(account) {
   const id = account.id;
   if (!connectionPools.has(id)) {
     connectionPools.set(id, { clients: [], inUse: new Set(), waiters: [] });
@@ -1382,7 +1391,7 @@ async function acquirePooledClient(account) {
   });
 }
 
-function releasePooledClient(account, client) {
+export function releasePooledClient(account, client) {
   const pool = connectionPools.get(account.id);
   if (!pool) { client.logout().catch(() => {}); return; }
   pool.inUse.delete(client);
@@ -1395,7 +1404,7 @@ function releasePooledClient(account, client) {
   }
 }
 
-function evictPool(accountId) {
+export function evictPool(accountId) {
   const pool = connectionPools.get(accountId);
   if (!pool) return;
   for (const c of pool.clients) { c.logout().catch(() => {}); }
