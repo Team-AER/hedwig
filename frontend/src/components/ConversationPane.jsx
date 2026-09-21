@@ -94,10 +94,14 @@ export default function ConversationPane({ threadId, folder, unified = false }) 
     setPicker({ x: rect.left, y: rect.bottom + 4, view });
   };
 
-  if (error) return <div style={{ padding: 16, color: 'var(--red, #e03131)' }}>{error}</div>;
+  // Every branch that returns from here fills the reading area, for the same flex reason
+  // as the stack below: a bare div would collapse to the width of its own text.
+  const fill = { flex: 1, minWidth: 0, height: '100%', background: 'var(--bg-primary)' };
+
+  if (error) return <div style={{ ...fill, padding: 16, color: 'var(--red, #e03131)' }}>{error}</div>;
   if (loading && !messages.length) {
     return (
-      <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ ...fill, padding: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
         <div className="skeleton-line" style={{ height: 13, width: '48%', borderRadius: 4 }} />
         <div className="skeleton-line" style={{ height: 13, width: '70%', borderRadius: 4 }} />
       </div>
@@ -110,7 +114,17 @@ export default function ConversationPane({ threadId, folder, unified = false }) 
       // Remounts the stack when the thread's membership changes, so expansion state from a
       // previous conversation can never be applied to this one's message ids.
       key={conversationMembershipKey(messages)}
-      style={{ padding: 12, overflowY: 'auto', height: '100%' }}
+      // flex: 1 and minWidth: 0 are load-bearing. The reading area is a flex row, so
+      // without them this pane is sized shrink-to-fit by its contents: collapsed cards
+      // are narrow, an expanded newsletter is as wide as the newsletter, and the pane
+      // jumped around as the reader opened and closed messages. minWidth: 0 is the other
+      // half, since a flex item defaults to min-width:auto and a wide email would
+      // otherwise push the pane past its share of the row.
+      style={{
+        flex: 1, minWidth: 0,
+        padding: 12, overflowY: 'auto', height: '100%',
+        background: 'var(--bg-primary)',
+      }}
     >
       {/* Thread-level actions, the way Gmail does it: archiving a conversation archives
           all of it, so the reader does not file the same thread message by message. */}

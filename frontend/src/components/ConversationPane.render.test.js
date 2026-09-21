@@ -100,6 +100,18 @@ describe('conversation pane', () => {
     assert.match(document.getElementById('root').innerHTML, /Me/, 'the sent reply appears in the thread');
   });
 
+  test('fills the reading area instead of shrinking to fit its contents', async () => {
+    // The reading area is a flex row. Without flex:1 the pane is sized shrink-to-fit, so
+    // it was as narrow as whatever was open: a sliver for collapsed headers, the width of
+    // the newsletter for an expanded one, resizing as the reader clicked. minWidth:0 stops
+    // a wide email pushing it past its share. jsdom does no layout, so this asserts the
+    // properties themselves, which is what a regression would remove.
+    const pane = document.querySelector('#root > div');
+    // flexGrow rather than the flex shorthand, which is stored expanded ("1 1 0%").
+    assert.equal(pane.style.flexGrow, '1', 'the pane grows to fill the reading area');
+    assert.equal(pane.style.minWidth, '0px', 'and a wide email cannot stretch it');
+  });
+
   test('the opened message actually renders its body, not a permanent skeleton', async () => {
     // The request going out is not enough. An earlier version listed the loading flag in
     // the fetch effect's dependencies, so setLoading re-ran the effect and its cleanup
