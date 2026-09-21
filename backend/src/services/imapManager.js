@@ -1,4 +1,5 @@
 import { FolderStatusMonitor, checkpointFolderStatus } from './folderStatus.js';
+import { extractImapError } from './imapError.js';
 import { ImapFlow } from 'imapflow';
 import { query } from './db.js';
 import { parseMessage, snippetFromBody, detectBulkFromParsedHeaders, parseHeadersInput, headersToRawString, decodeMimeWords, enrichParsedMetadata, renderCalendarInvite } from './messageParser.js';
@@ -737,16 +738,6 @@ function walkNode(node, results) {
   }
 }
 
-// Extract a human-readable message from an imapflow error.
-// imapflow command failures have a structured .response object; fall back to .message.
-function extractImapError(err) {
-  if (err.response && typeof err.response === 'object') {
-    const text = err.response.attributes?.find(a => a.type === 'TEXT')?.value;
-    if (text) return text;
-    if (err.response.command) return `${err.response.command}: ${err.message}`;
-  }
-  return err.serverResponse || err.message || String(err);
-}
 
 // Sanitize a date value — handles Go-style timestamps and other malformed dates
 function safeDate(d) {
@@ -2170,7 +2161,7 @@ export class ImapManager {
         setImmediate(() => {
           acquirePooledClient(account)
             .then(c => releasePooledClient(account, c))
-            .catch(err => console.warn(`Pool pre-warm failed for ${logAccount(account)}:`, err.message));
+            .catch(err => console.warn(`Pool pre-warm failed for ${logAccount(account)}:`, extractImapError(err)));
         });
       }
 
@@ -5117,7 +5108,7 @@ export class ImapManager {
         if (attempt < 2) await new Promise(r => setTimeout(r, 400));
       }
     }
-    console.error(`setFlag failed after retry: uid=${uid} ${flag}=${value}:`, lastErr?.message);
+    console.error(`setFlag failed after retry: uid=${uid} ${flag}=${value}:`, lastErr ? extractImapError(lastErr) : 'unknown');
     throw lastErr;
   }
 

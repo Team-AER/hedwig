@@ -6,6 +6,7 @@ const archiver = require('archiver');
 import { query } from '../services/db.js';
 import { requireAuth } from '../middleware/auth.js';
 import { imapManager } from '../index.js';
+import { extractImapError } from '../services/imapError.js';
 import { sanitizeEmail, stripEmailHead, hasRemoteImages, blockRemoteImages, rewriteEbayImageserUrls, rewriteAnchorHrefs } from '../services/emailSanitizer.js';
 import { snippetFromBody, decodeMimeWords, parseRawHeaders, buildHeadersFromMessage } from '../services/messageParser.js';
 import { resolveTrashFolder, resolveAllTrashPaths, resolveAllDraftsPaths, resolveArchiveFolder, isAllMailFolder, resolveSpamFolder, resolveAllSpamPaths, getDeleteStrategy, adjustFolderCounts, fanOutReadToSiblings, fanOutStarToSiblings, fanOutBulkReadToSiblings } from '../utils/mailUtils.js';
@@ -1140,7 +1141,7 @@ router.post('/messages/bulk-read', async (req, res) => {
       );
       results.forEach((r, i) => {
         if (r.status === 'rejected') {
-          console.error(`bulk-read IMAP ${msgs[i].id}:`, r.reason.message);
+          console.error(`bulk-read IMAP ${msgs[i].id}:`, extractImapError(r.reason));
           // Durable retry so a later flag-sync pull can't revert this message to unread.
           imapManager._enqueueFlagPush(accountId, msgs[i].id, '\\Seen', read);
         } else {
