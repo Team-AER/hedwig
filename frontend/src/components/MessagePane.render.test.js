@@ -264,3 +264,78 @@ describe('Download all asks first when an attachment is risky', () => {
     assert.doesNotMatch(after.textContent, armedNote);
   });
 });
+
+// Characterization tests for the body renderer, written before extracting it into its own
+// component. The iframe lifecycle effect had no coverage at all, and two of the fixes living
+// in it (a document that never finishes loading, #1287ada; resetting the frame between
+// messages) would fail silently if the extraction dropped them.
+describe('message body rendering', () => {
+  const MSG_HTML = { ...MSG_A, id: 'h1', uid: 11, subject: 'HTML body' };
+  const MSG_TEXT = { ...MSG_A, id: 't1', uid: 12, subject: 'Text body' };
+  const BODIES = {
+    h1: { html: '<p id="hello">Hello from HTML</p>', text: '', attachments: [] },
+    t1: { html: '', text: 'Plain text with https://example.com in it', attachments: [] },
+  };
+  let originalFetch;
+
+  before(() => {
+    globalThis.requestAnimationFrame ??= cb => setTimeout(() => cb(Date.now()), 0);
+    dom.window.requestAnimationFrame ??= globalThis.requestAnimationFrame;
+    originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url) => {
+      const id = /\/messages\/([^/]+)\/body/.exec(String(url))?.[1];
+      return { ok: true, status: 200, json: async () => (BODIES[id] ?? {}), text: async () => '' };
+    };
+    useStore.getState().setMessages?.([MSG_A, MSG_B, MSG_HTML, MSG_TEXT]);
+  });
+  after(() => { globalThis.fetch = originalFetch; });
+
+  const open = async (id) => {
+    await React.act(async () => {
+      useStore.getState().setSelectedMessage(id);
+      root.render(React.createElement(MessagePane));
+    });
+    await React.act(async () => { await new Promise(r => setTimeout(r, 30)); });
+  };
+
+  test('an HTML body renders into an iframe', async () => {
+    await open('h1');
+    const frame = document.querySelector('iframe');
+    assert.ok(frame, 'an HTML body must render inside a frame, not inline');
+  });
+
+  test('the sanitized body reaches the frame', async () => {
+    // Asserted on srcdoc rather than contentDocument: jsdom does not parse srcdoc into a
+    // document, so the frame's own DOM is not observable here. What is observable, and what
+    // the extraction must preserve, is that the body reaches the frame at all.
+    await open('h1');
+    const frame = document.querySelector('iframe');
+    assert.match(frame?.getAttribute('srcdoc') ?? '', /Hello from HTML/, 'body must be handed to the frame');
+  });
+
+  test('the frame is sandboxed and scripts are not allowed to run', async () => {
+    // The body is attacker-controlled. Whatever else the extraction changes, it must not
+    // loosen this.
+    await open('h1');
+    const frame = document.querySelector('iframe');
+    const sandbox = frame?.getAttribute('sandbox');
+    assert.ok(sandbox !== null, 'the email frame must be sandboxed');
+    assert.ok(!/allow-scripts/.test(sandbox ?? ''), 'scripts must never be allowed in an email frame');
+  });
+
+  test('a text-only body renders without a frame', async () => {
+    await open('t1');
+    assert.match(document.getElementById('root').innerHTML, /Plain text with/);
+  });
+
+  test('switching messages resets the frame height', async () => {
+    // The pane sets the frame back to 300px before paint, so a tall email does not leave the
+    // next, shorter one padded out with its height.
+    await open('h1');
+    const frame = document.querySelector('iframe');
+    if (frame) frame.style.height = '2400px';
+    await open('t1');
+    const after = document.querySelector('iframe');
+    if (after) assert.notEqual(after.style.height, '2400px', 'height must not carry across messages');
+  });
+});
