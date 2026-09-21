@@ -2452,7 +2452,7 @@ function Sep() {
   return <span style={{ width: 1, background: 'var(--border-subtle)', margin: '2px 4px', alignSelf: 'stretch' }} />;
 }
 
-function ColorMenuSection({ title, colors, activeColor, onColor, onClear, clearLabel, showNoColor, showClear = true }) {
+function ColorMenuSection({ title, colors, activeColor, onColor, onClear, clearLabel, customColorLabel, noColorLabel, showNoColor, showClear = true }) {
   const customInputRef = useRef(null);
   const customColor = /^#[0-9a-f]{6}$/i.test(activeColor || '') ? activeColor : '#000000';
 
@@ -2487,7 +2487,7 @@ function ColorMenuSection({ title, colors, activeColor, onColor, onClear, clearL
           fontSize: 12, padding: '2px 0', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5,
         }}>
         <span style={{ width: 16, height: 16, background: customColor, border: '1px solid var(--border)', display: 'inline-block' }} />
-        Custom color...
+        {customColorLabel}
       </button>
       <input ref={customInputRef} type="color" value={customColor}
         onChange={e => onColor(e.target.value)}
@@ -2503,7 +2503,7 @@ function ColorMenuSection({ title, colors, activeColor, onColor, onClear, clearL
             width: 16, height: 16, border: '1px solid var(--border)', display: 'inline-block',
             background: 'linear-gradient(to bottom right, transparent calc(50% - 1px), #e03131 calc(50% - 1px), #e03131 calc(50% + 1px), transparent calc(50% + 1px))',
           }} />
-          No color
+          {noColorLabel}
         </button>
       )}
       {showClear && !showNoColor && (
@@ -2513,7 +2513,7 @@ function ColorMenuSection({ title, colors, activeColor, onColor, onClear, clearL
             alignSelf: 'flex-start', background: 'none', border: 'none', color: 'var(--accent)',
             fontSize: 12, padding: '0 0 2px', cursor: 'pointer',
           }}>
-          Remove color
+          {clearLabel}
         </button>
       )}
     </div>
@@ -2952,6 +2952,8 @@ function RichToolbar({ editor, onAttach, onInsertImage, htmlMode, onToggleHtml, 
             onColor={applyTextColor}
             onClear={() => applyTextColor(null)}
             clearLabel={t('compose.toolbar.removeColor')}
+            customColorLabel={t('compose.toolbar.customColor')}
+            noColorLabel={t('compose.toolbar.noColor')}
             showClear={false}
           />
           <ColorMenuSection
@@ -2961,6 +2963,8 @@ function RichToolbar({ editor, onAttach, onInsertImage, htmlMode, onToggleHtml, 
             onColor={applyBackgroundColor}
             onClear={() => applyBackgroundColor(null)}
             clearLabel={t('compose.toolbar.removeHighlight')}
+            customColorLabel={t('compose.toolbar.customColor')}
+            noColorLabel={t('compose.toolbar.noColor')}
             showNoColor
           />
         </div>

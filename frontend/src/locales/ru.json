@@ -147,6 +147,8 @@
       "typography": "Типографика",
       "textColor": "Цвет текста",
       "removeColor": "Убрать цвет",
+      "customColor": "Свой цвет…",
+      "noColor": "Без цвета",
       "insertImage": "Вставить изображение",
       "minimize": "Свернуть",
       "maximize": "Развернуть",

@@ -147,6 +147,8 @@
       "typography": "Tipografía",
       "textColor": "Color del texto",
       "removeColor": "Quitar color",
+      "customColor": "Color personalizado…",
+      "noColor": "Sin color",
       "insertImage": "Insertar imagen",
       "minimize": "Minimizar",
       "maximize": "Maximizar",

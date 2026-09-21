@@ -417,6 +417,8 @@
       "typography": "Formátování písma",
       "textColor": "Barva textu",
       "removeColor": "Odebrat barvu",
+      "customColor": "Vlastní barva…",
+      "noColor": "Bez barvy",
       "insertImage": "Vložit obrázek",
       "minimize": "Minimalizovat",
       "maximize": "Maximalizovat",
