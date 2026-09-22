@@ -611,6 +611,8 @@ const I18N_ATTRS = ['title', 'placeholder', 'aria-label', 'alt'];
 // Plain strings that are intentionally NOT translated (technical terms,
 // brand names, format placeholders). Add with a comment explaining why.
 const HARDCODED_OK = new Set([
+  // Hedwig product name in the login wordmark — a brand, not translatable text
+  'Hedwig',
   // CSS/DOM placeholder for a variable-name input field — not a sentence
   'value',
   // Tooltip label for a rich-text editor colour input — purely visual affordance,
