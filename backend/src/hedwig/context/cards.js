@@ -19,8 +19,8 @@ export async function findEntities(userId, q, limit = 20, { kind = null } = {}) 
   const text = typeof q === 'string' ? q.trim().toLowerCase().slice(0, 200) : '';
   const params = [userId, clampInt(limit, 1, 200, 20)];
   const where = ['e.user_id = $1'];
-  if (kind) { params.push(kind); where.push(`e.kind = $${params.length}`); }
-  let rank = '0';
+  if (kind) { params.push(kind); where.push(`e.kind = $${params.length}`); } else where.push("e.kind <> 'self'");
+  let rank = null;
   if (text) {
     params.push(`%${text.replace(/[\\%_]/g, (c) => `\\${c}`)}%`, text);
     const like = `$${params.length - 1}`;
@@ -32,7 +32,7 @@ export async function findEntities(userId, q, limit = 20, { kind = null } = {}) 
   }
   const { rows } = await query(
     `SELECT ${ENTITY_LITE_SELECT} FROM hedwig_entities e WHERE ${where.join(' AND ')}
-      ORDER BY ${rank} DESC, e.is_bulk ASC, e.last_seen DESC NULLS LAST, e.message_count DESC
+      ORDER BY ${rank ? `${rank} DESC, ` : ''}e.is_bulk ASC, e.last_seen DESC NULLS LAST, e.message_count DESC
       LIMIT $2`,
     params,
   );
