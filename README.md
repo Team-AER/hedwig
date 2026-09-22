@@ -1,3 +1,34 @@
+# Hedwig
+
+Hedwig is Team-AER's fork of [MailFlow](https://github.com/maathimself/mailflow): every mail account in one
+self-hosted inbox, plus the context a single-thread summary never has. It keeps all of MailFlow and adds:
+
+- **Context engine.** People and organisations merged across accounts, topics that span threads over months,
+  commitments ("you owe", "they owe") and facts extracted with their source message, hybrid search, and cited
+  answers to questions across your whole mailbox.
+- **Triage that learns.** Rules, then a per-user classifier trained from what you reply to, archive and correct,
+  then a local model for the uncertain cases. A ranked *Needs you* list, *Waiting on*, digests, and an honest
+  "why is this here?" for every decision.
+- **Insights.** Volume, reply times, who you owe, cards backed by evidence, and a daily briefing with citations.
+- **Agent framework.** A tool-calling assistant and scheduled automations over the same services. It can read
+  everything you own; it cannot change mail until you approve the action, and it never sends or deletes.
+- **Plugins anyone can write.** Manifest, per-user permission grants, capability facade, views, commands,
+  agent tools and hooks. Receipts, Newsletter digest, Pensieve bridge and Send guard ship as examples.
+- **A UI framework.** Layouts are pane trees of views; plugin views and core views are the same thing.
+
+Models run through any OpenAI-compatible gateway (Team-AER uses `llm-proxy.cls` with Qwen 3.8 Flash Next) and a
+local embeddings server. Everything is configurable, from env vars to admin settings to per-user preferences.
+
+```bash
+cp .env.hedwig.example .env    # fill in the secrets (openssl rand -hex 32)
+docker compose -f docker-compose.hedwig.yml up -d --build
+```
+
+Docs: [architecture](docs/hedwig/ARCHITECTURE.md) · [API](docs/hedwig/API.md) · [plugins](docs/hedwig/PLUGINS.md).
+Licence: AGPL-3.0, inherited from MailFlow. The upstream README follows.
+
+---
+
 <p align="center">
   <img src="media/mailflow-logo.png" width="200" alt="MailFlow Logo">
 </p>
