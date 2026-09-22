@@ -319,6 +319,10 @@ router.put('/:id', async (req, res) => {
     reconnectQueue(id, () => imapManager.disconnectAccount(id))
       .catch(err => console.error(`Failed to disconnect account ${id} after disable:`, err.message));
   } else if (needsReconnect && updated.protocol === 'imap' && updated.enabled) {
+    // An explicit settings change is how a wrong password gets fixed, so drop any backoff
+    // first. Auth failures back off for hours, and without this the corrected credentials
+    // would sit unused until that expired.
+    imapManager.clearConnectCooldown(id);
     reconnectQueue(id, () =>
       imapManager.disconnectAccount(id)
         .then(() => query('SELECT * FROM email_accounts WHERE id = $1', [id]))

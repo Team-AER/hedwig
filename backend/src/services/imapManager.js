@@ -264,6 +264,33 @@ export async function stampLastSync(accountId) {
 
 // Exponential backoff for consecutive connection refusals: 30s, 60s, 120s, 240s, 480s, …
 // capped at CONNECT_COOLDOWN_MAX_MS.
+// A wrong password does not fix itself. The refusal backoff tops out at 15 minutes, which
+// is right for a provider that is merely busy, but for bad credentials it means retrying
+// forever: a dev Yahoo account logged 627 failed logins in 16 hours, one every 92 seconds.
+// That is how a client gets an account locked or an IP flagged, and it is the same provider
+// class of misbehavior as the connection storms in #474.
+//
+// So auth failures get their own, much longer ladder: 5m, 10m, 20m ... capped at 6 hours.
+// Sixteen hours of a wrong password becomes about ten attempts instead of six hundred.
+const AUTH_COOLDOWN_BASE_MS = 5 * 60 * 1000;
+const AUTH_COOLDOWN_MAX_MS = 6 * 60 * 60 * 1000;
+
+export function authCooldownMs(failures) {
+  // Guarded: a non-finite count would yield NaN, and `Date.now() < NaN` is false, so the
+  // cooldown would silently never apply — reinstating the retry storm this exists to stop.
+  const n = Number.isFinite(failures) ? Math.max(1, failures) : 1;
+  return Math.min(AUTH_COOLDOWN_BASE_MS * (2 ** Math.min(n - 1, 10)), AUTH_COOLDOWN_MAX_MS);
+}
+
+// Credentials the server actively rejected, as opposed to a connection it would not give us.
+// RFC 3501/9051 AUTHENTICATIONFAILED is the structured form; the rest are what real servers
+// send instead. Deliberately narrow: anything not clearly about credentials should keep the
+// short refusal backoff so a transient fault still recovers in seconds.
+export function isAuthFailure(detail) {
+  return /\[AUTHENTICATIONFAILED\]|authentication failed|invalid credentials|invalid (?:user|login|password)|login failed|password incorrect|\[AUTHORIZATIONFAILED\]/i
+    .test(String(detail || ''));
+}
+
 export function connectCooldownMs(failures) {
   const n = Math.max(1, failures);
   return Math.min(CONNECT_COOLDOWN_BASE_MS * (2 ** Math.min(n - 1, 5)), CONNECT_COOLDOWN_MAX_MS);
@@ -2232,7 +2259,8 @@ export class ImapManager {
       // On a connection-refusal/throttle, back this account off with growing delay so we
       // stop hammering a provider that's at its limit. Other errors don't set a cooldown —
       // the health check retries them normally.
-      if (isConnectionRefusal(detail)) this._noteConnectionRefusal(account);
+      if (isAuthFailure(detail)) this._noteAuthFailure(account);
+      else if (isConnectionRefusal(detail)) this._noteConnectionRefusal(account);
       await this._recordAccountError(account, detail);
       return false;
     } finally {
@@ -2387,6 +2415,22 @@ export class ImapManager {
   // Arm/extend an account's connection-refusal backoff. Shared by connectAccount, the
   // interval reconnect, AND the fresh-login sync path so all three back off identically
   // instead of hammering a provider that's at its connection limit. Returns the delay in ms.
+  _noteAuthFailure(account) {
+    const failures = (this._connectCooldown.get(account.id)?.failures || 0) + 1;
+    const ms = authCooldownMs(failures);
+    // Same map as refusals, so the health check, connectAccount and the poll-only tick all
+    // honor it without changes. Only the ladder differs.
+    this._connectCooldown.set(account.id, { until: Date.now() + ms, failures });
+    console.warn(`Authentication failed for ${logAccount(account)} — backing off ${Math.round(ms / 60000)}m (attempt #${failures}); fix the credentials to retry sooner`);
+    return ms;
+  }
+
+  // Cleared when a human explicitly changes the account, so fixing a password retries at once
+  // instead of waiting out a cooldown that may be hours long.
+  clearConnectCooldown(accountId) {
+    this._connectCooldown.delete(accountId);
+  }
+
   _noteConnectionRefusal(account) {
     const failures = (this._connectCooldown.get(account.id)?.failures || 0) + 1;
     const ms = connectCooldownMs(failures);
