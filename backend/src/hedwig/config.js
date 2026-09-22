@@ -91,7 +91,7 @@ export const SCHEMA = [
   { key: 'triage.pushJunkToProvider', type: 'boolean', default: false, group: 'triage', label: 'Move spam verdicts to the provider Junk folder', scope: 'user' },
 
   // ── Insights and agent ─────────────────────────────────────────────────────
-  { key: 'insights.briefingTime', type: 'string', default: '07:00', group: 'insights', label: 'Daily briefing time (HH:MM, server time)', scope: 'user' },
+  { key: 'insights.briefingTime', type: 'string', default: '07:00', group: 'insights', label: 'Daily briefing time (HH:MM, in your timezone)', scope: 'user' },
   { key: 'insights.weeklyDay', type: 'number', default: 1, min: 0, max: 6, group: 'insights', label: 'Weekly review day (0=Sun)', scope: 'user' },
   { key: 'insights.timezone', type: 'string', default: 'UTC', group: 'insights', label: 'Timezone (IANA)', scope: 'user' },
   { key: 'agent.maxSteps', type: 'number', default: 8, min: 1, max: 40, group: 'agent', label: 'Max tool steps per run' },
