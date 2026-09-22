@@ -1,0 +1,156 @@
+# Hedwig production stack: MailFlow + the Hedwig worker, pgvector and a local embeddings server.
+#
+#   cp .env.hedwig.example .env        # fill in the secrets
+#   docker compose -f docker-compose.hedwig.yml up -d --build
+#
+# Every Hedwig knob can be set here as HEDWIG_<KEY> (see backend/src/hedwig/config.js) and later
+# overridden per install in Settings → Hedwig → Models & config, and per user where allowed.
+name: hedwig
+
+x-backend-env: &backend-env
+  NODE_ENV: production
+  SESSION_SECRET: ${SESSION_SECRET}
+  APP_URL: ${APP_URL:-}
+  FRONTEND_URL: ${APP_URL:-}
+  DB_HOST: postgres
+  DB_PORT: 5432
+  DB_NAME: ${DB_NAME:-mailflow}
+  DB_USER: ${DB_USER:-mailflow}
+  DB_PASSWORD: ${DB_PASSWORD}
+  REDIS_URL: redis://redis:6379
+  ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+  VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+  VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+  VAPID_SUBJECT: ${VAPID_SUBJECT:-}
+  IMAP_MAX_PERSISTENT_PER_HOST: ${IMAP_MAX_PERSISTENT_PER_HOST:-}
+  # Hedwig defaults — all overridable in the admin UI.
+  HEDWIG_LLM_BASE_URL: ${HEDWIG_LLM_BASE_URL:-http://llm-proxy.cls/v1}
+  HEDWIG_LLM_CATALOG_URL: ${HEDWIG_LLM_CATALOG_URL:-http://llm-proxy.cls/catalog.json}
+  HEDWIG_LLM_MODELS_FAST: ${HEDWIG_LLM_MODELS_FAST:-Qwen/Qwen3.8-Flash-Next}
+  HEDWIG_LLM_MODELS_LONG: ${HEDWIG_LLM_MODELS_LONG:-Qwen/Qwen3.8-Flash-Next}
+  HEDWIG_LLM_MODELS_AGENT: ${HEDWIG_LLM_MODELS_AGENT:-Qwen/Qwen3.8-Flash-Next}
+  HEDWIG_EMBEDDINGS_PROVIDER: ${HEDWIG_EMBEDDINGS_PROVIDER:-openai}
+  HEDWIG_EMBEDDINGS_BASE_URL: ${HEDWIG_EMBEDDINGS_BASE_URL:-http://embed:80/v1}
+  HEDWIG_EMBEDDINGS_MODEL: ${HEDWIG_EMBEDDINGS_MODEL:-BAAI/bge-small-en-v1.5}
+  HEDWIG_EMBEDDINGS_DIMS: ${HEDWIG_EMBEDDINGS_DIMS:-384}
+  HEDWIG_PLUGINS_DIR: /plugins
+  HEDWIG_INSIGHTS_TIMEZONE: ${HEDWIG_INSIGHTS_TIMEZONE:-UTC}
+  TZ: ${TZ:-UTC}
+
+services:
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        VITE_BUILD_SHA: ${GIT_SHA:-dev}
+        VITE_EMAIL_DIV_RENDER: ${VITE_EMAIL_DIV_RENDER:-false}
+        NGINX_BASE: ${NGINX_BASE:-nginx:alpine}
+    image: hedwig-frontend:local
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-443}:443"
+      - "${APP_HTTP_PORT:-80}:80"
+    volumes:
+      - ./certs:/etc/nginx/ssl
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO/dev/null http://127.0.0.1:80/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks: [hedwig]
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      args:
+        BUILD_SHA: ${GIT_SHA:-dev}
+    image: hedwig-backend:local
+    restart: unless-stopped
+    environment:
+      <<: *backend-env
+      PORT: 3000
+    volumes:
+      - plugins:/plugins
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    networks: [hedwig]
+
+  # Pipeline, jobs and schedules. Same image as the backend, no IMAP connections.
+  hedwig-worker:
+    image: hedwig-backend:local
+    restart: unless-stopped
+    command: ["node", "src/hedwig/worker.js"]
+    environment:
+      <<: *backend-env
+    volumes:
+      - plugins:/plugins
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks: [hedwig]
+
+  # Local embeddings (OpenAI-compatible /v1/embeddings). Swap for the gateway by setting
+  # HEDWIG_EMBEDDINGS_BASE_URL once llm-proxy serves an embeddings route.
+  embed:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9
+    restart: unless-stopped
+    command: ["--model-id", "${HEDWIG_EMBEDDINGS_MODEL:-BAAI/bge-small-en-v1.5}", "--max-client-batch-size", "64"]
+    volumes:
+      - embed_models:/data
+    networks: [hedwig]
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-mailflow}
+      POSTGRES_USER: ${DB_USER:-mailflow}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-mailflow} -d ${DB_NAME:-mailflow}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks: [hedwig]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    networks: [hedwig]
+
+volumes:
+  postgres_data:
+  redis_data:
+  embed_models:
+  plugins:
+
+networks:
+  hedwig:
+    driver: bridge

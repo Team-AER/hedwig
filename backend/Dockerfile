@@ -7,6 +7,9 @@ RUN npm ci --omit=dev
 
 FROM node:22-alpine AS runtime
 
+# git: Hedwig's plugin installer clones plugins from https git URLs (admin only).
+RUN apk add --no-cache git
+
 WORKDIR /app
 
 ARG BUILD_SHA
@@ -18,6 +21,9 @@ COPY . /repo
 RUN cp /repo/backend/package.json ./package.json && \
     cp -R /repo/backend/src ./src && \
     cp -R /repo/backend/migrations ./migrations && \
+    cp -R /repo/backend/migrations-hedwig ./migrations-hedwig && \
+    cp -R /repo/backend/scripts ./scripts && \
+    mkdir -p /plugins && chown node:node /plugins && \
     APP_VERSION_VALUE="${APP_VERSION:-$(node -p "require('./package.json').version")}"; \
     APP_VERSION_VALUE="$(printf '%s' "$APP_VERSION_VALUE" | sed 's/^v[.]//' | sed 's/^v//')"; \
     printf '{"version":"%s"}\n' "$APP_VERSION_VALUE" > ./build-meta.json && \

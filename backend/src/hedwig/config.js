@@ -83,6 +83,11 @@ export const SCHEMA = [
   { key: 'triage.retrainHour', type: 'number', default: 3, min: 0, max: 23, group: 'triage', label: 'Nightly retrain hour (server time)' },
   { key: 'triage.implicitAfterHours', type: 'number', default: 48, min: 1, max: 720, group: 'triage', label: 'Learn from behaviour after (h)' },
   { key: 'triage.waitingOnDays', type: 'number', default: 3, min: 1, max: 60, group: 'triage', label: 'Waiting-on after no reply for (days)', scope: 'user' },
+  { key: 'triage.modelWeight', type: 'number', default: 0.65, min: 0, max: 1, group: 'triage', label: 'Weight of your classifier vs rules once trained' },
+  { key: 'triage.modelPromote', type: 'number', default: 0.8, min: 0, max: 1, group: 'triage', label: 'Classifier confidence needed to lift digest/notifications into Needs you' },
+  { key: 'triage.llmMaxAgeDays', type: 'number', default: 14, min: 0, max: 365, group: 'triage', label: 'Ask the model only about mail newer than (days)' },
+  { key: 'triage.waitingOnMaxDays', type: 'number', default: 60, min: 1, max: 365, group: 'triage', label: 'Stop tracking waiting-on after (days)' },
+  { key: 'triage.implicitWindowDays', type: 'number', default: 30, min: 1, max: 365, group: 'triage', label: 'Learn from behaviour on mail up to (days) old' },
   { key: 'triage.pushJunkToProvider', type: 'boolean', default: false, group: 'triage', label: 'Move spam verdicts to the provider Junk folder', scope: 'user' },
 
   // ── Insights and agent ─────────────────────────────────────────────────────
@@ -169,7 +174,7 @@ async function loadUserOverrides(userId) {
   if (!userId) return {};
   const cached = userCache.get(userId);
   if (cached && cached.expiry > Date.now()) return cached.values;
-  let values = {};
+  let values;
   try {
     const { rows } = await query('SELECT settings FROM hedwig_user_settings WHERE user_id = $1', [userId]);
     values = rows[0]?.settings || {};
