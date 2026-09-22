@@ -134,7 +134,8 @@ export function Chip({ children, tone = 'neutral', size = 'sm', style, title }) 
 /** Triage reason chip: amber for needs you, teal for waiting/informational, red for spam. */
 export function ReasonChip({ triage, children, size }) {
   const tone = categoryTone(triage?.category);
-  return <Chip tone={tone} size={size}>{children}</Chip>;
+  // Never shrink: the chip is the row's headline reason; the muted "why" text truncates instead.
+  return <Chip tone={tone} size={size} style={{ flexShrink: 0, maxWidth: 'none' }}>{children}</Chip>;
 }
 
 export function Dot({ color, size = 8, style }) {

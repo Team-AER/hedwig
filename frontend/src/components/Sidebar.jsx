@@ -14,7 +14,8 @@ import {
   resolveFolderOrderDrop,
 } from '../utils/sidebar.js';
 import { useMobile } from '../hooks/useMobile.js';
-import LogoMark from './LogoMark.jsx';
+import { OwlMark } from '../hedwig/icons.jsx';
+import { useHedwig } from '../hedwig/store.js';
 import ProfileModal from './ProfileModal.jsx';
 import { useUiScale, descale } from '../hooks/useUiScale.js';
 
@@ -269,6 +270,7 @@ export default function Sidebar() {
   } = useStore();
 
   const isMobile = useMobile();
+  const hedwigShell = useHedwig((s) => s.shellMode === 'hedwig') && !isMobile;
   // On mobile the sidebar is always expanded (shown as an overlay drawer)
   const sidebarCollapsed = isMobile ? false : sidebarCollapsedPref;
 
@@ -855,25 +857,14 @@ export default function Sidebar() {
         minHeight: 56, flexShrink: 0,
       }}>
         {!sidebarCollapsed && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-            <LogoMark size={24} />
-            <span style={{ display: 'flex', alignItems: 'baseline', gap: 0 }}>
-              <span style={{
-                fontFamily: "'Syne', sans-serif",
-                fontSize: 17, fontWeight: 700,
-                color: 'var(--text-primary)',
-                letterSpacing: '-0.02em', whiteSpace: 'nowrap',
-              }}>
-                Mail
-              </span>
-              <span style={{
-                fontFamily: "'Syne', sans-serif",
-                fontSize: 17, fontWeight: 600,
-                color: 'var(--accent)',
-                letterSpacing: '-0.02em', whiteSpace: 'nowrap',
-              }}>
-                Flow
-              </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 9, visibility: hedwigShell ? 'hidden' : 'visible' }}>
+            <OwlMark size={22} />
+            <span style={{
+              fontFamily: "var(--hw-font-display, 'Fraunces', serif)",
+              fontSize: 18, fontWeight: 600, color: 'var(--text-primary)',
+              letterSpacing: '-0.01em', whiteSpace: 'nowrap',
+            }}>
+              Hedwig
             </span>
           </div>
         )}

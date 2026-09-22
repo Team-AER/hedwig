@@ -204,7 +204,7 @@ function EntityBody({ card, reload, topic, compact, onCommitment, onFact, onFact
       <span style={{ flexGrow: 1 }} />
       <Button onClick={() => openView('hedwig.ask', { entityId: entity.id, topicId: topic?.id, question: '' })}
         style={{ justifyContent: 'flex-start', background: T.raised, border: 0, padding: '10px 12px', fontWeight: 500 }}>
-        <Glyph name="ask" /> Ask about {entity.kind === 'org' ? 'this organisation' : (entity.display_name || 'this person').split(' ')[0]}
+        <Glyph name="ask" /> Ask about {entity.kind === 'org' ? 'this organisation' : (entity.display_name || 'this person')}
       </Button>
     </>
   );
