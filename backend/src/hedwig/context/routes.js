@@ -125,6 +125,8 @@ export function contextRoutes(r) {
       if (res.writableEnded || res.destroyed) return;
       res.write(`data: ${JSON.stringify(evt)}\n\n`);
     };
+    // SSE comment every 15 s so proxies keep the connection open while the model is queued.
+    const keepalive = setInterval(() => { if (!res.writableEnded && !res.destroyed) res.write(': keepalive\n\n'); }, 15_000);
     try {
       await answerQuestion(userId, question, { entityId, topicId, onEvent: send, signal: controller.signal });
     } catch (err) {
@@ -133,6 +135,7 @@ export function contextRoutes(r) {
         send({ type: 'error', error: publicStreamError(err) });
       }
     } finally {
+      clearInterval(keepalive);
       res.off('close', onClose);
       if (!res.writableEnded) res.end();
     }
