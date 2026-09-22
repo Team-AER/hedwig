@@ -358,6 +358,38 @@ export function planModseqSync({ storedModseq, serverModseq, uidValidityChanged,
   return BigInt(storedModseq) === BigInt(serverModseq) ? 'unchanged' : 'delta';
 }
 
+// How the folder integrity pass should get flag state.
+//
+// The pass exists to verify MEMBERSHIP: which UIDs the server holds, so a gap can be
+// backfilled and a vanished message can be dropped from the cache. It also refreshed
+// read/starred state by fetching flags for every message in the folder, and that is what
+// made it impossible on a large mailbox. Measured against a 34,159 message PurelyMail
+// INBOX: UID SEARCH returns the whole membership in 11.5s, while FETCH 1:* of flags needs
+// about 13.5 minutes. The budget is 60s, so that folder's integrity had never once been
+// verified, and every attempt spent a full minute of real FETCH load before discarding it.
+//
+// Membership is now taken from SEARCH alone, which is both cheaper and sufficient. Flags
+// are collected only when they can be had cheaply:
+//
+//   'changedsince' — CONDSTORE with a baseline: fetch only what changed. 3.1s on the same
+//                    mailbox, versus 13.5 minutes for all of it.
+//   'unchanged'    — the server's modseq matches our checkpoint; nothing to fetch.
+//   'full'         — no CONDSTORE, or no baseline yet. Run it under its own sub-budget so a
+//                    slow server degrades to 'skip' rather than failing the whole pass.
+//   'skip'         — too expensive to be worth it. Membership is still verified, and the
+//                    ordinary sync path owns flag freshness: syncMessages runs its own
+//                    modseq-aware flag scan every tick. Skipping here loses nothing that is
+//                    not already covered, and is far better than verifying nothing at all.
+export function planIntegrityFlagScan({ condstore, storedModseq, serverModseq, exists, cheapScanMax = 2000 }) {
+  if (!exists) return 'unchanged';                       // empty folder: nothing to fetch
+  if (condstore && serverModseq != null && storedModseq != null) {
+    return BigInt(storedModseq) === BigInt(serverModseq) ? 'unchanged' : 'changedsince';
+  }
+  // No usable baseline. Affordable folders get a real scan; large ones are left to the
+  // ordinary sync path rather than spending the integrity budget on them.
+  return exists <= cheapScanMax ? 'full' : 'skip';
+}
+
 // Body parts that cover ~99% of real-world email structures (used for full body caching)
 const BODY_PREFETCH_PARTS = ['1', '1.1', '1.2', '2', '2.1', '2.2', '1.1.1', '1.2.1'];
 
@@ -3008,6 +3040,8 @@ export class ImapManager {
     let complete = false;
     let missing = false;
     let expired = false;
+    let flagsCovered = false;
+    let storedFlagModseq = null;
     await this._withCountClient(account, async client => {
       // Entire operation is bounded and the finally in _withCountClient destroys a hung transport.
       try { await raceTimeout((async () => {
@@ -3016,22 +3050,88 @@ export class ImapManager {
         try {
           if (String(client.mailbox?.uidValidity) !== String(observed.uidValidity)) return;
           const cutoff = new Date();
+
+          // Flag state, only when it can be had at a sane cost. The full scan is what made
+          // this pass impossible on a large folder: measured on a 34,159 message PurelyMail
+          // INBOX, FETCH 1:* of flags needs ~13.5 minutes against a 60 second budget, while
+          // UID SEARCH returns the whole membership in 11.5s and a CONDSTORE CHANGEDSINCE
+          // fetch costs 3.1s. See planIntegrityFlagScan.
+          const condstore = Boolean(client.capabilities?.has?.('CONDSTORE'));
+          if (condstore) {
+            const { rows: fRows } = await query(
+              'SELECT status_synced_modseq FROM folders WHERE account_id=$1 AND path=$2 AND uid_validity=$3',
+              [account.id, path, String(observed.uidValidity)]
+            );
+            storedFlagModseq = fRows[0]?.status_synced_modseq ?? null;
+          }
+          const plan = planIntegrityFlagScan({
+            condstore, storedModseq: storedFlagModseq,
+            serverModseq: client.mailbox?.highestModseq, exists: client.mailbox.exists,
+          });
+
           const flags = [];
-          // Fully drain this iterator before taking any destructive cache action. A failed FETCH
-          // must never masquerade as an empty folder or advance a successful-sync checkpoint.
-          if (client.mailbox.exists > 0) {
-            for await (const m of client.fetch('1:*', { uid: true, flags: true })) {
+          let fullScanDeferred = false;
+          // The full scan doubles as an independent second view of the UID set. Only a pass
+          // that has it may delete cached rows; see below.
+          let fetched = null;
+          // An empty folder is fully verified for free: the server says it holds nothing and
+          // SEARCH agrees below, so pruning what we cached for it is safe and needs no scan.
+          if (client.mailbox.exists === 0) fetched = new Set();
+          if (plan === 'full') {
+            // Fully drain this iterator before taking any destructive cache action. A failed
+            // FETCH must never masquerade as an empty folder or advance a checkpoint.
+            const scan = (async () => {
+              for await (const m of client.fetch('1:*', { uid: true, flags: true })) {
+                flags.push({ uid: m.uid, isRead: m.flags.has('\\Seen'), isStarred: m.flags.has('\\Flagged') });
+              }
+            })();
+            // Its own sub-budget. A folder can be under the affordability threshold and still
+            // crawl on a slow or throttled server: the measured PurelyMail rate was about 42
+            // messages a second, so even 2,000 messages can eat most of the 60s budget. The
+            // sentinel is RESOLVED rather than thrown, so a genuine FETCH error still
+            // propagates and is never mistaken for slowness.
+            scan.catch(() => {});
+            const outcome = await Promise.race([
+              scan,
+              new Promise(res => setTimeout(() => res(FLAG_SCAN_TIMED_OUT), FLAG_SCAN_TIMEOUT_MS)),
+            ]);
+            if (outcome === FLAG_SCAN_TIMED_OUT) {
+              // Degrade to a membership-only pass: no strong snapshot, so no pruning, and the
+              // watermark is withheld so the next pass retries this range.
+              flags.length = 0;
+              fullScanDeferred = true;
+              console.warn(`Integrity flag scan deferred for ${logAccount(account)}/${path}: over ${FLAG_SCAN_TIMEOUT_MS}ms — membership still verified, flags left to sync`);
+            } else {
+              fetched = new Set(flags.map(f => f.uid));
+              if (fetched.size !== client.mailbox.exists) throw new Error('Incomplete folder flag snapshot');
+            }
+          } else if (plan === 'changedsince') {
+            for await (const m of client.fetch('1:*', { uid: true, flags: true }, { changedSince: BigInt(storedFlagModseq) })) {
               flags.push({ uid: m.uid, isRead: m.flags.has('\\Seen'), isStarred: m.flags.has('\\Flagged') });
             }
           }
-          const fetched = new Set(flags.map(f => f.uid));
-          if (fetched.size !== client.mailbox.exists) throw new Error('Incomplete folder flag snapshot');
-          // Confirm membership with UID SEARCH after draining flags. Equal totals alone
-          // cannot establish that a concurrent expunge/arrival left the same UID set.
+          // Advance the flag watermark unless a full scan was cut short. 'skip' seeds it on
+          // purpose: without a baseline a large folder can never reach the cheap CHANGEDSINCE
+          // path, so it would stay on the expensive plan forever. Seeding means flag changes
+          // from before the seed are not applied BY THIS PASS, which costs nothing real: the
+          // ordinary sync path runs its own modseq-aware flag scan every tick and owns flag
+          // freshness. What it buys is that every later pass costs ~3s instead of skipping.
+          flagsCovered = !fullScanDeferred;
+
           const uids = await client.search({ all: true }, { uid: true });
           if (!Array.isArray(uids)) throw new Error('Incomplete folder UID snapshot');
           const server = new Set(uids);
-          if (server.size !== fetched.size || [...server].some(uid => !fetched.has(uid))) {
+          if (fetched) {
+            // Strongest available check: two independent server views, a message-record FETCH
+            // and an index SEARCH, must describe the same set. Equal totals alone cannot
+            // establish that a concurrent expunge plus arrival left the same UIDs.
+            if (server.size !== fetched.size || [...server].some(uid => !fetched.has(uid))) {
+              throw new Error('Folder membership changed during integrity sync');
+            }
+          } else if (server.size !== client.mailbox.exists) {
+            // Without that second view, the count the server reported at SELECT is the check
+            // we can afford. It catches a mailbox moving under us, which is enough to trust
+            // the set for GAP DETECTION. It is deliberately not trusted for deletion.
             throw new Error('Folder membership changed during integrity sync');
           }
           if (expired) throw new Error('Folder integrity sync expired');
@@ -3044,8 +3144,16 @@ export class ImapManager {
           // check finds them missing again. Observed on iCloud, 35 cycles in five hours.
           const suppressed = await suppressedUids(account.id, path, observed.uidValidity);
           missing = hasRealGap(server, local, suppressed);
-          const gone = rows.filter(r => !server.has(Number(r.uid)) && (!r.synced_at || new Date(r.synced_at) < cutoff)
-            && !this._isMoveUidGuarded(account.id, path, Number(r.uid))).map(r => Number(r.uid));
+          // Deleting a cached row is the one irreversible thing this pass does, so it happens
+          // only on a pass that held the full two-view snapshot above. A cheap pass still
+          // detects and backfills gaps, which is non-destructive; it just does not prune.
+          // The practical effect is that a folder too large to scan cheaply keeps rows for
+          // messages deleted elsewhere until a scan is affordable, which is a far better
+          // failure than pruning against a set we could not corroborate.
+          const gone = fetched
+            ? rows.filter(r => !server.has(Number(r.uid)) && (!r.synced_at || new Date(r.synced_at) < cutoff)
+                && !this._isMoveUidGuarded(account.id, path, Number(r.uid))).map(r => Number(r.uid))
+            : [];
           if (expired) throw new Error('Folder integrity sync expired');
           if (gone.length) {
             await query('DELETE FROM messages WHERE account_id=$1 AND folder=$2 AND uid=ANY($3::bigint[]) AND (synced_at IS NULL OR synced_at < $4) AND EXISTS (SELECT 1 FROM folders WHERE account_id=$1 AND path=$2 AND uid_validity=$5)', [account.id, path, gone, cutoff, String(observed.uidValidity)]);
@@ -3065,7 +3173,13 @@ export class ImapManager {
       finally { this._bgConnSem.release((account.imap_host || '').toLowerCase()); }
       // Backfill is best-effort; only a subsequent verified membership pass can checkpoint it.
     }
-    if (complete) await checkpointFolderStatus(account.id, path, observed);
+    if (complete) {
+      // Hold the flag watermark back when the scan did not cover it, so the next pass
+      // re-requests that modseq range instead of skipping over changes we never applied.
+      // Everything else about the observation is still verified and worth checkpointing.
+      await checkpointFolderStatus(account.id, path,
+        flagsCovered ? observed : { ...observed, highestModseq: storedFlagModseq });
+    }
     return complete;
   }
 
