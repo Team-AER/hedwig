@@ -1,4 +1,20 @@
+import { HEDWIG_LIGHT, HEDWIG_DARK, hwVarsFor, upstreamVarsFor } from './hedwig/theme/tokens.js';
+
 export const THEMES = {
+  hedwig: {
+    label: 'Hedwig',
+    description: 'Warm parchment, ink and teal — the Hedwig look',
+    preview: [HEDWIG_LIGHT.ground, HEDWIG_LIGHT.surface, HEDWIG_LIGHT.teal, HEDWIG_LIGHT.ink],
+    vars: upstreamVarsFor(HEDWIG_LIGHT, false),
+  },
+
+  'hedwig-night': {
+    label: 'Hedwig Night',
+    description: 'The Hedwig palette after dark',
+    preview: [HEDWIG_DARK.ground, HEDWIG_DARK.surface, HEDWIG_DARK.teal, HEDWIG_DARK.ink],
+    vars: upstreamVarsFor(HEDWIG_DARK, true),
+  },
+
   dark: {
     label: 'Dark',
     description: 'Default dark theme',
@@ -696,13 +712,13 @@ export function applyCustomCss(css) {
 // ── Theme application ─────────────────────────────────────────────────────────
 
 // The theme to use before any stored/server preference is known — i.e. on the
-// login screen and the very first visit. Honors the OS light/dark setting and
-// falls back to dark. matchMedia is guarded so a missing API never throws.
+// login screen and the very first visit. Hedwig: the Hedwig palette, light or night
+// following the OS setting. matchMedia is guarded so a missing API never throws.
 export function getInitialTheme() {
   try {
-    if (window.matchMedia?.('(prefers-color-scheme: light)').matches) return 'light';
-  } catch { /* matchMedia unavailable — fall through to dark */ }
-  return 'dark';
+    if (window.matchMedia?.('(prefers-color-scheme: dark)').matches) return 'hedwig-night';
+  } catch { /* matchMedia unavailable — fall through to the light Hedwig theme */ }
+  return 'hedwig';
 }
 
 // ── Effective accent (theme value, or a custom-CSS override of --accent) ───────
@@ -762,8 +778,11 @@ export function applyTheme(themeName) {
     themeEl.id = 'mailflow-theme';
     document.head.appendChild(themeEl);
   }
+  // Hedwig's --hw-* variables ride along: exact tokens for the Hedwig themes, values derived
+  // from this palette for every other theme.
+  const vars = { ...theme.vars, ...hwVarsFor(THEMES[themeName] ? themeName : 'dark') };
   themeEl.textContent = `:root {\n${
-    Object.entries(theme.vars).map(([k, v]) => `  ${k}: ${v};`).join('\n')
+    Object.entries(vars).map(([k, v]) => `  ${k}: ${v};`).join('\n')
   }\n}`;
 
   // Recompute favicon + PWA theme-color + logo from the *effective* accent. If a

@@ -6,6 +6,7 @@ import ErrorBoundary from './components/ErrorBoundary.jsx';
 import './index.css';
 import './i18n.js';
 import './plugins/index.js'; // register bundled plugins' UI slots before first paint
+import './hedwig/index.js'; // Hedwig: register pane views, Hedwig views and shell commands
 
 // ErrorBoundary sits outside the router: a throw during routing or in any screen below it
 // would otherwise unmount everything and leave a blank page with no explanation (#441).

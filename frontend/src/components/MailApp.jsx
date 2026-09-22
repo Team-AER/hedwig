@@ -16,6 +16,11 @@ import ReadingPane from './ReadingPane.jsx';
 import NotificationToasts from './NotificationToasts.jsx';
 import CommandPalette from './CommandPalette.jsx';
 import { usePluginSlot, PluginRuntime } from '../plugins/PluginSlot.jsx';
+import { useHedwig } from '../hedwig/store.js';
+import { HedwigRuntime } from '../hedwig/index.js';
+import HedwigShell from '../hedwig/shell/HedwigShell.jsx';
+import HedwigMobile from '../hedwig/shell/MobileShell.jsx';
+import { useHedwigTabBar } from '../hedwig/shell/tabBar.js';
 
 const ContactsPage = lazy(() => import('./ContactsPage.jsx'));
 const WindowLayer  = lazy(() => import('./WindowLayer.jsx'));
@@ -121,6 +126,10 @@ export default function MailApp() {
   const [showShortcutHelp, setShowShortcutHelp] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const isMobile = useMobile();
+  // Hedwig: 'hedwig' renders the pane shell on desktop and adds a tab bar on phones; 'classic'
+  // renders exactly the upstream layout below.
+  const hedwigShell = useHedwig(s => s.shellMode) === 'hedwig';
+  const hedwigTabBar = useHedwigTabBar(isMobile && hedwigShell);
   const sidebarDragRef = useRef(null);
   const sidebarResizeRef = useRef(null);
   const listResizeRef = useRef(null);
@@ -721,6 +730,7 @@ export default function MailApp() {
       }),
       overflow: 'hidden',
       background: 'var(--bg-primary)',
+      ...hedwigTabBar.contentStyle,
     }}>
       {isMobile ? (
         <>
@@ -769,7 +779,10 @@ export default function MailApp() {
           <div style={{ flex: 1, display: !showContacts && selectedMessageId ? 'flex' : 'none', overflow: 'hidden', height: '100%' }}>
             <ReadingPane />
           </div>
+          {hedwigShell && <HedwigMobile onOpenPalette={() => setPaletteOpen(true)} />}
         </>
+      ) : hedwigShell ? (
+        <HedwigShell onOpenPalette={() => setPaletteOpen(true)} />
       ) : (
         <>
           <Sidebar />
@@ -880,6 +893,7 @@ export default function MailApp() {
       <Suspense fallback={null}>{hasNativeBridge && <ElectronNotificationBridge />}</Suspense>
       <NotificationToasts />
       <PluginRuntime />
+      <HedwigRuntime />
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
 
       {/* Keyboard shortcut help overlay — toggled by the '?' key */}

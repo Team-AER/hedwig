@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useStore } from '../store/index.js';
 import { useMobile } from '../hooks/useMobile.js';
 import { THEMES } from '../themes.js';
+import { useHedwigPaletteActions } from '../hedwig/shell/paletteActions.jsx';
 
 const THEME_NAMES = Object.keys(THEMES);
 
@@ -69,10 +70,13 @@ export default function CommandPalette({ open, onClose }) {
   const inputRef = useRef(null);
   const listRef = useRef(null);
 
-  const actions = buildActions({ t, openCompose, setSelectedAccount, setShowAdmin, setAdminTab, theme, setTheme, accounts, selectedAccountId });
+  const upstreamActions = buildActions({ t, openCompose, setSelectedAccount, setShowAdmin, setAdminTab, theme, setTheme, accounts, selectedAccountId });
+  // Hedwig: registry commands, "Open view…" and layouts sit after upstream's four core actions.
+  const hedwigActions = useHedwigPaletteActions(query);
+  const actions = [...upstreamActions.slice(0, 4), ...hedwigActions, ...upstreamActions.slice(4)];
 
   const filtered = query.trim()
-    ? actions.filter(a => a.label.toLowerCase().includes(query.toLowerCase()))
+    ? actions.filter(a => `${a.label} ${a.group || ''}`.toLowerCase().includes(query.toLowerCase()))
     : actions;
 
   useEffect(() => {
@@ -193,6 +197,12 @@ export default function CommandPalette({ open, onClose }) {
               <span style={{ fontSize: 13, color: action.active ? 'var(--accent)' : 'var(--text-primary)', flex: 1 }}>
                 {action.label}
               </span>
+              {action.group && (
+                <span style={{ fontSize: 11, color: 'var(--text-tertiary)', whiteSpace: 'nowrap' }}>{action.group}</span>
+              )}
+              {action.hint && (
+                <kbd style={{ fontSize: 11, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono, monospace)', whiteSpace: 'nowrap' }}>{action.hint}</kbd>
+              )}
               {action.active && (
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2.5">
                   <polyline points="20 6 9 17 4 12"/>

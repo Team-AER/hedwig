@@ -4,6 +4,17 @@
 //   display — headings, subject lines (can be serif/expressive)
 
 export const FONT_SETS = {
+  hedwig: {
+    label: 'Hedwig',
+    description: 'Fraunces × IBM Plex Sans — warm, legible, precise',
+    preview: { heading: 'Fraunces', body: 'IBM Plex Sans', mono: 'IBM Plex Mono' },
+    vars: {
+      '--font-sans': "'IBM Plex Sans', system-ui, sans-serif",
+      '--font-mono': "'IBM Plex Mono', ui-monospace, monospace",
+      '--font-display': "'Fraunces', Georgia, serif",
+    },
+  },
+
   default: {
     label: 'MailFlow Default',
     description: 'DM Sans × Fraunces — refined and contemporary',
@@ -451,7 +462,11 @@ export function isRetroFont(key) { return RETRO_FONTS.has(key); }
 // The font that should actually render for a given theme: the paired retro font when the
 // theme has one, otherwise the user's saved choice — but never a retro font under a normal
 // theme (that's the "font won't change back" bug), so fall back to the default in that case.
+const HEDWIG_THEMES = new Set(['hedwig', 'hedwig-night']);
 export function effectiveFontSet(theme, savedFont) {
   if (THEME_FONT[theme]) return THEME_FONT[theme];
+  // Hedwig themes pair with the Hedwig type unless the user picked another set: 'default' is
+  // what the store holds for "no choice made", so it resolves to the Hedwig set here.
+  if (HEDWIG_THEMES.has(theme) && (!savedFont || savedFont === 'default' || isRetroFont(savedFont))) return 'hedwig';
   return isRetroFont(savedFont) ? 'default' : (savedFont || 'default');
 }
