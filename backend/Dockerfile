@@ -23,6 +23,7 @@ RUN cp /repo/backend/package.json ./package.json && \
     cp -R /repo/backend/migrations ./migrations && \
     cp -R /repo/backend/migrations-hedwig ./migrations-hedwig && \
     cp -R /repo/backend/scripts ./scripts && \
+    cp /repo/plugins/directory.json ./plugins-directory.json && \
     mkdir -p /plugins && chown node:node /plugins && \
     APP_VERSION_VALUE="${APP_VERSION:-$(node -p "require('./package.json').version")}"; \
     APP_VERSION_VALUE="$(printf '%s' "$APP_VERSION_VALUE" | sed 's/^v[.]//' | sed 's/^v//')"; \

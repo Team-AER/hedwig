@@ -1,0 +1,77 @@
+{
+  "schema": 1,
+  "name": "Hedwig plugin directory",
+  "updated": "2026-09-23",
+  "plugins": [
+    {
+      "id": "aer.receipts",
+      "name": "Receipts",
+      "description": "Spots receipts, invoices and order confirmations in new mail and keeps a ledger with monthly totals and CSV export.",
+      "version": "1.0.0",
+      "api": "^1.0.0",
+      "tier": 1,
+      "source": "bundled",
+      "location": "backend/src/plugins/receipts",
+      "author": "Team AER",
+      "permissions": [
+        "mail.read",
+        "storage",
+        "views",
+        "llm.extract?",
+        "agent.tools?"
+      ]
+    },
+    {
+      "id": "aer.digest",
+      "name": "Newsletter digest",
+      "description": "Keeps newsletters out of your way in Digest and writes a daily paper with a one-line summary of each issue.",
+      "version": "1.0.0",
+      "api": "^1.0.0",
+      "tier": 1,
+      "source": "bundled",
+      "location": "backend/src/plugins/digest",
+      "author": "Team AER",
+      "permissions": [
+        "triage.hook",
+        "mail.read",
+        "storage",
+        "schedule",
+        "views",
+        "llm.summarize?"
+      ]
+    },
+    {
+      "id": "aer.pensieve",
+      "name": "Pensieve bridge",
+      "description": "Saves newsletters to your Pensieve reading list so you can read them with the rest of your feeds.",
+      "version": "1.0.0",
+      "api": "^1.0.0",
+      "tier": 1,
+      "source": "bundled",
+      "location": "backend/src/plugins/pensieve",
+      "author": "Team AER",
+      "permissions": [
+        "mail.read",
+        "storage",
+        "views",
+        "net:$settings.baseUrl",
+        "triage.hook?"
+      ]
+    },
+    {
+      "id": "aer.sendguard",
+      "name": "Send guard",
+      "description": "Catches a forgotten attachment, a reply from the wrong address, or confidential mail going outside before it is sent.",
+      "version": "1.0.0",
+      "api": "^1.0.0",
+      "tier": 1,
+      "source": "bundled",
+      "location": "backend/src/plugins/sendguard",
+      "author": "Team AER",
+      "permissions": [
+        "mail.read",
+        "views"
+      ]
+    }
+  ]
+}

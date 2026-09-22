@@ -149,7 +149,7 @@ docker compose -f docker-compose.devdb.yml up -d          # pgvector + redis on 
 cd backend && set -a && . ./.env.hedwig-dev && set +a
 node scripts/hedwig-migrate.mjs && node scripts/hedwig-seed.mjs   # demo / hedwig-demo-password
 npx vitest run src/hedwig                                  # unit tests
-HEDWIG_IT=1 npx vitest run src/hedwig                      # + integration tests against the dev DB
+npm run test:hedwig-it                                     # + integration tests (sequential: they share the dev DB)
 cd ../frontend && npm test && npm run lint && npm run build
 ```
 

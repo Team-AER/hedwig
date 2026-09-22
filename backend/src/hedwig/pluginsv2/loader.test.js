@@ -9,7 +9,7 @@ import { createFakeDb } from './fakeDb.testutil.js';
 const fake = createFakeDb();
 vi.mock('../../services/db.js', () => ({ query: (...a) => fake.query(...a), pool: {} }));
 
-const { PluginRuntime } = await import('./loader.js');
+const { PluginRuntime, parseGitLocation } = await import('./loader.js');
 const { createPluginRegistry } = await import('../../plugins/registry.js');
 const { invalidateAccess } = await import('./access.js');
 const { userRoutes } = await import('./routes.js');
@@ -137,6 +137,26 @@ describe('loading external plugins', () => {
     expect(fake.state.plugins.has('hello-hedwig')).toBe(false);
     expect(Object.keys(registry.get('hello-hedwig').hooks)).toEqual([]);
     expect(unregisterPluginTools).toHaveBeenCalledWith('hello-hedwig');
+  });
+});
+
+describe('admin installs', () => {
+  it('accepts only https git URLs without credentials, queries or option-like refs', () => {
+    expect(parseGitLocation('https://github.com/acme/hedwig-weather.git#v1.2.0')).toEqual({ url: 'https://github.com/acme/hedwig-weather.git', branch: 'v1.2.0' });
+    for (const bad of ['http://github.com/a/b.git', 'git@github.com:a/b.git', 'ssh://github.com/a/b', 'file:///etc', 'https://user:pw@github.com/a/b.git', 'https://github.com/a/b.git?x=1']) {
+      expect(() => parseGitLocation(bad), bad).toThrow();
+    }
+    expect(() => parseGitLocation('https://github.com/a/b.git#--upload-pack=evil')).toThrow(/invalid git ref/);
+    expect(() => parseGitLocation('https://github.com/a/b.git', '../../x')).toThrow(/invalid git ref/);
+  });
+
+  it('installs a directory only from directly inside plugins.dir', async () => {
+    await expect(runtime.install({ source: 'dir', location: '/etc' })).rejects.toThrow(/direct subdirectory/);
+    await expect(runtime.install({ source: 'dir', location: '../' })).rejects.toThrow(/direct subdirectory/);
+    await expect(runtime.install({ source: 'ftp', location: 'x' })).rejects.toThrow(/source must be/);
+    const entry = await runtime.install({ source: 'dir', location: 'hello-hedwig', installedBy: ALICE });
+    expect(entry.status).toBe('loaded');
+    expect(fake.state.plugins.get('hello-hedwig')).toMatchObject({ source: 'dir', installed_by: ALICE });
   });
 });
 

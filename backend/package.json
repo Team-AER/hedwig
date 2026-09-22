@@ -12,7 +12,9 @@
     "test:watch": "vitest",
     "lint": "eslint src --max-warnings 0",
     "lint:plugins": "eslint -c eslint.plugins-boundary.js src/plugins",
-    "audit:redos": "npm i --no-save --silent eslint-plugin-redos && eslint -c eslint.redos.config.mjs src"
+    "plugin": "node scripts/hedwig-plugin.mjs",
+    "audit:redos": "npm i --no-save --silent eslint-plugin-redos && eslint -c eslint.redos.config.mjs src",
+    "test:hedwig-it": "HEDWIG_IT=1 vitest run src/hedwig --no-file-parallelism"
   },
   "dependencies": {
     "archiver": "^7.0.1",

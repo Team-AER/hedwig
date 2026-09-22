@@ -14,7 +14,7 @@ import {
 import { tr } from '../i18n.js';
 
 // Core capabilities a plugin can ask for; the dialog lists the ones a plugin did NOT request.
-const CORE_PERMISSIONS = ['mail.read', 'mail.write', 'compose.draft', 'compose.send', 'context.read', 'triage.hook', 'llm.extract', 'llm.summarize', 'views', 'storage', 'schedule'];
+const CORE_PERMISSIONS = ['mail.read', 'mail.write', 'compose.draft', 'context.read', 'context.write', 'triage.hook', 'llm.summarize', 'llm.extract', 'llm.chat', 'agent.tools', 'views', 'storage', 'schedule'];
 const TILE_COLORS = [T.teal, T.amber, T.ink, T.muted, T.red];
 
 // Enable/disable go through the runtime loader, which keeps store.enabledPlugins (keyed by

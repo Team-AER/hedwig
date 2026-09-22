@@ -13,6 +13,7 @@ import { generateVCard } from '../utils/vcard.js';
 import { createAccountSmtpTransport } from '../services/smtpTransport.js';
 import { imapManager } from '../index.js';
 import { pluginRegistry } from '../plugins/registry.js';
+import { collectHedwigHook, HEDWIG_HOOKS } from '../hedwig/hooks.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -213,6 +214,28 @@ router.post('/send', async (req, res) => {
   const effectiveSignature = editedSignature !== undefined
     ? (editedSignature ? sanitizeSignature(editedSignature) : null)
     : fromSignature;  // fromSignature from DB is already sanitized on write
+
+  // Hedwig plugins (e.g. Send guard) check the outgoing message before any IMAP or SMTP work: a
+  // `block` stops the send with 409; `warn`s are returned with the result and never block.
+  let sendWarnings = [];
+  try {
+    const verdicts = await collectHedwigHook(HEDWIG_HOOKS.beforeSend, {
+      userId: req.session.userId, accountId, aliasId: aliasId || null,
+      from: { email: fromEmail, name: fromName },
+      to: normalizedTo, cc: normalizedCc, bcc: normalizedBcc, subject: normalizedSubject,
+      body: bodyToPlain(body || '', bodyIsHtml), bodyIsHtml,
+      hasAttachments: Boolean(attachments?.length || forwardedAttachments?.length),
+      attachments: [...(attachments || []), ...(forwardedAttachments || [])].map(a => ({ filename: a.filename || null, contentType: a.contentType || null })),
+      inReplyTo: inReplyTo || null, references: references || null,
+    });
+    sendWarnings = verdicts.filter(v => v?.warn).map(v => ({ pluginId: v.pluginId, message: v.warn }));
+    const blocked = verdicts.find(v => v?.block);
+    if (blocked) {
+      return res.status(409).json({ error: blocked.reason || blocked.warn || 'Blocked by a plugin', blockedBy: blocked.pluginId, warnings: sendWarnings });
+    }
+  } catch (err) {
+    console.warn('beforeSend plugin hooks failed:', err.message);
+  }
 
   // Fetch forwarded attachment content from IMAP before entering the SMTP try-block so that
   // attachment errors return descriptive messages rather than being sanitized as SMTP errors.
@@ -535,6 +558,7 @@ router.post('/send', async (req, res) => {
     // Tell the client which Sent folder we actually resolved to, so its post-send "View"
     // navigates to the real folder rather than recomputing from a possibly-stale mapping (#386).
     if (sentFolder) sendResult.sentFolder = sentFolder;
+    if (sendWarnings.length) sendResult.warnings = sendWarnings;
     // Overwrite the in-flight reservation with the final result so a retry after a lost
     // response returns this instead of re-sending.
     if (idemKeyRedis) redisClient.set(idemKeyRedis, JSON.stringify(sendResult), { EX: 86400 }).catch(() => {});
@@ -544,7 +568,7 @@ router.post('/send', async (req, res) => {
       // SMTP already accepted this message. A Sent-folder or metadata failure
       // must not invite the user to send it again.
       console.error('Post-send processing failed:', err.message);
-      const sendResult = { ok: true, sentCopySaved: false };
+      const sendResult = { ok: true, sentCopySaved: false, ...(sendWarnings.length ? { warnings: sendWarnings } : {}) };
       if (idemKeyRedis) redisClient.set(idemKeyRedis, JSON.stringify(sendResult), { EX: 86400 }).catch(() => {});
       return res.json(sendResult);
     }

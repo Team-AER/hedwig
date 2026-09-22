@@ -12,7 +12,18 @@ import { describePermission, isHost } from './manifest.js';
 import { settingsForClient, settingsSet } from './store.js';
 import { dispatch } from './router.js';
 
-const LOCAL_DIRECTORY = join(dirname(fileURLToPath(import.meta.url)), '../../../../plugins/directory.json');
+// Repo checkout: <root>/plugins/directory.json. Docker image: /app/plugins-directory.json (the
+// /plugins path inside the image is the external plugin volume, so the index is copied elsewhere).
+const HERE = dirname(fileURLToPath(import.meta.url));
+const LOCAL_DIRECTORY_CANDIDATES = [join(HERE, '../../../plugins-directory.json'), join(HERE, '../../../../plugins/directory.json')];
+
+async function readFirst(paths) {
+  let lastErr;
+  for (const p of paths) {
+    try { return await readFile(p, 'utf8'); } catch (err) { lastErr = err; }
+  }
+  throw lastErr;
+}
 
 function sendError(res, err) {
   const status = err?.status && err.status >= 400 && err.status < 600 ? err.status : 500;
@@ -206,7 +217,7 @@ export async function readDirectory({ fetchFn = safeFetch } = {}) {
     } catch { /* fall back to the copy shipped with this build */ }
   }
   try {
-    const body = JSON.parse(await readFile(LOCAL_DIRECTORY, 'utf8'));
+    const body = JSON.parse(await readFirst(LOCAL_DIRECTORY_CANDIDATES));
     return { source: 'bundled', plugins: cleanDirectory(body?.plugins ?? body) };
   } catch {
     return { source: null, plugins: [] };

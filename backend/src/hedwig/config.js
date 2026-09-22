@@ -101,6 +101,7 @@ export const SCHEMA = [
   // ── Plugins ────────────────────────────────────────────────────────────────
   { key: 'plugins.dir', type: 'string', default: '/plugins', group: 'plugins', label: 'External plugin directory' },
   { key: 'plugins.allowGit', type: 'boolean', default: true, group: 'plugins', label: 'Allow installing plugins from git URLs' },
+  { key: 'plugins.netAllowPrivate', type: 'boolean', default: false, group: 'plugins', label: 'Let plugins reach private/LAN hosts they declare' },
   { key: 'plugins.directoryUrl', type: 'string', default: 'https://raw.githubusercontent.com/Team-AER/hedwig/main/plugins/directory.json', group: 'plugins', label: 'Plugin directory index URL' },
 
   // ── UI ─────────────────────────────────────────────────────────────────────

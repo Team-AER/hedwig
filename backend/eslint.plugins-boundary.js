@@ -36,4 +36,35 @@ export default [
       }],
     },
   },
+  // Hedwig plugin runtime v2 first-party plugins (tier 1). Stricter than the block above: they get
+  // everything through the `hedwig` facade passed to activate(), so they may import only their own
+  // siblings — not even ../api.js, packages or node built-ins — and may not touch the process, the
+  // global network APIs or eval. The same rules the runtime applies to tier-2 plugins at install
+  // (src/hedwig/pluginsv2/boundary.js), enforced here in CI.
+  {
+    files: ['src/plugins/{receipts,digest,pensieve,sendguard}/**/*.js'],
+    ignores: ['**/*.test.js'],
+    rules: {
+      'no-restricted-imports': ['error', {
+        patterns: [
+          {
+            regex: '^(?!\\./)',
+            message: 'Plugin runtime v2: a first-party plugin imports only its own files ("./…"); everything else comes through the hedwig facade.',
+          },
+        ],
+      }],
+      'no-restricted-globals': ['error',
+        { name: 'process', message: 'Plugin runtime v2: no process access; use hedwig.settings / hedwig.user.' },
+        { name: 'fetch', message: 'Plugin runtime v2: use hedwig.net.fetch (granted hosts only).' },
+        { name: 'require', message: 'Plugin runtime v2: import siblings instead.' },
+        { name: 'globalThis', message: 'Plugin runtime v2: no global object access.' },
+        { name: 'global', message: 'Plugin runtime v2: no global object access.' },
+        { name: 'XMLHttpRequest', message: 'Plugin runtime v2: use hedwig.net.fetch.' },
+        { name: 'WebSocket', message: 'Plugin runtime v2: use hedwig.net.fetch.' },
+      ],
+      'no-eval': 'error',
+      'no-implied-eval': 'error',
+      'no-new-func': 'error',
+    },
+  },
 ];

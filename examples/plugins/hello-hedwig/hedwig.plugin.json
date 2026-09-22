@@ -1,0 +1,27 @@
+{
+  "id": "hello-hedwig",
+  "name": "Hello Hedwig",
+  "version": "0.1.0",
+  "api": "^1.0.0",
+  "tier": 2,
+  "description": "An example external plugin: counts the mail Hedwig indexes for you, greets you from its own route, view and agent tool.",
+  "author": "Team AER",
+  "license": "MIT",
+  "backend": "./backend/index.js",
+  "frontend": "./frontend.js",
+  "permissions": [
+    { "name": "mail.read", "reason": "Count the messages Hedwig indexes for you" },
+    { "name": "storage", "reason": "Remember the count" },
+    { "name": "views", "reason": "Show a small panel" },
+    { "name": "agent.tools", "optional": true, "reason": "Let the agent say hello" }
+  ],
+  "hooks": ["onMessageIndexed"],
+  "settings": {
+    "type": "object",
+    "properties": {
+      "greeting": { "type": "string", "default": "Hello", "maxLength": 40, "title": "Greeting" }
+    }
+  },
+  "views": ["hello-hedwig.panel"],
+  "commands": ["hello-hedwig.open"]
+}
