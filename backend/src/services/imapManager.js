@@ -1,5 +1,6 @@
 import { FolderStatusMonitor, checkpointFolderStatus } from './folderStatus.js';
 import { extractImapError } from './imapError.js';
+import { recordUnfetchable, suppressedUids, clearUnfetchable, hasRealGap } from './unfetchableUids.js';
 import { ImapFlow } from 'imapflow';
 import { query } from './db.js';
 import { parseMessage, snippetFromBody, detectBulkFromParsedHeaders, parseHeadersInput, headersToRawString, decodeMimeWords, enrichParsedMetadata, renderCalendarInvite } from './messageParser.js';
@@ -3037,7 +3038,12 @@ export class ImapManager {
           const changed = await this._applyFlagUpdates(account, path, flags);
           const { rows } = await query('SELECT uid, synced_at FROM messages WHERE account_id=$1 AND folder=$2', [account.id, path]);
           const local = new Set(rows.map(r => Number(r.uid)));
-          missing = [...server].some(uid => !local.has(uid));
+          // UIDs the server lists but has repeatedly refused to hand over do not count as a
+          // gap. Without this the pair (integrity check, backfill) loops forever on them:
+          // the check finds them missing, the backfill asks and gets nothing, and the next
+          // check finds them missing again. Observed on iCloud, 35 cycles in five hours.
+          const suppressed = await suppressedUids(account.id, path, observed.uidValidity);
+          missing = hasRealGap(server, local, suppressed);
           const gone = rows.filter(r => !server.has(Number(r.uid)) && (!r.synced_at || new Date(r.synced_at) < cutoff)
             && !this._isMoveUidGuarded(account.id, path, Number(r.uid))).map(r => Number(r.uid));
           if (expired) throw new Error('Folder integrity sync expired');
@@ -3932,6 +3938,9 @@ export class ImapManager {
 
         const batch = missingUids.slice(i, i + cfg.batchSize);
 
+        // Declared outside the lock block: the bookkeeping below runs after the lock is
+        // released and needs to know what the server returned.
+        const receivedUids = new Set();
         try {
           const lock = await bfClient.getMailboxLock(folder);
           try {
@@ -3945,7 +3954,11 @@ export class ImapManager {
             };
             if (bodyParts.length > 0) bfQuery.bodyParts = bodyParts;
 
+            // Track what the server actually returned. fetchBackfillBatch has already
+            // retried anything omitted from the first FETCH with minimal metadata, so a UID
+            // still absent here is one the server will not produce.
             for await (const msg of fetchBackfillBatch(bfClient, batch, bfQuery)) {
+              receivedUids.add(Number(msg.uid));
               try {
                 const parsed = await parseMessage(msg);
                 enrichParsedMetadata(parsed, {
@@ -4091,6 +4104,18 @@ export class ImapManager {
             }
           } finally {
             lock.release();
+          }
+
+          // Whatever the server refused climbs toward the write-off threshold; whatever it
+          // produced has its record cleared, so a transient miss never accumulates.
+          const refused = batch.filter(uid => !receivedUids.has(Number(uid))).map(Number);
+          const returned = batch.filter(uid => receivedUids.has(Number(uid))).map(Number);
+          try {
+            if (refused.length) await recordUnfetchable(account.id, folder, refused, bfClient.mailbox?.uidValidity);
+            if (returned.length) await clearUnfetchable(account.id, folder, returned);
+          } catch (uErr) {
+            // Bookkeeping must never fail a backfill that is otherwise working.
+            console.warn(`Unfetchable bookkeeping failed for ${logAccount(account)}:`, uErr.message);
           }
 
           i += batch.length;
