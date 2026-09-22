@@ -1,0 +1,22 @@
+# Local development databases for Hedwig. Not used in production.
+#   docker compose -f docker-compose.devdb.yml up -d
+#   DB_HOST=127.0.0.1 DB_PORT=55432 DB_PASSWORD=hedwig-dev REDIS_URL=redis://127.0.0.1:56379 …
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: hedwig-devdb
+    environment:
+      POSTGRES_DB: mailflow
+      POSTGRES_USER: mailflow
+      POSTGRES_PASSWORD: hedwig-dev
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - hedwig_devdb:/var/lib/postgresql/data
+  redis:
+    image: redis:7-alpine
+    container_name: hedwig-devredis
+    ports:
+      - "127.0.0.1:56379:6379"
+volumes:
+  hedwig_devdb:

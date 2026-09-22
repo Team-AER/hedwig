@@ -32,3 +32,6 @@ Thumbs.db
 
 .superpowers/
 output/
+
+# Hedwig local dev
+backend/.env.hedwig-dev

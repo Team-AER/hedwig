@@ -46,6 +46,7 @@ import { setupWebSocket } from './services/websocket.js';
 import { ImapManager } from './services/imapManager.js';
 import { getUpdateStatus } from './services/updateCheck.js';
 import { recordHttp } from './services/performanceMetrics.js';
+import { mountHedwig, startHedwig } from './hedwig/index.js';
 
 const packageMeta = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf-8'));
 let buildMeta = {};
@@ -205,6 +206,8 @@ for (const plugin of pluginRegistry.list()) {
   if (plugin.router) app.use(plugin.router.base, plugin.router.handler);
 }
 app.use('/api/sender-favicons', senderFaviconsRoutes);
+// Hedwig: context engine, triage, insights, agent, plugin runtime v2 (see src/hedwig/).
+mountHedwig(app);
 app.use('/api/diagnostics', diagnosticsRoutes);
 
 // CardDAV server — body is read lazily inside each handler via rawBody()
@@ -236,6 +239,8 @@ setupWebSocket(wss, sessionMiddleware, imapManager);
 
 // Run pending schema migrations then start
 await runMigrations();
+// Hedwig schema + start-up. Never fatal: mail keeps working if Hedwig cannot start.
+await startHedwig({ imapManager });
 
 // One-time backfill: populate photo_data from existing vcard column for contacts
 // that were synced before CardDAV PUT started persisting photo_data.
@@ -299,7 +304,7 @@ try {
 
 const PORT = process.env.PORT || 3000;
 httpServer.listen(PORT, () => {
-  console.log(`MailFlow backend running on port ${PORT}`);
+  console.log(`Hedwig (MailFlow) backend running on port ${PORT}`);
 });
 
 process.on('SIGTERM', () => {
