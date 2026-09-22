@@ -35,8 +35,19 @@ export async function startHedwig({ imapManager }) {
   hedwigStatus.startedAt = new Date().toISOString();
   try {
     await runHedwigMigrations();
-    for (const m of MODULES) if (m.tools) await m.tools();
-    for (const m of MODULES) if (m.api) await m.api({ imapManager });
+    hedwigStatus.moduleErrors = {};
+    // Each module starts independently: one failing module is reported, the rest keep working.
+    for (const phase of ['tools', 'api']) {
+      for (const m of MODULES) {
+        if (!m[phase]) continue;
+        try {
+          await (phase === 'api' ? m.api({ imapManager }) : m.tools());
+        } catch (err) {
+          hedwigStatus.moduleErrors[m.name] = `${phase}: ${err.message}`;
+          console.error(`Hedwig: module ${m.name} failed during ${phase}:`, err);
+        }
+      }
+    }
     hedwigStatus.ready = true;
     if (!apiLoopStarted && definedJobs().length) {
       apiLoopStarted = true;

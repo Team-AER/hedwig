@@ -68,8 +68,16 @@ async function scheduleLoop() {
 async function main() {
   pool.on('error', (err) => console.error('[hedwig-worker] idle pg error:', err.message));
   await waitForSchema();
-  for (const m of MODULES) if (m.tools) await m.tools();
-  for (const m of MODULES) if (m.worker) await m.worker({});
+  for (const phase of ['tools', 'worker']) {
+    for (const m of MODULES) {
+      if (!m[phase]) continue;
+      try {
+        await (phase === 'worker' ? m.worker({}) : m.tools());
+      } catch (err) {
+        console.error(`[hedwig-worker] module ${m.name} failed during ${phase}:`, err);
+      }
+    }
+  }
   console.log(`[hedwig-worker] ready — steps: ${definedSteps().map((s) => s.name).join(', ')}; jobs: ${definedJobs().join(', ')}`);
   await Promise.all([jobLoop(), scanLoop(), scheduleLoop()]);
 }

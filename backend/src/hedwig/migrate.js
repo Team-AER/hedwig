@@ -10,7 +10,7 @@ const DIR = join(dirname(fileURLToPath(import.meta.url)), '../../migrations-hedw
 export const HEDWIG_SCHEMA_VERSION_PREFIX = 'hedwig/';
 
 export async function hedwigMigrationFiles() {
-  let names = [];
+  let names;
   try { names = await readdir(DIR); } catch { return []; }
   return Promise.all(names.filter((f) => /^h\d{4}_.+\.sql$/.test(f)).sort().map(async (f) => ({
     version: HEDWIG_SCHEMA_VERSION_PREFIX + f.replace(/\.sql$/, ''),
@@ -37,7 +37,7 @@ export async function runHedwigMigrations() {
         await client.query('COMMIT');
       } catch (err) {
         await client.query('ROLLBACK').catch(() => {});
-        throw new Error(`${version}: ${err.message}`);
+        throw new Error(`${version}: ${err.message}`, { cause: err });
       }
       ran++;
     }

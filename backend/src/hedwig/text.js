@@ -31,7 +31,7 @@ export function messageText(row, { maxChars = 6000, stripQuotes = true } = {}) {
   if (!text && row.body_html) text = convert(row.body_html);
   if (!text) text = row.snippet || '';
   if (stripQuotes) text = stripQuoted(text) || text;
-  text = text.replace(/[ \t]+/g, ' ').replace(/ /g, ' ').trim();
+  text = text.replace(/[ \t]+/g, ' ').replace(/\u00a0/g, ' ').trim();
   return text.length > maxChars ? `${text.slice(0, maxChars)}…` : text;
 }
 
