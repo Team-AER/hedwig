@@ -55,10 +55,10 @@ export const SCHEMA = [
 
   // ── Embeddings ─────────────────────────────────────────────────────────────
   { key: 'embeddings.provider', type: 'enum', default: 'openai', options: ['openai', 'hash', 'off'], group: 'embeddings', label: 'Embedding provider', help: 'openai = any /v1/embeddings server (TEI, gateway). hash = built-in lexical vectors, no model.' },
-  { key: 'embeddings.baseUrl', type: 'string', default: 'http://embed:80/v1', group: 'embeddings', label: 'Embeddings base URL' },
+  { key: 'embeddings.baseUrl', type: 'string', default: 'http://llm-proxy.cls/v1', group: 'embeddings', label: 'Embeddings base URL' },
   { key: 'embeddings.apiKey', type: 'secret', default: '', group: 'embeddings', label: 'Embeddings API key (optional)' },
-  { key: 'embeddings.model', type: 'string', default: 'BAAI/bge-small-en-v1.5', group: 'embeddings', label: 'Embedding model' },
-  { key: 'embeddings.dims', type: 'number', default: 384, min: 16, max: 4096, group: 'embeddings', label: 'Embedding dimensions' },
+  { key: 'embeddings.model', type: 'string', default: 'bge-m3', group: 'embeddings', label: 'Embedding model' },
+  { key: 'embeddings.dims', type: 'number', default: 1024, min: 16, max: 4096, group: 'embeddings', label: 'Embedding dimensions' },
   { key: 'embeddings.batchSize', type: 'number', default: 16, min: 1, max: 256, group: 'embeddings', label: 'Batch size' },
   { key: 'embeddings.maxChars', type: 'number', default: 2000, min: 200, max: 20000, group: 'embeddings', label: 'Characters embedded per message' },
 

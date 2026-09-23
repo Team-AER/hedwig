@@ -27,7 +27,7 @@ UI design canvas: https://claude.ai/artifact/8MoUVyhgwXosgUDeAizWfX
 | --- | --- | --- |
 | API (`backend`) | `node src/index.js` | upstream MailFlow + Hedwig routes, API-side jobs (`mail.fetchBody`, approved agent actions) |
 | Worker (`hedwig-worker`) | `node src/hedwig/worker.js` | pipeline scanner, job loop, schedules. No IMAP. |
-| Embeddings (`embed`) | Hugging Face TEI container | `POST /v1/embeddings`, default `BAAI/bge-small-en-v1.5` (384 dims) |
+| Embeddings | llm-proxy → Uranus Ollama | `POST /v1/embeddings`, `bge-m3` (1024 dims) |
 | Models | `llm-proxy.cls` (LiteLLM) | `Qwen/Qwen3.8-Flash-Next` for the fast, long and agent roles |
 
 The API applies migrations at boot (`backend/migrations` then `backend/migrations-hedwig`). The
