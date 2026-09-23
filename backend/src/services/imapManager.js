@@ -871,6 +871,7 @@ const PROVIDERS = {
   yahoo: {
     batchSize: 100, batchDelay: 2000, errorDelay: 30000, batchesPerConn: 10,
     fetchBody: false,
+    idleKeepaliveMs: 4 * 60 * 1000, // Yahoo silently drops an IDLE held ~5 min; re-issue before it goes deaf
     pushesFlags: true,
     snippetIndex: true,
     speculativeFetch: false,

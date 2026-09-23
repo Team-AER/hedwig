@@ -52,6 +52,8 @@ describe('providerProfile — host detection', () => {
     expect(providerProfile(account(host)).speculativeFetch).toBe(false);
     expect(providerProfile(account(host)).pushesFlags).toBe(true);
     expect(providerProfile(account(host)).snippetIndex).toBe(true);
+    expect(providerProfile(account(host)).usesIdle).not.toBe(false);
+    expect(providerProfile(account(host)).idleKeepaliveMs).toBeLessThan(5 * 60 * 1000);
   });
 
   it.each([
