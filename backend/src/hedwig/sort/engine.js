@@ -9,15 +9,16 @@ import { query } from '../../services/db.js';
 import { getConfig } from '../config.js';
 import { enqueue } from '../jobs.js';
 import { llmAvailable } from '../llm.js';
-import { messageText, addressesOf } from '../text.js';
+import { messageText, addressesOf, domainOf } from '../text.js';
 import { MESSAGE_COLUMNS, decorate } from '../pipeline.js';
 import { HEDWIG_HOOKS, collectHedwigHook, runHedwigHook } from '../hooks.js';
 import { stage1 } from '../triage/signals.js';
 import { loadSenderStats, outgoingSql } from '../triage/store.js';
 import { fnv1a } from '../triage/features.js';
 import { validTimezone, describeNow } from '../insights/time.js';
-import { headerLayer, screenerKey } from './headers.js';
-import { assessSpam, rescueScore } from './spam.js';
+import { getState, setState } from '../state.js';
+import { headerLayer, screenerKey, inSpamFolder } from './headers.js';
+import { assessSpam, rescueScore, SPAM_SIGNALS_VERSION, DEFAULT_TRUSTED_LINK_HOSTS } from './spam.js';
 import { applyRules, loadRules, bumpHits, matchDescriptions } from './rules.js';
 import { sortFeatures, priorStream, headsActive, predictHeads, loadHeads } from './classifier.js';
 import { loadBundles, guessBundle, isScheduled, lastSlot } from './bundles.js';
@@ -57,14 +58,24 @@ async function threadFactsFor(userId, rows, addresses) {
 }
 
 const knownCache = new Map(); // userId -> { at, domains }
+/**
+ * Domains the user corresponds with: senders they replied to or hear from regularly, and everyone
+ * they wrote to or put in a stream themselves (hedwig_senders). Lookalike targets and the domains
+ * a message may link to or take replies at without looking foreign.
+ */
 async function knownDomains(userId) {
   const c = knownCache.get(userId);
   if (c && Date.now() - c.at < 10 * 60_000) return c.domains;
   const { rows } = await query(
-    `SELECT DISTINCT domain FROM hedwig_sender_stats WHERE user_id = $1 AND domain IS NOT NULL AND (replied > 0 OR received >= 3) LIMIT 500`,
+    `SELECT domain FROM hedwig_sender_stats WHERE user_id = $1 AND domain IS NOT NULL AND (replied > 0 OR received >= 3)
+     UNION
+     SELECT CASE WHEN scope = 'address' THEN split_part(key, '@', 2) ELSE key END FROM hedwig_senders
+      WHERE user_id = $1 AND undone_at IS NULL AND decision <> 'block' AND scope IN ('address','domain')
+        AND (source IN ('user','import') OR reason = 'You wrote to them')
+     LIMIT 3000`,
     [userId],
   );
-  const domains = rows.map((r) => r.domain);
+  const domains = rows.map((r) => r.domain).filter(Boolean);
   knownCache.set(userId, { at: Date.now(), domains });
   return domains;
 }
@@ -93,7 +104,7 @@ export async function loadUserContext(userId, rows, cfg) {
     ).then((r) => new Map(r.rows.map((t) => [t.message_id, t]))),
     threadFactsFor(userId, incoming, addresses),
     userProfile(userId, addresses),
-    knownDomains(userId),
+    knownDomains(userId).then((d) => [...new Set([...d, ...[...addresses].map(domainOf).filter(Boolean)])]),
     query('SELECT message_id, layer, stream, spam, pending FROM hedwig_sort WHERE user_id = $1 AND message_id = ANY($2::uuid[])', [userId, ids])
       .then((r) => new Map(r.rows.map((s) => [s.message_id, s]))),
   ]);
@@ -163,7 +174,10 @@ export function decideCheap(row, ctx) {
   const senderDecision = pickDecision(keys, ctx.decisions || new Map());
   const trustedSender = Boolean((senderDecision && senderDecision.decision !== 'block' && ['user', 'import'].includes(senderDecision.source))
     || Number(sender?.replied) > 0);
-  const spam = assessSpam(row, { text, sender, auth: header.auth, knownDomains: ctx.knownDomains || [], spamFolder: header.spamFolder, trustedSender });
+  const spam = assessSpam(row, {
+    text, sender, auth: header.auth, knownDomains: ctx.knownDomains || [], spamFolder: header.spamFolder, trustedSender,
+    trustedLinkHosts: Array.isArray(cfg['spam.trustedLinkHosts']) ? cfg['spam.trustedLinkHosts'] : DEFAULT_TRUSTED_LINK_HOSTS,
+  });
 
   const t = ctx.triage?.get(row.id) || null;
   const tNeeds = triageNeedsYou(t);
@@ -544,10 +558,23 @@ export async function sortRows(rows, { historical = false, allowReflex = true, o
       await recordWrittenTo(userId, outgoing, addresses);
       await clearNeedsYouAfterReply(userId, outgoing);
     }
-    const ctx = await loadUserContext(userId, list, cfg);
+    // Mail in the server spam folder is judged by rescue on every path (new mail, bodies landing,
+    // re-sorts), so a rescue is never overwritten by a verdict that ignores the rescue evidence.
+    const spamRows = list.filter((r) => !r.is_outgoing && inSpamFolder(r));
+    const mail = spamRows.length ? list.filter((r) => !spamRows.includes(r)) : list;
+    if (spamRows.length) {
+      try {
+        const res = await rescueRows(userId, spamRows, cfg, { allowReflex: allowReflex && !historical, onlyLayers });
+        sorted += res.checked;
+      } catch (err) {
+        console.warn(`[hedwig] sort: spam rescue failed for ${spamRows.length} message(s) of ${userId}:`, err.message);
+      }
+    }
+    if (!mail.length) continue;
+    const ctx = await loadUserContext(userId, mail, cfg);
     const llmOn = allowReflex && !historical && await llmAvailable(userId).catch(() => false);
     const toReflex = [];
-    for (const row of list) {
+    for (const row of mail) {
       const prev = ctx.existing.get(row.id);
       if (prev?.layer === 'user') continue;
       if (onlyLayers && prev && !onlyLayers.includes(prev.layer)) continue;
@@ -615,8 +642,12 @@ export async function runReflexJob({ messageIds }, job = {}) {
   if (!userId || !Array.isArray(messageIds) || !messageIds.length) return { skipped: 'bad payload' };
   const cfg = await getConfig(userId);
   if (!cfg.enabled || !cfg['sort.enabled']) return { skipped: 'sorting off' };
-  const rows = (await loadRows(userId, messageIds)).filter((r) => !r.is_outgoing);
-  if (!rows.length) return { skipped: 'no messages' };
+  const all = (await loadRows(userId, messageIds)).filter((r) => !r.is_outgoing);
+  if (!all.length) return { skipped: 'no messages' };
+  const spamRows = all.filter((r) => inSpamFolder(r));
+  if (spamRows.length) await rescueRows(userId, spamRows, cfg);
+  const rows = all.filter((r) => !spamRows.includes(r));
+  if (!rows.length) return { sorted: 0, rescueChecked: spamRows.length };
   const ctx = await loadUserContext(userId, rows, cfg);
   const todo = [];
   for (const row of rows) {
@@ -761,6 +792,49 @@ async function orderDomains(userId) {
   return rows.map((r) => r.domain).filter(Boolean);
 }
 
+/**
+ * What the user's own mail says about the senders of spam-folder messages: how often they wrote to
+ * each address (To/Cc of their sent mail) and how often they marked that sender's mail not spam
+ * (a spam override, a correction, or a behaviour/judge rescue label).
+ * @returns {Promise<Map<string, { wroteTo: number, notSpam: number }>>}
+ */
+export async function rescueEvidence(userId, emails, addresses) {
+  const list = [...new Set(emails.filter(Boolean).map((e) => String(e).toLowerCase()))];
+  const out = new Map(list.map((e) => [e, { wroteTo: 0, notSpam: 0 }]));
+  if (!list.length) return out;
+  const [sent, notSpam] = await Promise.all([
+    query(
+      `SELECT lower(COALESCE(r->>'address', r->>'email', r #>> '{}')) AS email, COUNT(DISTINCT m.id)::int AS n
+         FROM messages m
+         JOIN email_accounts a ON a.id = m.account_id
+         LEFT JOIN folders f ON f.account_id = m.account_id AND f.path = m.folder
+         CROSS JOIN LATERAL jsonb_array_elements(
+           CASE WHEN jsonb_typeof(m.to_addresses) = 'array' THEN m.to_addresses ELSE '[]'::jsonb END
+           || CASE WHEN jsonb_typeof(m.cc_addresses) = 'array' THEN m.cc_addresses ELSE '[]'::jsonb END) AS r
+        WHERE a.user_id = $1 AND NOT m.is_deleted AND ${outgoingSql('m', 'f', '$2')}
+          AND lower(COALESCE(r->>'address', r->>'email', r #>> '{}')) = ANY($3::text[])
+        GROUP BY 1`,
+      [userId, [...addresses], list],
+    ).catch((err) => { console.warn(`[hedwig] sort: rescue sent-mail lookup failed for ${userId}:`, err.message); return { rows: [] }; }),
+    query(
+      `SELECT lower(m.from_email) AS email, COUNT(*)::int AS n
+         FROM messages m
+         JOIN email_accounts a ON a.id = m.account_id
+         LEFT JOIN hedwig_sort s ON s.message_id = m.id AND s.user_id = a.user_id
+        WHERE a.user_id = $1 AND lower(m.from_email) = ANY($2::text[])
+          AND (m.spam_user_override = 'ham'
+               OR (s.layer = 'user' AND s.spam IN ('clean','rescued') AND s.in_spam_folder)
+               OR EXISTS (SELECT 1 FROM hedwig_labels l WHERE l.user_id = a.user_id AND l.target_id = m.id::text
+                           AND ((l.suite = 'rescue' AND l.label->>'rescue' = 'true') OR (l.suite = 'spam' AND l.label->>'spam' = 'false'))))
+        GROUP BY 1`,
+      [userId, list],
+    ).catch((err) => { console.warn(`[hedwig] sort: rescue not-spam lookup failed for ${userId}:`, err.message); return { rows: [] }; }),
+  ]);
+  for (const r of sent?.rows || []) if (out.has(r.email)) out.get(r.email).wroteTo = Number(r.n) || 0;
+  for (const r of notSpam?.rows || []) if (out.has(r.email)) out.get(r.email).notSpam = Number(r.n) || 0;
+  return out;
+}
+
 async function spamReflex(userId, prepared, cfg, user) {
   const out = new Map();
   const size = Math.max(1, Math.min(8, cfg['sort.batchSize'] || 5));
@@ -772,7 +846,7 @@ async function spamReflex(userId, prepared, cfg, user) {
       replyTo: addressesOf(row.reply_to).map((a) => a.email).join(', ') || null,
       subject: row.subject,
       history: `${Number(d.sender?.received || 0)} received, you replied to ${Number(d.sender?.replied || 0)}`,
-      signals: [...d.signals.map((s) => s.label), ...d.rescue.reasons].slice(0, 10),
+      signals: [...d.signals.filter((s) => s.name !== 'rescue').map((s) => s.label), ...d.rescue.reasons].slice(0, 10),
       text: String(d.text || '').slice(0, cfg['sort.newTextChars']),
     }));
     const run = async (subset, escalate) => {
@@ -803,33 +877,44 @@ async function spamReflex(userId, prepared, cfg, user) {
 
 /**
  * Rescue: run the layers over mail in the server spam folder and mark legitimate-looking mail
- * `rescued` above spam.rescueAbove. Nothing is moved; the Screener shows rescued mail from
- * undecided senders with inSpam, and decided senders' mail goes to their stream.
+ * `rescued` at spam.rescueAbove. Nothing is moved; the Screener shows rescued mail from undecided
+ * senders with inSpam, and decided senders' mail goes to their stream. Every row gets a `rescue`
+ * signal (score, reasons, signals version) so the sweep knows it has been judged.
+ * @param {{ allowReflex?: boolean, onlyLayers?: string[]|null }} [opts]
  */
-export async function rescueRows(userId, rows, cfg) {
+export async function rescueRows(userId, rows, cfg, { allowReflex = true, onlyLayers = null } = {}) {
   if (!rows.length) return { rescued: 0, checked: 0 };
   await withExtras(rows);
   const ctx = await loadUserContext(userId, rows, cfg);
-  const orders = await orderDomains(userId);
+  const [orders, evidence] = await Promise.all([
+    orderDomains(userId),
+    rescueEvidence(userId, rows.map((r) => r.from_email), ctx.userAddresses),
+  ]);
   const prepared = [];
   for (const row of rows) {
-    if (ctx.existing.get(row.id)?.layer === 'user') continue;
+    const prev = ctx.existing.get(row.id);
+    if (prev?.layer === 'user') continue;
+    if (onlyLayers && prev && !onlyLayers.includes(prev.layer)) continue;
     const d = decideCheap(row, ctx);
     d.sender = ctx.stats.get(d.keys.address || '') || null;
     const decision = d.senderDecision;
+    const ev = evidence.get(String(row.from_email || '').toLowerCase()) || { wroteTo: 0, notSpam: 0 };
+    const source = decision?.source || null;
     d.rescue = rescueScore({
-      row, sender: d.sender, decision: decision?.decision || null,
-      alwaysIn: Boolean(decision && decision.source === 'import'), auth: d.header.auth, s1: d.s1, orderDomains: orders,
-      phishingScore: d.phishingScore, text: d.text,
+      row, sender: d.sender, decision: decision?.decision || null, decisionSource: source,
+      wroteTo: ev.wroteTo > 0 || (source !== 'user' && /wr(ote|itten) to them/i.test(decision?.reason || '')),
+      contact: source === 'import' && /contacts/i.test(decision?.reason || ''),
+      replyToOwn: Boolean(ctx.threads?.get(row.id)?.replyToOwn), markedNotSpam: ev.notSpam > 0,
+      auth: d.header.auth, s1: d.s1, orderDomains: orders, phishingScore: d.phishingScore, text: d.text,
     });
-    prepared.push({ row, d });
+    prepared.push({ row, d, prev });
   }
   const above = cfg['spam.rescueAbove'];
-  const llmOn = await llmAvailable(userId).catch(() => false);
+  const llmOn = allowReflex && await llmAvailable(userId).catch(() => false);
   const borderline = prepared.filter(({ d }) => d.rescue.score >= above - 0.35 && d.rescue.score < above && d.spam !== 'phishing');
   const verdicts = llmOn && borderline.length ? await spamReflex(userId, borderline, cfg, ctx.user) : new Map();
   let rescued = 0;
-  for (const { row, d } of prepared) {
+  for (const { row, d, prev } of prepared) {
     const v = verdicts.get(row.id);
     if (v) {
       if (v.verdict === 'legit') { d.rescue.score = round(Math.max(d.rescue.score, 0.5 * d.rescue.score + 0.5 * v.confidence + 0.1)); d.rescue.reasons.push(v.reason); }
@@ -839,6 +924,11 @@ export async function rescueRows(userId, rows, cfg) {
       d.signals.push({ name: `spam.${v.layer}`, label: `${v.layer === 'reasoning' ? 'Reasoning model' : 'Reflex'}: ${v.reason}`, weight: v.confidence });
     }
     const userDecided = d.layer === 'rule' && (d.ruleId || d.senderDecision?.source === 'user');
+    // First, so upsertSort's cap on stored signals never drops it.
+    d.signals.unshift({
+      name: 'rescue', v: SPAM_SIGNALS_VERSION, weight: d.rescue.score,
+      label: d.rescue.reasons.length ? `Rescue ${d.rescue.score}: ${d.rescue.reasons.slice(0, 3).join('; ')}` : `Rescue ${d.rescue.score}: no sign you know this sender`,
+    });
     if (d.rescue.score >= above && d.spam !== 'phishing') {
       d.spam = 'rescued';
       d.spamReason = d.rescue.reasons.slice(0, 2).join('; ');
@@ -858,9 +948,9 @@ export async function rescueRows(userId, rows, cfg) {
     }
     d.final = true;
     const stored = await finalize(userId, row, d, ctx, { pending: null });
-    if (stored && d.spam === 'rescued') {
+    if (stored && d.spam === 'rescued' && prev?.spam !== 'rescued') {
       await writeLog(userId, {
-        messageId: row.id, action: 'rescue', from: { spam: 'suspected', stream: 'spam' },
+        messageId: row.id, action: 'rescue', from: { spam: prev?.spam || 'suspected', stream: 'spam' },
         to: { spam: 'rescued', stream: stored.stream, score: d.rescue.score, reasons: d.rescue.reasons.slice(0, 4) }, by: 'auto',
       });
     }
@@ -873,34 +963,154 @@ async function sortUsers() {
   return rows.map((r) => r.user_id);
 }
 
-/** Every 10 minutes: check new mail in each user's spam folders. */
-export async function rescueSweep({ userIds = null, limit = 100 } = {}) {
+/**
+ * Spam-folder messages to judge for one user: never sorted, sorted before the rescue signal (or
+ * under an older signals version), or whose sender has new evidence since (a reply, a decision).
+ * `all` re-judges everything in the window (the on-demand run).
+ */
+async function rescueCandidates(userId, cfg, { limit = 100, all = false } = {}) {
+  const { rows } = await query(
+    `SELECT ${MESSAGE_COLUMNS}, ${EXTRA_COLUMNS}
+       FROM messages m
+       JOIN email_accounts a ON a.id = m.account_id
+       LEFT JOIN folders f ON f.account_id = m.account_id AND f.path = m.folder
+       LEFT JOIN hedwig_sort s ON s.message_id = m.id
+      WHERE a.user_id = $1 AND NOT m.is_deleted AND ${SPAM_FOLDER_SQL}
+        AND (m.date IS NULL OR m.date > NOW() - make_interval(days => $2))
+        AND (s.message_id IS NULL OR (s.layer <> 'user' AND (
+              $4::boolean
+           OR NOT (COALESCE(s.signals, '[]'::jsonb) @> $5::jsonb)
+           OR (s.spam <> 'rescued' AND (
+                EXISTS (SELECT 1 FROM hedwig_sender_stats st WHERE st.user_id = $1 AND st.sender_email = lower(m.from_email) AND st.last_replied > s.decided_at)
+             OR EXISTS (SELECT 1 FROM hedwig_senders hs WHERE hs.user_id = $1 AND hs.undone_at IS NULL AND hs.decision <> 'block'
+                          AND hs.scope = 'address' AND hs.key = lower(m.from_email) AND hs.decided_at > s.decided_at))))))
+      ORDER BY (s.message_id IS NULL) DESC, m.date DESC NULLS LAST
+      LIMIT $3`,
+    [userId, cfg['spam.suspectedDays'], limit, Boolean(all), JSON.stringify([{ name: 'rescue', v: SPAM_SIGNALS_VERSION }])],
+  );
+  return decorate(rows);
+}
+
+/**
+ * Check each user's spam folder (every 10 minutes, and on demand). Records its last run in
+ * hedwig_state `schedule.sort.rescue` and logs one line per run.
+ * @returns {Promise<{ users: number, scanned: number, rescued: number, errors: number }>}
+ */
+export async function rescueSweep({ userIds = null, limit = 100, all = false, record = true } = {}) {
+  const started = Date.now();
   const users = userIds || await sortUsers();
-  let rescued = 0;
+  const out = { users: 0, scanned: 0, rescued: 0, errors: 0 };
   for (const userId of users) {
     const cfg = await getConfig(userId);
     if (!cfg.enabled || !cfg['sort.enabled']) continue;
+    out.users++;
     try {
-      const { rows } = await query(
-        `SELECT ${MESSAGE_COLUMNS}, ${EXTRA_COLUMNS}
-           FROM messages m
-           JOIN email_accounts a ON a.id = m.account_id
-           LEFT JOIN folders f ON f.account_id = m.account_id AND f.path = m.folder
-           LEFT JOIN hedwig_sort s ON s.message_id = m.id
-          WHERE a.user_id = $1 AND NOT m.is_deleted AND ${SPAM_FOLDER_SQL}
-            AND (m.date IS NULL OR m.date > NOW() - make_interval(days => $2))
-            AND s.message_id IS NULL
-          ORDER BY m.date DESC NULLS LAST
-          LIMIT $3`,
-        [userId, cfg['spam.suspectedDays'], limit],
-      );
-      const res = await rescueRows(userId, await decorate(rows), cfg);
-      rescued += res.rescued;
+      const rows = await rescueCandidates(userId, cfg, { limit, all });
+      const res = await rescueRows(userId, rows, cfg);
+      out.scanned += res.checked;
+      out.rescued += res.rescued;
     } catch (err) {
+      out.errors++;
       console.warn(`[hedwig] sort: spam rescue failed for ${userId}:`, err.message);
     }
   }
-  return rescued;
+  console.log(`[hedwig] sort.rescue: ${out.scanned} spam-folder message(s) checked for ${out.users} user(s), ${out.rescued} rescued${out.errors ? `, ${out.errors} failed` : ''} (${Date.now() - started} ms)`);
+  if (record) {
+    await setState('schedule.sort.rescue', { at: new Date(started).toISOString(), ...out, all: Boolean(all), signalsVersion: SPAM_SIGNALS_VERSION, ms: Date.now() - started })
+      .catch((err) => console.warn('[hedwig] sort.rescue: could not record its state:', err.message));
+  }
+  return out;
+}
+
+/** Job `sort.rescue` { all? }: one user's spam folder now (POST /sort/rescue/run, admin). */
+export async function runRescueJob({ all = true, limit = 1000 } = {}, job = {}) {
+  const userId = job.user_id;
+  if (!userId) return { skipped: 'bad payload' };
+  const res = await rescueSweep({ userIds: [userId], all: Boolean(all), limit: Math.max(1, Math.min(5000, Number(limit) || 1000)), record: false });
+  await setState(`sort.rescue.lastRun:${userId}`, { at: new Date().toISOString(), ...res, manual: true }).catch(() => {});
+  return res;
+}
+
+// ── Re-judging stored spam verdicts when the signals change ─────────────────
+
+const REEVALUATE_BATCH = 200;
+
+/**
+ * Job `sort.reevaluateSpam` { cursor? }: recompute every stored verdict the spam signals decide —
+ * rows in the server spam folder (rescue) and rows marked phishing — for one user, in batches that
+ * re-enqueue themselves. Rows the user corrected are left alone.
+ */
+export async function runReevaluateSpamJob({ cursor = null, version = SPAM_SIGNALS_VERSION } = {}, job = {}) {
+  const userId = job.user_id;
+  if (!userId) return { skipped: 'bad payload' };
+  const cfg = await getConfig(userId);
+  if (!cfg.enabled || !cfg['sort.enabled']) return { skipped: 'sorting off' };
+  const { rows } = await query(
+    `SELECT s.message_id FROM hedwig_sort s JOIN messages m ON m.id = s.message_id
+      WHERE s.user_id = $1 AND s.layer <> 'user' AND NOT s.own AND NOT m.is_deleted
+        AND (s.in_spam_folder OR s.spam = 'phishing')
+        AND ($2::uuid IS NULL OR s.message_id > $2::uuid)
+      ORDER BY s.message_id
+      LIMIT $3`,
+    [userId, cursor, REEVALUATE_BATCH],
+  );
+  const ids = rows.map((r) => r.message_id);
+  const before = ids.length
+    ? new Map((await query('SELECT message_id, spam FROM hedwig_sort WHERE user_id = $1 AND message_id = ANY($2::uuid[])', [userId, ids])).rows.map((r) => [r.message_id, r.spam]))
+    : new Map();
+  const res = ids.length ? await resortMessages(userId, ids, {}) : { sorted: 0 };
+  const after = ids.length
+    ? (await query('SELECT message_id, spam FROM hedwig_sort WHERE user_id = $1 AND message_id = ANY($2::uuid[])', [userId, ids])).rows
+    : [];
+  const changed = {};
+  for (const r of after) {
+    const was = before.get(r.message_id);
+    if (was && was !== r.spam) changed[`${was}→${r.spam}`] = (changed[`${was}→${r.spam}`] || 0) + 1;
+  }
+  const key = `spam.signalsVersion:${userId}`;
+  const prevState = (await getState(key, null)) || {};
+  const totals = { checked: (cursor ? Number(prevState.checked) || 0 : 0) + ids.length, changed: mergeCounts(cursor ? prevState.changed : null, changed) };
+  if (ids.length === REEVALUATE_BATCH) {
+    const next = ids[ids.length - 1];
+    await setState(key, { ...prevState, version, ...totals, cursor: next });
+    await enqueue('sort.reevaluateSpam', { cursor: next, version }, { userId, dedupeKey: `sort.reevaluateSpam:${userId}:${version}:${next}`, priority: 7, maxAttempts: 3 });
+    return { checked: ids.length, sorted: res.sorted, changed, continued: true };
+  }
+  await setState(key, { ...prevState, version, ...totals, cursor: null, doneAt: new Date().toISOString() });
+  console.log(`[hedwig] sort.reevaluateSpam: ${totals.checked} stored spam verdict(s) re-judged for ${userId} under signals ${version}; changed ${JSON.stringify(totals.changed)}`);
+  return { checked: ids.length, sorted: res.sorted, changed, done: true };
+}
+
+function mergeCounts(a, b) {
+  const out = { ...(a || {}) };
+  for (const [k, v] of Object.entries(b || {})) out[k] = (out[k] || 0) + v;
+  return out;
+}
+
+/**
+ * Worker start-up (and every 10 minutes, cheaply): when SPAM_SIGNALS_VERSION differs from the one
+ * stored in hedwig_state `spam.signalsVersion`, enqueue sort.reevaluateSpam once per user.
+ * @returns {Promise<{ version: string, enqueued: number }|null>} null when nothing changed
+ */
+export async function ensureSpamSignalsCurrent({ userIds = null } = {}) {
+  const current = await getState('spam.signalsVersion', null);
+  if (current?.version === SPAM_SIGNALS_VERSION && !userIds) return null;
+  const users = userIds || await sortUsers();
+  let enqueued = 0;
+  for (const userId of users) {
+    const mine = await getState(`spam.signalsVersion:${userId}`, null);
+    if (mine?.version === SPAM_SIGNALS_VERSION && !userIds) continue;
+    const jobId = await enqueue('sort.reevaluateSpam', { version: SPAM_SIGNALS_VERSION }, {
+      userId, dedupeKey: `sort.reevaluateSpam:${userId}:${SPAM_SIGNALS_VERSION}:start`, priority: 7, maxAttempts: 3,
+    });
+    await setState(`spam.signalsVersion:${userId}`, { version: SPAM_SIGNALS_VERSION, enqueuedAt: new Date().toISOString(), jobId, checked: 0, changed: {} });
+    if (jobId !== null) enqueued++;
+  }
+  if (!userIds) {
+    await setState('spam.signalsVersion', { version: SPAM_SIGNALS_VERSION, previous: current?.version || null, at: new Date().toISOString(), users: users.length, enqueued });
+    console.log(`[hedwig] sort: spam signals ${current?.version || 'none'} → ${SPAM_SIGNALS_VERSION}; re-judging stored spam verdicts for ${enqueued} user(s)`);
+  }
+  return { version: SPAM_SIGNALS_VERSION, enqueued };
 }
 
 export { sortUsers };

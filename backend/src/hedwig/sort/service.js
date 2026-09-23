@@ -12,7 +12,9 @@ import { recordCorrection } from './deps.js';
 import { writeLog, getLog, markUndone, logSince } from './log.js';
 import { setSenderDecision, revertSenderDecision, screenerList, decideFromScreener, streamOf } from './senders.js';
 import { loadRules, createRule, updateRule, deleteRule, dryRun, parseGmailFilters, ruleForCorrection, matchingMessageIds } from './rules.js';
-import { resortMessages } from './engine.js';
+import { resortMessages, sortUsers, ensureSpamSignalsCurrent } from './engine.js';
+import { getState } from '../state.js';
+import { SPAM_SIGNALS_VERSION } from './spam.js';
 import { listBundles, createBundle, updateBundle, loadBundles } from './bundles.js';
 import { cleanReason } from './reflex.js';
 import { peopleFilterSql, withWorkRows } from '../work/lists.js';
@@ -337,8 +339,11 @@ export async function undo(userId, { logId } = {}) {
       break;
     }
     case 'rescue':
+      // Undoing a rescue is the user saying it is spam: stored as their decision so the next
+      // rescue sweep or re-evaluation does not rescue it again.
       await query(
-        `UPDATE hedwig_sort SET spam = 'suspected', stream = 'spam', bundle = NULL, reason = 'Your provider filed this as spam', decided_at = NOW()
+        `UPDATE hedwig_sort SET spam = 'suspected', stream = 'spam', bundle = NULL, layer = 'user', confidence = 1,
+                reason = 'You undid the rescue', spam_reason = 'You undid the rescue', decided_at = NOW()
           WHERE message_id = $1 AND user_id = $2 AND layer <> 'user'`,
         [entry.message_id, userId],
       );
@@ -402,6 +407,40 @@ export async function importGmail(userId, { xml, preview = false } = {}) {
   const created = [];
   for (const r of parsed.rules) created.push(await createRule(userId, r, { source: 'import' }));
   return { created: created.length, rules: created, skipped: parsed.skipped };
+}
+
+// ── Spam rescue on demand ───────────────────────────────────────────────────
+
+/** Queue a full check of the user's spam folder (job sort.rescue, in the worker). */
+export async function runRescue(userId) {
+  const jobId = await enqueue('sort.rescue', { all: true }, { userId, dedupeKey: `sort.rescue:${userId}`, priority: 3, maxAttempts: 2 });
+  return { queued: true, jobId, deduplicated: jobId === null };
+}
+
+/** The last scheduled sweep, the user's last on-demand run, and the spam signals version. */
+export async function rescueStatus(userId) {
+  const [sweep, signals, mine, manual] = await Promise.all([
+    getState('schedule.sort.rescue', null),
+    getState('spam.signalsVersion', null),
+    userId ? getState(`spam.signalsVersion:${userId}`, null) : null,
+    userId ? getState(`sort.rescue.lastRun:${userId}`, null) : null,
+  ]);
+  return { sweep, lastRun: manual, signalsVersion: SPAM_SIGNALS_VERSION, signals, reevaluation: mine };
+}
+
+/** Admin: queue sort.rescue for one user, or every user with an enabled account. */
+export async function runRescueFor(userId = null) {
+  if (userId !== null && !isUuid(userId)) throw httpError(400, 'Invalid userId');
+  const users = userId ? [userId] : await sortUsers();
+  const jobs = [];
+  for (const u of users) jobs.push({ userId: u, ...(await runRescue(u)) });
+  return { queued: jobs.length, jobs };
+}
+
+/** Admin: re-judge stored spam verdicts now (sort.reevaluateSpam) for one user or everyone. */
+export async function reevaluateSpamFor(userId = null) {
+  if (userId !== null && !isUuid(userId)) throw httpError(400, 'Invalid userId');
+  return ensureSpamSignalsCurrent({ userIds: userId ? [userId] : await sortUsers() });
 }
 
 // ── Why ─────────────────────────────────────────────────────────────────────

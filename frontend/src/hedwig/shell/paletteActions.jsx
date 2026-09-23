@@ -32,12 +32,12 @@ export function useHedwigPaletteActions(query) {
   if (q) {
     if (getView('hedwig.ask')) {
       actions.push({
-        id: 'hedwig:ask-query', label: `Ask Hedwig: “${q}”`, icon: icon('ask'), group: 'Hedwig',
+        id: 'hedwig:ask-query', label: `Ask Hedwig: “${q}”`, icon: icon('ask'), group: 'Hedwig', fallback: true,
         run: () => { useHedwig.getState().setAskPrompt(q); useHedwig.getState().openView('hedwig.ask', { question: q }); },
       });
     }
     actions.push({
-      id: 'hedwig:search-mail', label: `Search mail for “${q}”`, icon: icon('search'), group: 'Mail',
+      id: 'hedwig:search-mail', label: `Search mail for “${q}”`, icon: icon('search'), group: 'Mail', fallback: true,
       run: () => {
         useStore.getState().setSearchQuery(q);
         // On a phone upstream's own list is the search screen; elsewhere show a list pane.

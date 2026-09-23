@@ -311,11 +311,11 @@ export function Avatar({ name, email, size = 36 }) {
 // ── Markdown with citations ──────────────────────────────────────────────────
 const CITE_CSS = `
 .hw-md p{margin:0 0 8px}.hw-md p:last-child{margin-bottom:0}.hw-md ul,.hw-md ol{margin:0 0 8px;padding-left:20px}
-.hw-md h1,.hw-md h2,.hw-md h3{font-family:var(--hw-font-display, 'Fraunces', Georgia, serif);font-weight:600;margin:10px 0 6px;font-size:16px}
-.hw-md code{font-family:var(--hw-font-mono, 'IBM Plex Mono', monospace);font-size:12px;background:var(--hw-raised, #EFE8DB);padding:1px 4px;border-radius:4px}
+.hw-md h1,.hw-md h2,.hw-md h3{font-family:var(--hw-font-display, Georgia, serif);font-weight:400;margin:12px 0 6px;font-size:19px;line-height:1.2}
+.hw-md code{font-family:var(--hw-font-mono, ui-monospace, monospace);font-size:12px;background:var(--hw-raised, #EFE8DB);padding:1px 4px;border-radius:4px}
 .hw-md a{color:var(--hw-teal, #1F6B66)}
 .hw-md .hw-cite{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;padding:0 3px;margin:0 1px;
-  vertical-align:super;font:500 10px/1 var(--hw-font-mono, 'IBM Plex Mono', monospace);color:var(--hw-teal-text, #155450);
+  vertical-align:super;font:500 10px/1 var(--hw-font-mono, ui-monospace, monospace);color:var(--hw-teal-text, #155450);
   background:var(--hw-teal-tint, #D7E8E5);border:0;border-radius:4px;cursor:pointer}
 .hw-md .hw-cite:hover,.hw-md .hw-cite:focus-visible{background:var(--hw-teal, #1F6B66);color:var(--hw-surface, #FFFDF9)}`;
 

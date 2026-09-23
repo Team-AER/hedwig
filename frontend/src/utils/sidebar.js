@@ -38,17 +38,51 @@ function delimiterFor(folders) {
   )));
 }
 
+// Where a folder sits among its siblings before the user drags anything: INBOX, Drafts, Sent,
+// Archive, Junk, Trash, then their own folders by name. Special-use flags decide (Yahoo calls its
+// junk folder "Bulk" and its drafts "Draft"); a top-level folder without one is placed by its
+// well-known name ("Deleted Messages" goes with Trash), just after the flagged folder of that kind.
+const SPECIAL_USE_RANK = [
+  ['\\inbox', 0], ['\\flagged', 1], ['\\drafts', 2], ['\\sent', 3],
+  ['\\archive', 4], ['\\all', 4], ['\\junk', 5], ['\\trash', 6],
+];
+const NAME_RANK = [
+  [/^drafts?$/, 2],
+  [/^sent( items| messages| mail)?$/, 3],
+  [/^archives?$/, 4],
+  [/^(junk( e-?mail)?|spam|bulk( mail)?)$/, 5],
+  [/^(trash|deleted( items| messages)?|bin)$/, 6],
+];
+const USER_FOLDER_RANK = 10;
+
+export function folderRank(folder, delimiter = '/') {
+  const path = typeof folder?.path === 'string' ? folder.path : '';
+  if (path.toUpperCase() === 'INBOX') return 0;
+  const flags = String(folder?.special_use || '').toLowerCase();
+  for (const [flag, rank] of SPECIAL_USE_RANK) if (flags.includes(flag)) return rank;
+  if (!path.includes(delimiter)) {
+    const name = path.trim().toLowerCase();
+    for (const [re, rank] of NAME_RANK) if (re.test(name)) return rank + 0.5;
+  }
+  return USER_FOLDER_RANK;
+}
+
+export function compareFolders(a, b, delimiter = '/') {
+  return (folderRank(a, delimiter) - folderRank(b, delimiter)) || a.path.localeCompare(b.path);
+}
+
 function folderPathsWithAncestors(folders) {
   const delimiter = delimiterFor(folders);
-  const paths = new Set();
+  const byPath = new Map();
   for (const folder of folders) {
     if (typeof folder?.path !== 'string' || !folder.path) continue;
     const parts = folder.path.split(delimiter);
     for (let depth = 1; depth <= parts.length; depth += 1) {
-      paths.add(parts.slice(0, depth).join(delimiter));
+      const path = parts.slice(0, depth).join(delimiter);
+      if (!byPath.has(path) || path === folder.path) byPath.set(path, path === folder.path ? folder : { path });
     }
   }
-  return [...paths].sort((a, b) => a.localeCompare(b));
+  return [...byPath.values()].sort((a, b) => compareFolders(a, b, delimiter)).map(f => f.path);
 }
 
 export function sanitizeFolderOrder(value) {
@@ -135,7 +169,7 @@ export function buildFolderTree(folders, savedOrder = []) {
       if (aRank != null && bRank != null) return aRank - bRank;
       if (aRank != null) return -1;
       if (bRank != null) return 1;
-      return a.path.localeCompare(b.path);
+      return compareFolders(a, b, delimiter);
     });
     group.forEach(node => sortGroup(node.children));
   };

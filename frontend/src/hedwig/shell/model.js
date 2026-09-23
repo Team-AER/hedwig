@@ -8,7 +8,8 @@
 // Every node also carries `key`, a stable pane id the shell uses for focus and view requests.
 // `sizes[i]` is a fixed size in px for child i, or null to share the remaining space; at least
 // one child of every split is flexible. `defaults` holds the sizes a double-click restores.
-// The root node may carry layout-wide settings: `density` and `headers`.
+// The root node may carry layout-wide settings: `density` and `headers`, and `version`, which the
+// shell stamps on every tree it shows (LAYOUT_VERSION) so a layout saved before v2 can be told apart.
 //
 // Operations never mutate their input; each returns a normalised tree (or the input unchanged
 // when the operation would produce a tree the backend would reject).
@@ -19,7 +20,8 @@ export const MAX_TABS = 12;
 export const MIN_PANE_PX = 120;
 export const MAX_PANE_PX = 4000;
 export const DENSITIES = ['compact', 'comfortable', 'spacious'];
-const ROOT_META = ['density', 'headers'];
+const ROOT_META = ['density', 'headers', 'version'];
+export const LAYOUT_VERSION = 2;
 
 // Mirror of validTree in backend/src/hedwig/core/index.js. Keep the two in step: the shell
 // validates before saving so a layout the server would 400 never leaves the browser.
@@ -144,6 +146,7 @@ export function normalise(tree) {
   }
   if (out.density !== undefined && !DENSITIES.includes(out.density)) delete out.density;
   if (out.headers !== undefined && typeof out.headers !== 'boolean') delete out.headers;
+  if (out.version !== undefined && !Number.isInteger(out.version)) delete out.version;
   return out;
 }
 

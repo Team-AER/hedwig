@@ -7,6 +7,7 @@ import {
   collapsedTooltip,
   FOLDER_ORDER_DRAG_TYPE,
   folderDropPosition,
+  folderRank,
   hasRenderedInbox,
   normalizeFolderOrder,
   reorderFolderPaths,
@@ -142,13 +143,40 @@ describe('folder ordering', () => {
     assert.deepEqual(sanitizeFolderOrder([]), {});
   });
 
-  it('keeps the legacy alphabetical order without a saved preference', () => {
+  it('puts INBOX and the special folders first without a saved preference', () => {
     const tree = buildFolderTree(folders);
-    assert.deepEqual(tree.map(node => node.path), ['Archive', 'INBOX', 'Projects']);
+    assert.deepEqual(tree.map(node => node.path), ['INBOX', 'Archive', 'Projects']);
     assert.deepEqual(tree[2].children.map(node => node.path), [
       'Projects/Alpha',
       'Projects/Beta',
     ]);
+  });
+
+  it('orders a Yahoo account by special use, then the user folders by name', () => {
+    // The folders exactly as the server returns them (ORDER BY path) for a Yahoo account.
+    const yahoo = [
+      { path: 'Archive', special_use: '\\Archive' },
+      { path: 'Bulk', special_use: '\\Junk' },
+      { path: 'Deleted Messages', special_use: null },
+      { path: 'Draft', special_use: '\\Drafts' },
+      { path: 'INBOX', special_use: '\\Inbox' },
+      { path: 'Personal', special_use: null },
+      { path: 'Sent', special_use: '\\Sent' },
+      { path: 'Trash', special_use: '\\Trash' },
+    ].map(f => ({ ...f, name: f.path, delimiter: '/' }));
+    assert.deepEqual(buildFolderTree(yahoo).map(node => node.path), [
+      'INBOX', 'Draft', 'Sent', 'Archive', 'Bulk', 'Trash', 'Deleted Messages', 'Personal',
+    ]);
+  });
+
+  it('places unflagged folders by their well-known names and nested ones by name', () => {
+    const plain = ['Trash', 'Zeta', 'Junk', 'Sent Items', 'Drafts', 'INBOX', 'Alpha', 'Alpha/Sent', 'Alpha/Notes']
+      .map(path => ({ path, name: path.split('/').pop(), delimiter: '/' }));
+    const tree = buildFolderTree(plain);
+    assert.deepEqual(tree.map(node => node.path), ['INBOX', 'Drafts', 'Sent Items', 'Junk', 'Trash', 'Alpha', 'Zeta']);
+    assert.deepEqual(tree[5].children.map(node => node.path), ['Alpha/Notes', 'Alpha/Sent']);
+    assert.equal(folderRank({ path: 'Sent', special_use: '\\Sent' }), 3);
+    assert.equal(folderRank({ path: 'Receipts' }), 10);
   });
 
   it('applies saved ranks independently to root and nested siblings', () => {
@@ -192,14 +220,14 @@ describe('folder ordering', () => {
     );
     assert.deepEqual(
       reorderFolderPaths(folders, [], 'Projects', 'Archive', 'before'),
-      ['Projects', 'Archive', 'INBOX', 'Projects/Alpha', 'Projects/Beta'],
+      ['INBOX', 'Projects', 'Archive', 'Projects/Alpha', 'Projects/Beta'],
     );
   });
 
   it('moves nested siblings without changing the parent hierarchy', () => {
     assert.deepEqual(
       reorderFolderPaths(folders, [], 'Projects/Beta', 'Projects/Alpha', 'before'),
-      ['Archive', 'INBOX', 'Projects', 'Projects/Beta', 'Projects/Alpha'],
+      ['INBOX', 'Archive', 'Projects', 'Projects/Beta', 'Projects/Alpha'],
     );
   });
 
@@ -220,7 +248,7 @@ describe('folder ordering', () => {
 
   it('does not persist a drop that leaves the normalized order unchanged', () => {
     assert.equal(
-      reorderFolderPaths(folders, [], 'Archive', 'INBOX', 'before'),
+      reorderFolderPaths(folders, [], 'INBOX', 'Archive', 'before'),
       null,
     );
   });

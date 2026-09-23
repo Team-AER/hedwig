@@ -1,16 +1,19 @@
 // Message bodies for the pipeline. Many providers (Gmail especially) sync headers and a snippet
 // only; the body arrives when someone opens the message. Hedwig asks the API process — which holds
 // the IMAP engine — to fetch missing bodies through the job queue, rate-limited by the queue itself.
+// Every fetch yields to mail sync (core/mailYield.js): it is deferred, never failed, while the
+// account is syncing or cooling down, and backs off per account when the server pushes back.
 import { query } from '../../services/db.js';
 import { sanitizeEmail } from '../../services/emailSanitizer.js';
 import { snippetFromBody } from '../../services/messageParser.js';
 import { enqueue } from '../jobs.js';
+import { guardedFetch, BODY_JOB } from './mailYield.js';
 
 const stripNul = (v) => (typeof v === 'string' ? v.replace(/\0/g, '') : v);
 
 /** Ask the API process to fetch a body. Deduplicated per message. */
 export function requestBody(messageId, { priority = 7 } = {}) {
-  return enqueue('mail.fetchBody', { messageId }, { dedupeKey: `body:${messageId}`, priority, maxAttempts: 3 });
+  return enqueue(BODY_JOB, { messageId }, { dedupeKey: `body:${messageId}`, priority, maxAttempts: 3 });
 }
 
 /** Job handler, runs in the API process. */
@@ -24,7 +27,10 @@ export function makeFetchBodyHandler(imapManager) {
     const row = rows[0];
     if (!row || row.body_text || row.body_html) return;
     const account = { ...row, id: row.account_id };
-    const { html, text, attachments } = await imapManager.fetchMessageBody(account, row.uid, row.folder);
+    const { html, text, attachments } = await guardedFetch(
+      { imapManager, account, kind: BODY_JOB, messageId },
+      () => imapManager.fetchMessageBody(account, row.uid, row.folder),
+    );
     const safeHtml = html ? stripNul(sanitizeEmail(html)) : null;
     const safeText = stripNul(text);
     if (!safeHtml && !safeText) return;

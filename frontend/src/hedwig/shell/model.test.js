@@ -8,8 +8,9 @@ import {
   MIN_PANE_PX, MAX_SPLIT_CHILDREN,
 } from './model.js';
 import { TEMPLATES, buildTemplate, getTemplate } from './templates.js';
-import { deviceClass, pickLayout, templateIdForName } from './layouts.js';
+import { deviceClass, pickLayout, templateIdForName, isPreV2Layout, CLASSIC_NAME } from './layouts.js';
 import { parseKeys, chordFromEvent, upstreamConflict, createMatcher, normaliseChord } from './keymap.js';
+import { filterPalette, paletteMatches } from './paletteMatch.js';
 import { buildKeyMap, buildModKeyMap } from '../../utils/defaultShortcuts.js';
 
 const ids = (tree) => listPanes(tree).map((p) => p.node.id);
@@ -353,7 +354,7 @@ describe('layout selection', () => {
   });
 
   it('prefers the active saved layout for the device', () => {
-    const tree = { type: 'split', dir: 'row', children: [{ type: 'view', id: 'core.list' }, { type: 'view', id: 'core.thread' }] };
+    const tree = { type: 'split', dir: 'row', version: 2, children: [{ type: 'view', id: 'core.list' }, { type: 'view', id: 'core.thread' }] };
     const rows = [
       { name: 'Other', device: 'desktop', tree: { type: 'view', id: 'x' }, is_active: false },
       { name: 'Mine', device: 'desktop', tree, is_active: true },
@@ -365,13 +366,51 @@ describe('layout selection', () => {
   });
 
   it('lets a tablet borrow the desktop layout, then falls back to the default template', () => {
-    const rows = [{ name: 'Triage', device: 'desktop', tree: buildTemplate('triage'), is_active: true }];
+    const rows = [{ name: 'Triage', device: 'desktop', tree: { ...buildTemplate('triage'), version: 2 }, is_active: true }];
     assert.equal(pickLayout(rows, 'tablet', 'research').name, 'Triage');
     assert.equal(pickLayout(rows, 'tablet', 'research').templateId, 'triage');
     const fresh = pickLayout([], 'desktop', 'research');
     assert.equal(fresh.templateId, 'research');
     assert.equal(fresh.source, 'template');
     assert.equal(pickLayout(null, 'desktop', 'bogus').templateId, 'streams');
+  });
+
+  it('moves a layout saved before v2 to the streams template once, keeping it as Classic', () => {
+    // What an account created before v2 has: the v1 Triage layout, the upstream folder sidebar in a pane.
+    const v1 = JSON.parse(JSON.stringify(buildTemplate('triage')));
+    const rows = [{ id: 7, name: 'Triage', device: 'desktop', tree: v1, is_active: true }];
+    const got = pickLayout(rows, 'desktop', 'triage');
+    assert.equal(got.source, 'migrate');
+    assert.equal(got.templateId, 'streams');
+    assert.equal(got.name, 'Streams');
+    assert.deepEqual(ids(got.tree), ['hedwig.rail', 'hedwig.stream.people', 'hedwig.thread']);
+    assert.equal(got.classic.name, CLASSIC_NAME);
+    assert.deepEqual(ids(got.classic.tree), ['core.nav', 'hedwig.needs', 'core.thread', 'hedwig.context']);
+    // A tablet borrowing that desktop layout lands on streams too.
+    assert.equal(pickLayout(rows, 'tablet', 'triage').source, 'migrate');
+
+    // Once stamped (Classic as saved, or any layout the v2 shell shows), it is the user's choice.
+    const kept = [{ id: 8, name: CLASSIC_NAME, device: 'desktop', tree: { ...v1, version: 2 }, is_active: true }];
+    assert.equal(pickLayout(kept, 'desktop', 'streams').source, 'saved');
+    assert.equal(pickLayout(kept, 'desktop', 'streams').name, CLASSIC_NAME);
+  });
+
+  it('leaves unstamped layouts that already hold v2 views alone', () => {
+    assert.equal(isPreV2Layout(buildTemplate('streams')), false);
+    const custom = { type: 'split', dir: 'row', children: [{ type: 'view', id: 'core.nav' }, { type: 'view', id: 'hedwig.screener' }] };
+    assert.equal(isPreV2Layout(custom), false);
+    assert.equal(isPreV2Layout(buildTemplate('compact')), true);
+    assert.equal(isPreV2Layout({ ...buildTemplate('compact'), version: 2 }), false);
+    assert.equal(isPreV2Layout(null), false);
+    const rows = [{ name: 'Mine', device: 'desktop', tree: custom, is_active: true }];
+    assert.equal(pickLayout(rows, 'desktop', 'streams').source, 'saved');
+  });
+
+  it('keeps the version stamp through normalise and pane edits', () => {
+    const t = normalise({ ...buildTemplate('streams'), version: 2 });
+    assert.equal(t.version, 2);
+    assert.equal(normalise({ ...buildTemplate('streams'), version: 'x' }).version, undefined);
+    assert.equal(setMeta(t, { density: 'compact' }).version, 2);
   });
 
   it('skips a saved layout that no longer validates', () => {
@@ -382,6 +421,29 @@ describe('layout selection', () => {
   it('maps saved names back to templates', () => {
     assert.equal(templateIdForName('Triage'), 'triage');
     assert.equal(templateIdForName('My layout'), null);
+  });
+});
+
+describe('palette matching', () => {
+  const actions = [
+    { id: 'ask', label: 'Ask Hedwig: “scheme dark”', group: 'Hedwig', fallback: true },
+    { id: 'search', label: 'Search mail for “scheme dark”', group: 'Mail', fallback: true },
+    { id: 'dark', label: 'Colour scheme: dark', group: 'Hedwig' },
+    { id: 'light', label: 'Colour scheme: light', group: 'Hedwig' },
+    { id: 'people', label: 'Go to People', group: 'Hedwig' },
+  ];
+
+  it('matches every word, ignoring case, punctuation and accents', () => {
+    assert.ok(paletteMatches('Colour scheme: dark', 'colour scheme dark'));
+    assert.ok(paletteMatches('Colour scheme: dark', 'dark scheme'));
+    assert.ok(paletteMatches('Réglages', 'reglages'));
+    assert.ok(!paletteMatches('Colour scheme: light', 'scheme dark'));
+  });
+
+  it('puts the matching commands before Ask and Search, which always stay', () => {
+    assert.deepEqual(filterPalette(actions, 'scheme dark').map((a) => a.id), ['dark', 'ask', 'search']);
+    assert.deepEqual(filterPalette(actions, 'zzz').map((a) => a.id), ['ask', 'search']);
+    assert.equal(filterPalette(actions, '  '), actions);
   });
 });
 

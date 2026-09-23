@@ -8,6 +8,11 @@ import { ensureHedwigFonts } from './fontFaces.js';
 const STYLE_ID = 'hedwig-shell-styles';
 
 const CSS = `
+/* Native controls (checkboxes, selects, scrollbars, date pickers) follow the Hedwig scheme
+   instead of painting light boxes on the night palette. Mail bodies set their own. */
+:root[data-mailflow-theme="hedwig"] { color-scheme: light; }
+:root[data-mailflow-theme="hedwig-night"] { color-scheme: dark; }
+
 /* Upstream components size themselves for the classic shell (fixed sidebar width, the
    --list-width variable, a 42% list height in vertical mode). Inside a pane they fill it. */
 .hw-fill > * {
@@ -18,6 +23,29 @@ const CSS = `
   height: 100% !important;
   min-height: 0 !important;
 }
+/* ...and sit on the pane's glass in the glass palette: the component's own root paints no slab
+   and no edge border (the sheet has one), hovers and selected rows take the tint, borders become
+   hairlines. Popovers and dialogs inside keep their opaque --bg-secondary / --bg-elevated.
+   .hw-upstream is the same palette for an upstream surface that keeps its own ground (the
+   phone's folder drawer, which floats over the streams). */
+.hw-fill, .hw-upstream {
+  --bg-primary: var(--hw-surface);
+  --bg-tertiary: var(--hw-tint);
+  --bg-hover: var(--hw-tint);
+  --border: var(--hw-line2);
+  --border-subtle: var(--hw-line);
+  --text-primary: var(--hw-ink);
+  --text-secondary: var(--hw-muted);
+  --accent: var(--hw-accent);
+  font-family: var(--hw-font-body);
+  color: var(--hw-ink);
+}
+.hw-fill > * {
+  background: transparent !important;
+  border-right: 0 !important;
+  border-bottom: 0 !important;
+}
+.hw-fill *, .hw-upstream * { scrollbar-width: thin; scrollbar-color: var(--hw-line2) transparent; }
 .hw-view-host > * { flex: 1 1 auto; min-width: 0; min-height: 0; }
 
 /* Glass sheet: the one container in the v2 design. The blur sits on a pseudo-element, not the

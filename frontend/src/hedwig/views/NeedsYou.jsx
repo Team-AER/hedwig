@@ -145,7 +145,7 @@ export default function NeedsYou({ props = {} }) {
           </Select>
         </label>
       </div>
-      <div role="group" aria-label={tr('needsYou.category', 'Category')} style={{ display: 'flex', gap: 6, padding: '0 16px 10px', overflowX: 'auto', flexShrink: 0 }}>
+      <div role="group" aria-label={tr('needsYou.category', 'Category')} className="hw-scroll" style={{ display: 'flex', gap: 6, padding: '0 16px 10px', overflowX: 'auto', flexShrink: 0 }}>
         {TRIAGE_CATEGORIES.map((c) => (
           <Pill key={c.id} active={filter === c.id} count={res.data ? counts[c.id] ?? 0 : undefined} onClick={() => setFilter(c.id)}>
             {c.label}

@@ -6,6 +6,7 @@ import { indexMessages, embedPending, drain, chunkPending } from './store.js';
 import { coverageSummary, refreshCoverage, resetCoverage } from './coverage.js';
 import { applyRecipeChange, currentRecipe } from './recipe.js';
 import { reconcileBodies, requestAttachments, requestBodies } from './acquire.js';
+import { fetchBackoffs } from '../core/mailYield.js';
 
 export { retrieve, indexStatus, messageParts, attachmentCards } from './retrieve.js';
 export { splitBody } from './parse.js';
@@ -66,7 +67,7 @@ export async function rebuild({ userId = null, recipe = null } = {}) {
 /** Totals for /admin/health. */
 export async function indexHealth() {
   const cfg = await getConfig();
-  const [coverage, recipe, embedError, backlog] = await Promise.all([
+  const [coverage, recipe, embedError, backlog, backoffs] = await Promise.all([
     coverageSummary(),
     currentRecipe(),
     getState('index.embedError', null),
@@ -77,6 +78,7 @@ export async function indexHealth() {
                   COUNT(*) FILTER (WHERE attach_state = 'failed')::int AS attachments_failed,
                   COUNT(*) FILTER (WHERE error IS NOT NULL)::int AS errors
              FROM hedwig_index_msg`),
+    fetchBackoffs().catch(() => new Map()),
   ]);
   return {
     coverage,
@@ -84,5 +86,7 @@ export async function indexHealth() {
     recipe: { current: recipe.full, vectors: recipe.vectors, note: recipe.reason },
     tika: { enabled: cfg['index.tikaEnabled'], url: cfg['index.tikaUrl'] },
     embedError: embedError?.error || null,
+    // Accounts whose body/attachment fetches are backing off because the mail server pushed back.
+    fetchBackoff: [...backoffs].map(([accountId, b]) => ({ accountId, ...b, active: Boolean(b?.until && new Date(b.until).getTime() > Date.now()) })),
   };
 }

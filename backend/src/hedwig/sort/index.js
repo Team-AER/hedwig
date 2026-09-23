@@ -4,11 +4,14 @@ import { defineStep, userAddresses } from '../pipeline.js';
 import { defineJob } from '../jobs.js';
 import { defineSchedule } from '../schedule.js';
 import { getConfig } from '../config.js';
-import { runSortStep, runReflexJob, runResortJob, pendingSweep, backfillSweep, rescueSweep, sortUsers } from './engine.js';
+import {
+  runSortStep, runReflexJob, runResortJob, pendingSweep, backfillSweep, rescueSweep, sortUsers, runRescueJob, runReevaluateSpamJob,
+  ensureSpamSignalsCurrent,
+} from './engine.js';
 import { releaseDueBundles } from './bundles.js';
 import { refreshProposals } from './senders.js';
 import { retrainSortDue } from './learning.js';
-import { mountSortRoutes } from './routes.js';
+import { mountSortRoutes, mountSortAdminRoutes } from './routes.js';
 import { makeSpamMoveHandler } from './spamMove.js';
 import { correct } from './service.js';
 import { query } from '../../services/db.js';
@@ -52,6 +55,10 @@ export default {
     mountSortRoutes(router);
   },
 
+  adminRoutes(router) {
+    mountSortAdminRoutes(router);
+  },
+
   api({ imapManager }) {
     defineJob('sort.spamMove', makeSpamMoveHandler(imapManager), { timeoutMs: 90_000 });
   },
@@ -67,10 +74,14 @@ export default {
       return correct(job.user_id, body);
     }, { timeoutMs: 60_000 });
     defineJob('sort.resort', (payload, job) => runResortJob(payload, job), { timeoutMs: 5 * 60_000 });
+    defineJob('sort.rescue', (payload, job) => runRescueJob(payload, job), { timeoutMs: 15 * 60_000 });
+    defineJob('sort.reevaluateSpam', (payload, job) => runReevaluateSpamJob(payload, job), { timeoutMs: 15 * 60_000 });
     defineSchedule({ name: 'sort.pending', everySec: 30, run: pendingSweep });
     defineSchedule({ name: 'sort.backfill', everySec: 60, run: backfillSweep });
     defineSchedule({ name: 'sort.bundles', everySec: 60, run: () => releaseDueBundles() });
     defineSchedule({ name: 'sort.rescue', everySec: 600, run: () => rescueSweep() });
+    // Runs at start-up (short schedules are due at once) and re-checks cheaply: one state read.
+    defineSchedule({ name: 'sort.spamSignals', everySec: 600, run: () => ensureSpamSignalsCurrent() });
     defineSchedule({ name: 'sort.screener', everySec: 300, run: screenerTick });
     defineSchedule({ name: 'sort.retrain', everySec: 3600, run: () => retrainSortDue() });
   },

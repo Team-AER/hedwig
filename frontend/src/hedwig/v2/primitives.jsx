@@ -293,8 +293,8 @@ export function Dot({ color = V.accent, size = 7, style }) {
   return <span aria-hidden="true" style={{ width: size, height: size, borderRadius: '50%', background: color, flexShrink: 0, display: 'inline-block', ...style }} />;
 }
 
-export function Mono({ children, size = 11, color = V.muted, style }) {
-  return <span style={{ fontFamily: V.mono, fontSize: size, color, whiteSpace: 'nowrap', ...style }}>{children}</span>;
+export function Mono({ children, size = 11, color = V.muted, style, title }) {
+  return <span title={title} style={{ fontFamily: V.mono, fontSize: size, color, whiteSpace: 'nowrap', ...style }}>{children}</span>;
 }
 
 const GLYPHS = {

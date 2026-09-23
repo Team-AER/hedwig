@@ -115,6 +115,8 @@ export const SCHEMA = [
   { key: 'llm.lanes.background.concurrency', type: 'number', default: 1, min: 1, max: 64, group: 'models', label: 'Background lane: concurrent model calls (all processes)' },
   { key: 'llm.lanes.interactive.fallbackAfterMs', type: 'number', default: 8000, min: 500, max: 600000, group: 'models', label: 'Interactive lane: switch to the fallback after waiting (ms)', help: 'Replaces llm.fallbackAfterMs for calls a person is waiting on.' },
   { key: 'llm.lanes.leaseSec', type: 'number', default: 300, min: 10, max: 3600, group: 'models', label: 'Lane lease lifetime (s)', help: 'A slot held by a crashed process frees itself after this long.' },
+  { key: 'llm.lanes.interactive.waitMs', type: 'number', default: 30_000, min: 1000, max: 600_000, group: 'models', label: 'Interactive lane: longest wait for a free slot (ms)', help: 'A person is waiting, so the call fails fast with "lane busy" (503) after this. The fallback model shares the lane, so it cannot help here.' },
+  { key: 'llm.lanes.background.waitMs', type: 'number', default: 20 * 60_000, min: 1000, max: 6 * 3600_000, group: 'models', label: 'Background lane: longest wait for a free slot (ms)', help: 'Slots are handed out first come, first served. The wait does not count against the job timeout; a job still without a slot after this is deferred by jobs.laneDeferMin, attempts untouched.' },
   { key: 'llm.defaultMaxOutputTokens', type: 'number', default: 8192, min: 256, max: 262144, group: 'models', label: 'Output token cap when the catalog does not list one' },
   { key: 'llm.keepTranscripts', type: 'boolean', default: false, group: 'models', label: 'Keep prompt and output text of model calls', help: 'For debugging prompts. Stored in hedwig_ai_calls and pruned after llm.transcriptDays.' },
   { key: 'llm.transcriptDays', type: 'number', default: 14, min: 1, max: 365, group: 'models', label: 'Keep transcripts for (days)' },
@@ -132,6 +134,7 @@ export const SCHEMA = [
   { key: 'jobs.reapAfterMin', type: 'number', default: 30, min: 1, max: 1440, group: 'pipeline', label: 'Requeue a running job with no timeout after (min)' },
   { key: 'jobs.healthGateSec', type: 'number', default: 60, min: 10, max: 3600, group: 'pipeline', label: 'Probe the gateway for the job health gate every (s)' },
   { key: 'jobs.reconcileEverySec', type: 'number', default: 900, min: 60, max: 86400, group: 'pipeline', label: 'Reconcile failed jobs every (s)' },
+  { key: 'jobs.laneDeferMin', type: 'number', default: 5, min: 1, max: 1440, group: 'pipeline', label: 'Defer a job by (min) when its model lane stayed full for the whole wait', help: 'Deferred, not failed: attempts are untouched.' },
   // --- end v2 runtime ---
 
   // --- v2 labels ---
@@ -170,6 +173,18 @@ export const SCHEMA = [
   { key: 'spam.rescueAbove', type: 'number', default: 0.7, min: 0, max: 1, group: 'sort', label: 'Rescue mail from the spam folder at confidence above', scope: 'user' },
   { key: 'spam.suspectedDays', type: 'number', default: 30, min: 1, max: 365, group: 'sort', label: 'Check the spam folder and show suspected spam for (days)' },
   { key: 'spam.phishingEscalateBelow', type: 'number', default: 0.8, min: 0, max: 1, group: 'sort', label: 'Ask the reasoning model about suspected phishing below confidence' },
+  // Same list as DEFAULT_TRUSTED_LINK_HOSTS in sort/spam.js (sort.test.js keeps them equal).
+  { key: 'spam.trustedLinkHosts', type: 'json', group: 'sort', label: 'CDN and email-service link hosts that never count as a foreign link in phishing checks', default: [
+    'media-amazon.com', 'ssl-images-amazon.com', 'images-amazon.com', 'cloudfront.net', 'akamaized.net', 'akamaihd.net',
+    'akamai.net', 'edgekey.net', 'fastly.net', 'jsdelivr.net', 'imgix.net', 'wikimedia.org', 'wikipedia.org',
+    'googleusercontent.com', 'gstatic.com', 'ggpht.com', 'ytimg.com', 'twimg.com', 'fbcdn.net', 'licdn.com', 'gravatar.com',
+    'w3.org', 'schema.org', 'sendgrid.net', 'list-manage.com', 'mailchimp.com', 'mcusercontent.com', 'mailchi.mp', 'hubspot.com',
+    'hubspotemail.net', 'hubspotlinks.com', 'hs-sites.com', 'hsforms.com', 'hs-analytics.net', 'mailgun.org', 'mandrillapp.com',
+    'sparkpostmail.com', 'exacttarget.com', 'sfmc-content.com', 'rs6.net', 'ctctcdn.com', 'klaviyo.com', 'klclick.com',
+    'klclick1.com', 'createsend.com', 'createsend1.com', 'cmail19.com', 'cmail20.com', 'mailjet.com', 'mjt.lu', 'sendinblue.com',
+    'brevo.com', 'amazonses.com', 'awstrack.me', 'substack.com', 'substackcdn.com', 'customeriomail.com', 'braze.com',
+    'postmarkapp.com', 'mailerlite.com',
+  ] },
   { key: 'rules.maxPerUser', type: 'number', default: 200, min: 1, max: 5000, group: 'sort', label: 'Sorting rules per user' },
   // --- end v2 sort ---
   // --- v2 index ---
@@ -182,7 +197,9 @@ export const SCHEMA = [
   { key: 'index.maxChunksPerMessage', type: 'number', default: 80, min: 4, max: 1000, group: 'index', label: 'Most chunks kept per message' },
   { key: 'index.recipe', type: 'string', default: 'v1', group: 'index', label: 'Chunker recipe version', help: 'Changing it re-chunks and re-embeds in the background; search keeps the old recipe until the new one is complete per user.' },
   { key: 'index.tsConfig', type: 'string', default: 'simple', group: 'index', label: 'Postgres text-search configuration' },
-  { key: 'index.bodyRatePerSec', type: 'number', default: 5, min: 0.1, max: 100, group: 'index', label: 'Body/attachment fetches per second per mail host' },
+  { key: 'index.bodyRatePerSec', type: 'number', default: 1, min: 0.05, max: 100, group: 'index', label: 'Body/attachment fetches per second per mail host', help: 'Fractions allowed (0.5 = one every 2 s). Body fetching always yields to mail sync: it waits while the account is syncing, backfilling, connecting or in a provider cooldown, and backs off per account (1, 2, 4 … 15 min) when the server says "Connection not available" or "try again later".' },
+  { key: 'index.bodyRateByProvider', type: 'json', default: { yahoo: 0.5 }, group: 'index', label: 'Body/attachment fetch rate per provider (fetches per second)', help: 'Replaces index.bodyRatePerSec for that provider: google, yahoo, apple, microsoft, purelymail, generic (same detection as the mail engine), or an exact IMAP host.' },
+  { key: 'index.bodyConcurrency', type: 'number', default: 1, min: 1, max: 4, group: 'index', label: 'Body/attachment fetches in flight per account', help: 'Hedwig fetches share the account\'s IMAP connection pool with the mail app; keep this low.' },
   { key: 'index.bodyMaxAgeDays', type: 'number', default: 0, min: 0, max: 100000, group: 'index', label: 'Fetch bodies for mail up to (days) old', help: '0 = all mail.' },
   { key: 'index.indexSpamFolder', type: 'boolean', default: true, group: 'index', label: 'Index the server spam folder (hidden from search unless asked)' },
   { key: 'index.coverageEverySec', type: 'number', default: 60, min: 10, max: 3600, group: 'index', label: 'Recount index coverage every (s)' },

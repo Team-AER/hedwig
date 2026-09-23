@@ -4,6 +4,7 @@ import { useStore } from '../store/index.js';
 import { useMobile } from '../hooks/useMobile.js';
 import { THEMES } from '../themes.js';
 import { useHedwigPaletteActions } from '../hedwig/shell/paletteActions.jsx';
+import { filterPalette } from '../hedwig/shell/paletteMatch.js';
 
 const THEME_NAMES = Object.keys(THEMES);
 
@@ -75,9 +76,7 @@ export default function CommandPalette({ open, onClose }) {
   const hedwigActions = useHedwigPaletteActions(query);
   const actions = [...upstreamActions.slice(0, 4), ...hedwigActions, ...upstreamActions.slice(4)];
 
-  const filtered = query.trim()
-    ? actions.filter(a => `${a.label} ${a.group || ''}`.toLowerCase().includes(query.toLowerCase()))
-    : actions;
+  const filtered = filterPalette(actions, query);
 
   useEffect(() => {
     if (open) {

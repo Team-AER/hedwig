@@ -18,9 +18,10 @@ const ContactsPage = lazy(() => import('../../components/ContactsPage.jsx'));
 
 // Upstream components size themselves for the classic shell; .hw-fill makes them fill the pane,
 // and --list-width scoped here makes MessageList's width follow the pane instead of the root.
-function Fill({ children, vars }) {
+// .hw-fill also puts them on the pane's glass (see styles.js): no opaque slab, no second border.
+function Fill({ children }) {
   return (
-    <div className="hw-fill" style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', overflow: 'hidden', '--list-width': '100%', background: 'var(--bg-primary)', ...vars }}>
+    <div className="hw-fill hw-scroll" style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', overflow: 'hidden', '--list-width': '100%' }}>
       {children}
     </div>
   );
@@ -34,8 +35,7 @@ function Spinner() {
   );
 }
 
-// The nav sits on the raised tone, as in the design; upstream's sidebar paints --bg-secondary.
-function NavView() { return <Fill vars={{ '--bg-secondary': 'var(--hw-raised)' }}><Sidebar /></Fill>; }
+function NavView() { return <Fill><Sidebar /></Fill>; }
 function ListView() { return <Fill><MessageList /></Fill>; }
 function ThreadView() { return <Fill><ReadingPane /></Fill>; }
 function ContactsView() {

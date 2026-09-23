@@ -4,6 +4,7 @@
 // (on a phone, the thread's Change does it). The row's main area is one real button (Enter opens
 // the thread); the reason is a second button, not nested in the first. A reminder row (synthetic,
 // no message) has nothing to open or explain.
+import { useEffect } from 'react';
 import { useV2 } from './state.js';
 import { Mono, V, Why } from './primitives.jsx';
 import { listTime, senderName } from './format.js';
@@ -98,6 +99,34 @@ export function onListKeyDown(e) {
   const i = all.indexOf(t);
   const next = all[i + (down ? 1 : -1)];
   if (next) { e.preventDefault(); next.focus(); }
+}
+
+/**
+ * j / k (or the arrows) with no row focused yet — right after "g p", or with the pane itself
+ * focused — step into the list: the first row takes focus, and onListKeyDown carries on from there.
+ */
+export function firstRowFor(active, root) {
+  if (!root) return null;
+  if (active && (active.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName || ''))) return null;
+  if (active?.hasAttribute?.('data-row-button') || active?.closest?.('[role="dialog"], [role="menu"]')) return null;
+  const pane = root.closest?.('[data-pane-key]') || root;
+  const here = !active || active === document.body || active === pane || pane.contains(active);
+  return here ? root.querySelector('[data-row-button]') : null;
+}
+
+export function useFirstRowKeys(rootRef) {
+  useEffect(() => {
+    // Not skipped when defaultPrevented: upstream's global shortcuts claim j / k for its message
+    // list (preventDefault even with no list on screen), and this only acts with a stream showing.
+    const onKey = (e) => {
+      if (e.metaKey || e.ctrlKey || e.altKey || e.isComposing) return;
+      if (!['j', 'k', 'ArrowDown', 'ArrowUp'].includes(e.key)) return;
+      const first = firstRowFor(document.activeElement, rootRef.current);
+      if (first) { e.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [rootRef]);
 }
 
 export function GroupLabel({ children, tone = 'muted', first = false, phone = false }) {

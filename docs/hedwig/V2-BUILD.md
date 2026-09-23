@@ -36,6 +36,8 @@ People, Screener, Thread).
 | **F Working the inbox** (wave 2) | `backend/src/hedwig/work/` — lists (Done, Reply Later, Set Aside, pins, reminders, snoozed), thread story + quick replies, drafts in your voice, Waiting On + nudges, send guard; routes `/work/…` | `h0014_work.sql` | `work.*` |
 | **G Ask and cards** (wave 2) | `backend/src/hedwig/ask2/` (query plan, retrieval, citation check, saved answers, feedback; `context/ask.js` delegates to it), `backend/src/hedwig/cards/` (detectors, Reflex extraction, ledgers, `/cards/…`) | `h0015_cards.sql` | `ask.*`, `cards.*` |
 
+Production hardening (2026-09-24): every Hedwig IMAP fetch goes through `core/mailYield.js` `guardedFetch`, which yields to upstream sync, provider cooldowns and recent user activity, backs off per account (1 → 15 min) on refusals, and defers the job without spending an attempt; `index.bodyRatePerSec` (1, fractions allowed), `index.bodyRateByProvider` (`{ "yahoo": 0.5 }`), `index.bodyConcurrency` (1). Lanes are first-come-first-served with `llm.lanes.background.waitMs` (20 min) and `llm.lanes.interactive.waitMs` (30 s); a job that cannot get a slot is deferred by `jobs.laneDeferMin`. Spam: `spam.trustedLinkHosts` lists CDN/link-wrapper hosts ignored by the link-mismatch signal; `phishing` needs two independent signs; rescue runs on every path through spam-folder mail and `sort.reevaluateSpam` re-judges rows when `spam.signalsVersion` changes.
+
 Retrieval floor (tuned on bge-m3, 2026-09-23): `index.minCosine` 0.50 (`index.minCosineHash` 0.40 for the hash provider), `index.minTermCoverage` 0.5, `index.minFtsRank` 0.8 admit chunks before fusion; `index.floor` only trims the fused tail. Retune `minCosine` when the embedding model changes.
 
 Shared files, and the only allowed edits:

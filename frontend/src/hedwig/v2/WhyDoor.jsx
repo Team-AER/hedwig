@@ -9,13 +9,28 @@ import { v2Api, announceSortChange } from './client.js';
 import { Btn, Hair, LinkBtn, Mono, Pick, Sheet, V, Why, usePhone } from './primitives.jsx';
 import { tv } from './i18n.js';
 
+// Read inside "Decided by {{layer}}", so they are lower case mid-sentence.
 const LAYERS = {
-  rule: () => tv('hedwig.v2.why.layer.rule', 'A rule'),
-  classifier: () => tv('hedwig.v2.why.layer.classifier', 'Your history'),
-  reflex: () => tv('hedwig.v2.why.layer.reflex', 'Reflex model'),
-  reasoning: () => tv('hedwig.v2.why.layer.reasoning', 'Reasoning model'),
-  user: () => tv('hedwig.v2.why.layer.user', 'You'),
+  rule: () => tv('hedwig.v2.why.layer.rule', 'a rule'),
+  classifier: () => tv('hedwig.v2.why.layer.classifier', 'your history'),
+  reflex: () => tv('hedwig.v2.why.layer.reflex', 'the Reflex model'),
+  reasoning: () => tv('hedwig.v2.why.layer.reasoning', 'the Reasoning model'),
+  user: () => tv('hedwig.v2.why.layer.user', 'you'),
 };
+
+/** The signals worth listing: as text, without blanks, repeats, or a repeat of the reason above them. */
+export function whySignals(d, fallbackReason) {
+  const reason = String(d?.reason || fallbackReason || '').trim().toLowerCase();
+  const seen = new Set(reason ? [reason] : []);
+  const out = [];
+  for (const s of Array.isArray(d?.signals) ? d.signals : []) {
+    const text = String(typeof s === 'string' ? s : (s?.label || s?.name || '')).trim();
+    if (!text || seen.has(text.toLowerCase())) continue;
+    seen.add(text.toLowerCase());
+    out.push(text);
+  }
+  return out;
+}
 
 export function streamOptions() {
   return [
@@ -103,7 +118,9 @@ export function WhyDoor({ item, anchor, onClose }) {
     const left = Math.max(12, Math.min(r.left, window.innerWidth - width - 12));
     const below = window.innerHeight - r.bottom;
     const top = below > 360 ? r.bottom + 8 : Math.max(12, r.top - 8 - Math.min(460, window.innerHeight - 24));
-    setPos({ top, left, width });
+    // Never past the bottom of the window (the change form makes it taller), nor over the anchor.
+    const maxHeight = Math.min(560, below > 360 ? window.innerHeight - top - 12 : Math.max(200, r.top - 8 - top));
+    setPos({ top, left, width, maxHeight });
   }, [anchor, phone]);
 
   useEffect(() => {
@@ -144,6 +161,7 @@ export function WhyDoor({ item, anchor, onClose }) {
   const d = why.data;
   const layer = d?.layer ? (LAYERS[d.layer]?.() || d.layer) : null;
   const conf = typeof d?.confidence === 'number' ? Math.round(d.confidence * 100) : null;
+  const signals = whySignals(d, item.reason);
   const title = tv('hedwig.v2.why.title', 'Why Hedwig put it here');
 
   const body = (
@@ -162,7 +180,7 @@ export function WhyDoor({ item, anchor, onClose }) {
         '--hw-glass': `color-mix(in srgb, var(--hw-paper) ${phone ? 97 : 90}%, transparent)`,
         boxShadow: '0 30px 80px -30px var(--hw-shadow-color)',
         position: 'fixed', zIndex: 9500, display: 'flex', flexDirection: 'column', gap: 12, padding: phone ? '20px 20px calc(24px + env(safe-area-inset-bottom, 0px))' : '18px 20px 18px',
-        maxHeight: phone ? '80vh' : 'min(560px, calc(100vh - 24px))', overflowY: 'auto', fontFamily: V.sans, fontSize: 14,
+        maxHeight: phone ? '80vh' : (pos?.maxHeight || 'min(560px, calc(100vh - 24px))'), overflowY: 'auto', fontFamily: V.sans, fontSize: 14,
         animation: 'hw-pop-in var(--motion-fast, 120ms) var(--ease-standard, ease) both',
         ...(phone ? { left: 0, right: 0, bottom: 0, borderRadius: '28px 28px 0 0', borderBottom: 0 } : pos ? { top: pos.top, left: pos.left, width: pos.width } : { top: '20vh', left: 'calc(50% - 190px)', width: 380 }),
       }}
@@ -184,10 +202,10 @@ export function WhyDoor({ item, anchor, onClose }) {
             {layer && <span>{tv('hedwig.v2.why.decidedBy', 'Decided by {{layer}}', { layer })}</span>}
             {conf != null && <Mono size={12}>{tv('hedwig.v2.why.confidence', '{{n}}% sure', { n: conf })}</Mono>}
           </div>
-          {Array.isArray(d.signals) && d.signals.length > 0 && (
+          {signals.length > 0 && (
             <div style={{ display: 'flex', flexDirection: 'column' }}>
-              {d.signals.map((s, i) => (
-                <div key={i} style={{ padding: '8px 0', borderTop: `1px solid ${V.line}`, fontSize: 14 }}>{typeof s === 'string' ? s : (s.label || s.name || JSON.stringify(s))}</div>
+              {signals.map((s) => (
+                <div key={s} style={{ padding: '8px 0', borderTop: `1px solid ${V.line}`, fontSize: 14 }}>{s}</div>
               ))}
             </div>
           )}

@@ -861,7 +861,7 @@ export default function Sidebar() {
             <OwlMark size={22} />
             <span style={{
               fontFamily: "var(--hw-font-display, 'Fraunces', serif)",
-              fontSize: 18, fontWeight: 600, color: 'var(--text-primary)',
+              fontSize: 22, fontWeight: 400, color: 'var(--text-primary)',
               letterSpacing: '-0.01em', whiteSpace: 'nowrap',
             }}>
               Hedwig

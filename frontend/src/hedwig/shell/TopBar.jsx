@@ -84,7 +84,7 @@ export function layoutMenuItems() {
   items.push({ id: 'arrange', label: 'Arrange panes', checked: s.arrange, onSelect: () => s.toggleArrange() });
   items.push({ id: 'edit', label: 'Edit layouts…', icon: 'layout', onSelect: () => useHedwig.getState().openView('hedwig.layouts') });
   items.push({ id: 'export', label: 'Export layout as JSON', icon: 'export', onSelect: exportCurrentLayout });
-  items.push({ id: 'classic', label: 'Classic MailFlow layout', icon: 'classic', onSelect: () => useHedwig.getState().setShellMode('classic') });
+  items.push({ id: 'classic', label: 'MailFlow shell, without panes', icon: 'classic', onSelect: () => useHedwig.getState().setShellMode('classic') });
   return items;
 }
 

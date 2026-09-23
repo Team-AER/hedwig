@@ -462,11 +462,17 @@ const firstSentence = (s, max = 140) => {
 
 async function briefNeedsYou(userId, hasSort) {
   if (hasSort) {
+    // One row per conversation (its latest message that needs you), as the People stream counts
+    // them, so the headline and the list agree with People.
     const { rows } = await query(
-      `SELECT s.message_id AS id, m.thread_key, m.from_name, m.from_email, m.subject, m.date, COALESCE(s.needs_you_reason, s.reason) AS reason
-         FROM hedwig_sort s JOIN messages m ON m.id = s.message_id JOIN email_accounts a ON a.id = m.account_id AND a.user_id = $1
-        WHERE s.user_id = $1 AND s.needs_you AND NOT m.is_deleted AND m.date > NOW() - INTERVAL '14 days'
-        ORDER BY m.date DESC LIMIT 8`,
+      `SELECT * FROM (
+         SELECT DISTINCT ON (m.account_id, COALESCE(m.thread_key, m.id::text))
+                s.message_id AS id, m.thread_key, m.from_name, m.from_email, m.subject, m.date, COALESCE(s.needs_you_reason, s.reason) AS reason
+           FROM hedwig_sort s JOIN messages m ON m.id = s.message_id JOIN email_accounts a ON a.id = m.account_id AND a.user_id = $1
+          WHERE s.user_id = $1 AND s.needs_you AND NOT m.is_deleted AND m.date > NOW() - INTERVAL '14 days'
+          ORDER BY m.account_id, COALESCE(m.thread_key, m.id::text), m.date DESC NULLS LAST, m.id DESC
+       ) latest
+        ORDER BY date DESC LIMIT 8`,
       [userId],
     );
     return rows;

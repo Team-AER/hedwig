@@ -67,10 +67,11 @@ export function createFakeJobsDb() {
       r.tokens_in += tin; r.tokens_out += tout;
       return { rowCount: 1 };
     }
-    if (s.startsWith("UPDATE hedwig_jobs SET locked_at = NULL, attempts = GREATEST(attempts - 1, 0), status = 'queued', last_error = $2, run_at = NOW() + ($3 || ' minutes')")) {
-      const [id, msg, min] = params;
+    if (s.startsWith("UPDATE hedwig_jobs SET locked_at = NULL, attempts = GREATEST(attempts - 1, 0), status = 'queued', last_error = $2, run_at = NOW() + ($3 || ' seconds')")) {
+      const [id, msg, sec, tin = 0, tout = 0] = params;
       const r = byId(id);
-      Object.assign(r, { locked_at: null, attempts: Math.max(r.attempts - 1, 0), status: 'queued', last_error: msg, run_at: now + Number(min) * 60_000 });
+      Object.assign(r, { locked_at: null, attempts: Math.max(r.attempts - 1, 0), status: 'queued', last_error: msg, run_at: now + Number(sec) * 1000 });
+      r.tokens_in += tin; r.tokens_out += tout;
       return { rowCount: 1 };
     }
     if (s.startsWith("UPDATE hedwig_jobs SET run_at = NOW() + ($2 || ' minutes')::interval, last_error = $3")) {

@@ -7,7 +7,7 @@ import { useHedwig } from '../store.js';
 import { useStore } from '../../store/index.js';
 import * as M from './model.js';
 import { buildTemplate, getTemplate } from './templates.js';
-import { pickLayout, savedLayoutsFor } from './layouts.js';
+import { pickLayout, savedLayoutsFor, isPreV2Layout } from './layouts.js';
 
 const SAVE_DELAY_MS = 800;
 const LOAD_TIMEOUT_MS = 4000;
@@ -21,7 +21,9 @@ function readCache(device) {
   try {
     const raw = JSON.parse(localStorage.getItem(cacheKey(device)) || 'null');
     const tree = raw && M.normalise(raw.tree);
-    return tree && M.validTree(tree) ? { name: raw.name || 'Layout', templateId: raw.templateId || null, tree } : null;
+    // A layout cached before v2 is not painted: the server's answer decides (and moves it to Classic).
+    if (!tree || !M.validTree(tree) || isPreV2Layout(tree)) return null;
+    return { name: raw.name || 'Layout', templateId: raw.templateId || null, tree };
   } catch { return null; }
 }
 
@@ -79,6 +81,11 @@ export const useShell = create((set, get) => ({
     if (Array.isArray(rows)) set({ rows });
     if (pick.source === 'saved') {
       if (!cached || !M.sameShape(cached.tree, pick.tree)) get().setTree(pick.tree, { name: pick.name, templateId: pick.templateId, save: false });
+    } else if (pick.source === 'migrate') {
+      get().setTree(pick.tree, { name: pick.name, templateId: pick.templateId, save: false });
+      await get().keepClassic(pick.classic, rows);
+      if (seq !== initSeq) return;
+      await get().flushSave();
     } else if (!cached) {
       get().setTree(pick.tree, { name: pick.name, templateId: pick.templateId, save: false });
     } else if (Array.isArray(rows)) {
@@ -91,6 +98,7 @@ export const useShell = create((set, get) => ({
   setTree(tree, { name, templateId, save = true } = {}) {
     let next = tree ? M.normalise(tree) : null;
     if (!next || !M.validTree(next)) next = M.normalise(M.view('core.picker'));
+    next = { ...next, version: M.LAYOUT_VERSION };
     const patch = { tree: next };
     if (name !== undefined) patch.name = name;
     if (templateId !== undefined) patch.templateId = templateId;
@@ -127,6 +135,23 @@ export const useShell = create((set, get) => ({
     }
   },
 
+  // The layout a user had before v2, kept under "Classic" (stamped, so it is never moved again)
+  // in place of the row it came from. The streams template is saved as active by the caller.
+  async keepClassic(classic, rows) {
+    if (!classic?.tree) return;
+    const { device } = get();
+    const from = (rows || []).find((r) => r.is_active && r.device === device);
+    try {
+      const row = await hedwigApi.put('/layouts', { name: classic.name, device, tree: { ...classic.tree, version: M.LAYOUT_VERSION }, active: false });
+      if (from && from.id !== row.id && from.name !== classic.name) {
+        await hedwigApi.del(`/layouts/${from.id}`).catch((err) => console.warn('[hedwig] could not remove the old layout row:', err.message));
+      }
+      set((s) => ({ rows: [...s.rows.filter((r) => r.id !== row.id && r.id !== from?.id), row] }));
+    } catch (err) {
+      console.warn('[hedwig] could not keep the old layout as Classic:', err.message);
+    }
+  },
+
   savedLayouts() {
     const { rows, device } = get();
     return savedLayoutsFor(rows, device);
@@ -149,7 +174,8 @@ export const useShell = create((set, get) => ({
     if (!tree || !M.validTree(tree)) return;
     get().setTree(tree, { name: row.name, templateId: getTemplate(String(row.name).toLowerCase())?.id || null, save: false });
     set((s) => ({ rows: s.rows.map((r) => (r.device === row.device ? { ...r, is_active: r.id === row.id } : r)), overlay: null, focused: null }));
-    if (row.id && row.device === get().device) {
+    // A row saved before v2 is saved again with the version stamp, or the next load would move it.
+    if (row.id && row.device === get().device && !isPreV2Layout(row.tree)) {
       try { await hedwigApi.post(`/layouts/${row.id}/activate`); } catch (err) { console.warn('[hedwig] could not activate layout:', err.message); }
     } else {
       get().scheduleSave();

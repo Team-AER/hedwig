@@ -67,6 +67,8 @@ export default {
           insights: cfg['features.insights'],
           agent: cfg['features.agent'],
           extraction: cfg['features.extraction'],
+          // The v2 shell's counts and streams start only when sorting is on for this user.
+          sort: cfg['sort.enabled'],
         },
         ui: { defaultTemplate: cfg['ui.defaultTemplate'] },
       });

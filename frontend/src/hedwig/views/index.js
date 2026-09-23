@@ -52,7 +52,7 @@ export const HEDWIG_COMMANDS = [
   { id: 'hedwig.ask', title: 'Ask across all mail', keys: 'g a', when: on('context'), run: open('hedwig.ask', { question: '' }) },
   { id: 'hedwig.needs', title: 'Needs you', keys: 'g n', when: on('triage'),
     run: () => { useHedwig.getState().setTriageFilter('needs_you'); useHedwig.getState().openView('hedwig.needs', {}); } },
-  { id: 'hedwig.insights', title: 'Insights', keys: 'g i', when: on('insights'), run: open('hedwig.insights') },
+  { id: 'hedwig.insights', title: 'Insights', keys: 'g s', when: on('insights'), run: open('hedwig.insights') },
   { id: 'hedwig.agent', title: 'Agent', keys: 'g .', when: on('agent'), run: open('hedwig.agent') },
   { id: 'hedwig.people', title: 'Correspondents', when: on('context'), run: open('hedwig.people') },
   { id: 'hedwig.briefing', title: 'Daily briefing', when: on('insights'), run: open('hedwig.insights', { focus: 'briefing' }) },

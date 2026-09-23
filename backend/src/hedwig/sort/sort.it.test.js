@@ -277,7 +277,7 @@ describe.skipIf(!process.env.HEDWIG_IT)('sorting the seeded demo mailbox', () =>
     const legit = await mk(workAccount, 'Priya Nair', 'priya.nair@vantage.example', 'prakhar@vantage.example', 'Offsite agenda', 'Hi Prakhar, can you review the offsite agenda before Friday?');
     const lure = await mk(personalAccount, 'PayPal', 'service@paypa1.com', 'prakhar.demo@gmail.com', 'Your account is limited', 'Please verify your account at https://paypa1-secure.example/login or it will be suspended.');
     const n = await engine.rescueSweep({ userIds: [userId] });
-    expect(n).toBeGreaterThanOrEqual(1);
+    expect(n.rescued).toBeGreaterThanOrEqual(1);
     const { rows } = await query('SELECT message_id, stream, spam, spam_reason, in_spam_folder FROM hedwig_sort WHERE message_id = ANY($1::uuid[])', [[legit, lure]]);
     const by = new Map(rows.map((r) => [r.message_id, r]));
     expect(by.get(legit)).toMatchObject({ spam: 'rescued', stream: 'people', in_spam_folder: true });
@@ -288,5 +288,68 @@ describe.skipIf(!process.env.HEDWIG_IT)('sorting the seeded demo mailbox', () =>
     const spamList = await service.streamList(userId, 'spam', { limit: 50 });
     expect(spamList.items.map((i) => i.messageId)).toContain(lure);
     expect(spamList.items.map((i) => i.messageId)).not.toContain(legit);
+  });
+
+  it('re-judges spam-folder mail already stored as suspected, records the sweep, and clears false phishing on re-evaluation', async () => {
+    const workAccount = (await query("SELECT id FROM email_accounts WHERE user_id = $1 AND email_address = 'prakhar@vantage.example'", [userId])).rows[0].id;
+    const mk = async (folder, fromName, fromEmail, subject, body, to = 'prakhar@vantage.example') => {
+      const id = randomUUID();
+      inserted.push(id);
+      await query(
+        `INSERT INTO messages (id, account_id, uid, folder, message_id, subject, from_name, from_email, to_addresses, date, snippet, body_text)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW() - INTERVAL '3 hours', $10, $10)`,
+        [id, workAccount, 910000 + inserted.length, folder, `<${id}@hedwig.test>`, subject, fromName, fromEmail, JSON.stringify([{ address: to }]), body],
+      );
+      return id;
+    };
+    // What production had after the first night: the classifier stored it as suspected before rescue saw it.
+    const known = await mk('Junk', 'Priya Nair', 'priya.nair@vantage.example', 'Revised offsite budget', 'Hi Prakhar, could you sign off the revised budget today?');
+    await query(
+      `INSERT INTO hedwig_sort (message_id, user_id, account_id, stream, spam, spam_reason, confidence, layer, reason, signals, in_spam_folder, decided_at)
+       VALUES ($1, $2, $3, 'spam', 'suspected', 'Your provider filed this as spam', 0.82, 'classifier', 'A person writing to you', '[]'::jsonb, true, NOW() - INTERVAL '1 hour')`,
+      [known, userId, workAccount],
+    );
+    // A false phishing flag from the old signals: the sender's own brand on another suffix.
+    const brand = await mk('INBOX', 'Vantage HR', 'hr@vantage.email', 'Benefits window opens Monday', 'The benefits window opens on Monday. Details on the intranet.');
+    await query(
+      `INSERT INTO hedwig_sort (message_id, user_id, account_id, stream, spam, spam_reason, confidence, layer, reason, signals, in_spam_folder, decided_at)
+       VALUES ($1, $2, $3, 'spam', 'phishing', 'Sender domain vantage.email looks like vantage.example', 0.72, 'classifier', 'Sender domain vantage.email looks like vantage.example', '[]'::jsonb, false, NOW() - INTERVAL '1 hour')`,
+      [brand, userId, workAccount],
+    );
+
+    // The evidence queries run against the real schema (sent mail To/Cc, not-spam marks and labels).
+    const warned = [];
+    const warn = console.warn;
+    console.warn = (...a) => { warned.push(a.join(' ')); };
+    let ev;
+    try {
+      ev = await engine.rescueEvidence(userId, ['priya.nair@vantage.example', 'nobody@nowhere.example'], new Set(['prakhar@vantage.example', 'me@prafiles.example', 'prakhar.demo@gmail.com']));
+    } finally {
+      console.warn = warn;
+    }
+    expect(warned).toEqual([]);
+    expect(ev.get('priya.nair@vantage.example').wroteTo).toBeGreaterThanOrEqual(1);
+    expect(ev.get('nobody@nowhere.example')).toEqual({ wroteTo: 0, notSpam: 0 });
+
+    const res = await engine.rescueSweep({ userIds: [userId] });
+    expect(res.scanned).toBeGreaterThanOrEqual(1);
+    const row = (await query('SELECT * FROM hedwig_sort WHERE message_id = $1', [known])).rows[0];
+    expect(row).toMatchObject({ spam: 'rescued', in_spam_folder: true });
+    expect(row.stream).not.toBe('spam');
+    expect(row.signals[0]).toMatchObject({ name: 'rescue' });
+    const { rows: st } = await query("SELECT value FROM hedwig_state WHERE key = 'schedule.sort.rescue'");
+    expect(st[0].value).toMatchObject({ at: expect.any(String), scanned: expect.any(Number), rescued: expect.any(Number) });
+    // Judged once: the next sweep does not pick it up again.
+    const again = await engine.rescueSweep({ userIds: [userId] });
+    expect(again.scanned).toBe(0);
+
+    const out = await engine.runReevaluateSpamJob({}, { user_id: userId });
+    expect(out.checked).toBeGreaterThanOrEqual(2);
+    const fixed = (await query('SELECT spam, stream, spam_reason FROM hedwig_sort WHERE message_id = $1', [brand])).rows[0];
+    expect(fixed.spam).not.toBe('phishing');
+    expect(fixed.stream).not.toBe('spam');
+    const { rows: ver } = await query('SELECT value FROM hedwig_state WHERE key = $1', [`spam.signalsVersion:${userId}`]);
+    expect(ver[0].value).toMatchObject({ doneAt: expect.any(String) });
+    expect((await query('SELECT spam FROM hedwig_sort WHERE message_id = $1', [known])).rows[0].spam).toBe('rescued');
   });
 });

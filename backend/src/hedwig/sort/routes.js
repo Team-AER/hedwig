@@ -44,4 +44,15 @@ export function mountSortRoutes(r) {
   r.delete('/sort/rules/:id', handle((req, userId) => svc.removeRule(userId, req.params.id)));
 
   r.get('/sort/message/:id/why', handle((req, userId) => svc.why(userId, req.params.id)));
+
+  // Check the spam folder for mail worth rescuing now (queued; the result lands in the Screener).
+  r.post('/sort/rescue/run', handle((req, userId) => svc.runRescue(userId)));
+  r.get('/sort/rescue/status', handle((req, userId) => svc.rescueStatus(userId)));
+}
+
+// /api/hedwig/admin/sort/* (requireAdmin applied by the module loader).
+export function mountSortAdminRoutes(r) {
+  r.get('/sort/rescue', handle(() => svc.rescueStatus(null)));
+  r.post('/sort/rescue/run', handle((req) => svc.runRescueFor((req.body || {}).userId || null)));
+  r.post('/sort/spam/reevaluate', handle((req) => svc.reevaluateSpamFor((req.body || {}).userId || null)));
 }

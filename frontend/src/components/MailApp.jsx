@@ -748,6 +748,7 @@ export default function MailApp() {
           )}
           {/* Slide-in sidebar drawer */}
           <div
+            className={hedwigShell ? 'hw-upstream' : undefined}
             style={{
               position: 'fixed', left: 0, top: 0, bottom: 0,
               zIndex: 901, display: 'flex',

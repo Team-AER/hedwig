@@ -3,7 +3,7 @@
 // the rest by day, a page at a time with "Show more"; Records collapses each bundle to one line
 // with a summary. People has the Reply Later footer on desktop; on a phone it carries the day's
 // first question (on desktop the question lives in the Daily Brief).
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useStore } from '../../store/index.js';
 import { useV2, streamPath, countText } from './state.js';
 import { useV2Resource, useV2Pages, useWork } from './hooks.js';
@@ -12,7 +12,7 @@ import { openThread, showView, VIEW } from './nav.js';
 import { markRead, LIST_KIND } from './mail.js';
 import { useWhyDoor } from './WhyDoor.jsx';
 import { Question } from './Question.jsx';
-import { StreamRow, GroupLabel, onListKeyDown } from './rows.jsx';
+import { StreamRow, GroupLabel, onListKeyDown, useFirstRowKeys } from './rows.jsx';
 import { Figure, Glyph, Hair, IconBtn, LinkBtn, Mono, Quiet, ErrorLine, TextTabs, V, ViewBody, ViewHead, Why, usePhone } from './primitives.jsx';
 import { groupBundles, groupLabel, listTime, splitStream } from './format.js';
 import { tv, tvn } from './i18n.js';
@@ -182,13 +182,15 @@ export default function StreamView({ props }) {
     : null;
 
   const showNeedsOnly = phone && stream === 'people' && tab === 'needs';
+  const listRef = useRef(null);
+  useFirstRowKeys(listRef);
   const error = res.error || needsRes.error;
   const loading = (res.loading && !res.loaded) || (needsRes.loading && !needsRes.loaded);
   const question = questions.list[0];
   const retry = () => { res.reload(); needsRes.reload(); };
 
   const content = (
-    <div onKeyDown={onListKeyDown} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+    <div ref={listRef} onKeyDown={onListKeyDown} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
       {error && <ErrorLine error={error} onRetry={retry} retryLabel={tv('hedwig.v2.action.retry', 'Try again')} />}
       {loading && <Quiet>{tv('hedwig.v2.loading', 'Loading…')}</Quiet>}
       {!loading && !error && !items.length && (
@@ -238,7 +240,7 @@ export default function StreamView({ props }) {
       ? (
         <nav aria-label={tv('hedwig.v2.ledger.label', 'Ledgers')} style={{ display: 'flex', gap: 18, flexWrap: 'wrap', paddingBottom: 6 }}>
           {(power ? LEDGER_KINDS : SIMPLE_LEDGERS).map((kind) => (
-            <LinkBtn key={kind} style={{ minHeight: 44 }} onClick={() => showView(VIEW.ledger, { kind })}>{ledgerTitle(kind)}</LinkBtn>
+            <LinkBtn key={kind} style={{ minHeight: 44, minWidth: 44 }} onClick={() => showView(VIEW.ledger, { kind })}>{ledgerTitle(kind)}</LinkBtn>
           ))}
         </nav>
       )
@@ -285,9 +287,11 @@ export function ListItems({ list, phone }) {
   const res = useV2Resource(listPath(list));
   const door = useWhyDoor();
   const items = listOf(res.data, 'items');
+  const listRef = useRef(null);
+  useFirstRowKeys(listRef);
   if (res.error?.status === 404) return <Quiet><Why>{tv('hedwig.v2.list.unavailable', 'This list is not available yet.')}</Why></Quiet>;
   return (
-    <div onKeyDown={onListKeyDown}>
+    <div ref={listRef} onKeyDown={onListKeyDown}>
       {res.error && <ErrorLine error={res.error} onRetry={() => res.reload()} retryLabel={tv('hedwig.v2.action.retry', 'Try again')} />}
       {res.loading && !res.data && <Quiet>{tv('hedwig.v2.loading', 'Loading…')}</Quiet>}
       {!res.loading && !res.error && !items.length && <Quiet><Why>{tv('hedwig.v2.list.empty', 'Nothing in this list.')}</Why></Quiet>}

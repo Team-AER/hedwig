@@ -141,7 +141,8 @@ function seed() {
     ],
     // Work lists hold thread ids (t-…), as hedwig_work_items does.
     lists: { reply_later: ['t-priya', 't-jonas', 't-lena'], set_aside: ['t-stratechery', 't-hn'], snoozed: ['t-telia'] },
-    reminders: [{ id: 7, note: 'Call the dentist about the crown', until: todayAt(8, 0) }],
+    // Already due whatever the time of day (08:00 today is still ahead just after midnight).
+    reminders: [{ id: 7, note: 'Call the dentist about the crown', until: at(HOUR) }],
     answers: [],
     cards: seedCards(),
     // F's /work/waiting rows; watches are the "remind me if no reply" requests.

@@ -176,6 +176,30 @@ describe('job ledger', () => {
     expect(fake.row(id).status).toBe('failed');
   });
 
+  it('defers (not fails) a job whose model lane stayed full for the whole wait, attempts untouched', async () => {
+    defineJob('t.lane', async () => {
+      recordUsage({ prompt_tokens: 10, completion_tokens: 2 });
+      throw Object.assign(new Error('the background model lane stayed full for 1200 s'), { name: 'LlmError', status: 503, code: 'lane_busy' });
+    });
+    const id = await enqueue('t.lane', {}, { maxAttempts: 1 });
+    const probes = (await import('../llm.js')).probeGateway;
+    probes.mockClear();
+    await runAll();
+    expect(fake.row(id)).toMatchObject({ status: 'queued', attempts: 0, failed_at: null, tokens_in: 10 });
+    expect(fake.row(id).last_error).toBe('deferred: the background model lane stayed full for 1200 s');
+    expect(fake.row(id).run_at).toBe(fake.state.now + 5 * 60_000); // jobs.laneDeferMin default
+    expect(probes).not.toHaveBeenCalled(); // not mistaken for the gateway being down
+  });
+
+  it('a handler can defer itself (deferJob) without spending an attempt', async () => {
+    defineJob('t.yield', async () => jobs.deferJob('mail sync is running', 15_000));
+    const id = await enqueue('t.yield', {}, { maxAttempts: 1 });
+    await runAll();
+    expect(fake.row(id)).toMatchObject({ status: 'queued', attempts: 0, last_error: 'deferred: mail sync is running' });
+    expect(fake.row(id).run_at).toBe(fake.state.now + 15_000);
+    expect(console.warn).not.toHaveBeenCalledWith(expect.stringMatching(/t\.yield.*failed/), expect.anything());
+  });
+
   it('keeps budget exhaustion out of failed', async () => {
     defineJob('t.budget', async () => { throw Object.assign(new Error('budget'), { code: 'budget_exceeded' }); });
     const id = await enqueue('t.budget', {}, { maxAttempts: 1 });
@@ -226,6 +250,20 @@ describe('job locks and timeouts (review fixes)', () => {
     expect(seen.ambient).toBe(seen.ctx);
     expect(fake.row(id)).toMatchObject({ status: 'failed', last_error: 'job timed out after 30 ms' });
   });
+
+  it('keeps pushing the lock out while a long lane wait lasts, not only when it ends', async () => {
+    const extended = [];
+    const clock = jobs.jobClock(60_000, () => {}, (ms) => extended.push(ms), { heartbeatMs: 40 });
+    clock.start();
+    clock.pause();
+    await new Promise((r) => setTimeout(r, 1150));
+    expect(extended.length).toBeGreaterThanOrEqual(10); // heartbeats during the wait
+    clock.resume();
+    clock.stop();
+    const total = extended.reduce((a, b) => a + b, 0);
+    expect(total).toBeGreaterThanOrEqual(1100);
+    expect(total).toBeLessThan(1400);
+  }, 10_000);
 
   it('time spent waiting for a lane slot does not count against the timeout, and pushes the lock out', async () => {
     const WAIT = 1100;

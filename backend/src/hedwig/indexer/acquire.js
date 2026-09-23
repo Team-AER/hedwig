@@ -1,16 +1,19 @@
 // Body and attachment acquisition. Every included message gets its body fetched, not only the ones
 // someone opens, through the existing API-side `mail.fetchBody` job (core/bodies.js), newest first
-// and spaced per mail host at `index.bodyRatePerSec`. imapflow fetches body parts with BODY.PEEK,
-// so this never marks mail as read. Attachment text goes through Apache Tika from an API-side job
-// that fetches the parts with imapManager.fetchMultipleAttachments (same PEEK path). Failures are
+// and spaced per mail host at `index.bodyRatePerSec` (or `index.bodyRateByProvider`, 0.5/s for
+// Yahoo by default). imapflow fetches body parts with BODY.PEEK, so this never marks mail as read.
+// Attachment text goes through Apache Tika from an API-side job that fetches the parts with
+// imapManager.fetchMultipleAttachments (same PEEK path). Both fetches yield to mail sync
+// (core/mailYield.js): deferred while the account syncs or cools down, one in flight per account,
+// per-account backoff on refusals; accounts in that backoff get no new requests here. Failures are
 // recorded per message (hedwig_index_msg) and summed into the coverage row.
 import { query } from '../../services/db.js';
 import { getConfig } from '../config.js';
 import { enqueue } from '../jobs.js';
+import { BODY_JOB, ATTACHMENT_JOB, FETCH_KINDS, bodyRateFor, providerOf, fetchBackoffs, guardedFetch } from '../core/mailYield.js';
 
-const BODY_JOB = 'mail.fetchBody';
-export const ATTACHMENT_JOB = 'index.attachmentText';
-const RATE_KINDS = [BODY_JOB, ATTACHMENT_JOB];
+export { ATTACHMENT_JOB };
+const RATE_KINDS = FETCH_KINDS;
 const HORIZON_SEC = 60; // never schedule more than a minute of fetches ahead per host
 const LIVE_MS = 3 * 86400_000;
 
@@ -33,6 +36,25 @@ export function planSlots({ now = Date.now(), queuedUntil = null, queuedCount = 
     at += step;
   }
   return out;
+}
+
+/** Accounts whose per-account fetch backoff is still running: Set of account ids. */
+async function accountsBackingOff(now) {
+  const out = new Set();
+  for (const [accountId, b] of await fetchBackoffs()) {
+    if (b?.until && new Date(b.until).getTime() > now) out.add(accountId);
+  }
+  return out;
+}
+
+/** Rows grouped by host, with each host's fetch rate. */
+function groupByHost(rows, cfg) {
+  const byHost = new Map();
+  for (const r of rows) {
+    if (!byHost.has(r.host)) byHost.set(r.host, { rate: bodyRateFor(cfg, { host: r.host, provider: providerOf(r) }), list: [] });
+    byHost.get(r.host).list.push(r);
+  }
+  return byHost;
 }
 
 async function queuedUntilByHost() {
@@ -93,10 +115,9 @@ export async function reconcileBodies() {
 export async function requestBodies({ now = Date.now(), candidates = 500 } = {}) {
   const cfg = await getConfig();
   if (!cfg.enabled) return 0;
-  const rate = cfg['index.bodyRatePerSec'];
   const maxAge = cfg['index.bodyMaxAgeDays'];
-  const { rows } = await query(
-    `SELECT m.id, m.account_id, a.user_id, m.date, m.thread_key, lower(COALESCE(a.imap_host, a.id::text)) AS host, x.body_attempts
+  const { rows: found } = await query(
+    `SELECT m.id, m.account_id, a.user_id, m.date, m.thread_key, lower(COALESCE(a.imap_host, a.id::text)) AS host, a.imap_host, a.oauth_provider, x.body_attempts
        FROM messages m
        JOIN email_accounts a ON a.id = m.account_id AND a.enabled = true
        JOIN hedwig_index_coverage c ON c.account_id = m.account_id AND c.folder = m.folder AND c.state <> 'paused'
@@ -110,15 +131,13 @@ export async function requestBodies({ now = Date.now(), candidates = 500 } = {})
       LIMIT $1`,
     [candidates, maxAge],
   );
+  if (!found.length) return 0;
+  const backingOff = await accountsBackingOff(now);
+  const rows = found.filter((r) => !backingOff.has(String(r.account_id)));
   if (!rows.length) return 0;
   const queued = await queuedUntilByHost();
-  const byHost = new Map();
-  for (const r of rows) {
-    if (!byHost.has(r.host)) byHost.set(r.host, []);
-    byHost.get(r.host).push(r);
-  }
   const granted = [];
-  for (const [host, list] of byHost) {
+  for (const [host, { rate, list }] of groupByHost(rows, cfg)) {
     const slots = planSlots({ now, queuedUntil: queued.get(host)?.until, queuedCount: queued.get(host)?.n || 0, rate, want: list.length });
     list.slice(0, slots.length).forEach((r, i) => granted.push({ ...r, runAt: slots[i] }));
   }
@@ -177,7 +196,7 @@ export async function requestAttachments({ now = Date.now(), candidates = 200 } 
          OR (attach_state = 'retry' AND attach_requested_at < NOW() - INTERVAL '30 minutes')`,
   );
   const { rows } = await query(
-    `SELECT m.id, m.attachments, m.date, lower(COALESCE(a.imap_host, a.id::text)) AS host, a.user_id
+    `SELECT m.id, m.account_id, m.attachments, m.date, lower(COALESCE(a.imap_host, a.id::text)) AS host, a.imap_host, a.oauth_provider, a.user_id
        FROM hedwig_index_msg x
        JOIN messages m ON m.id = x.message_id
        JOIN email_accounts a ON a.id = m.account_id AND a.enabled = true
@@ -194,16 +213,12 @@ export async function requestAttachments({ now = Date.now(), candidates = 200 } 
   const maxBytes = cfg['index.tikaMaxBytes'];
   const skip = rows.filter((r) => !extractableAttachments(r.attachments, { maxBytes }).length).map((r) => r.id);
   if (skip.length) await query("UPDATE hedwig_index_msg SET attach_state = 'skipped', updated_at = NOW() WHERE message_id = ANY($1::uuid[])", [skip]);
-  const todo = rows.filter((r) => !skip.includes(r.id));
+  const backingOff = await accountsBackingOff(now);
+  const todo = rows.filter((r) => !skip.includes(r.id) && !backingOff.has(String(r.account_id)));
   const queued = await queuedUntilByHost();
-  const byHost = new Map();
-  for (const r of todo) {
-    if (!byHost.has(r.host)) byHost.set(r.host, []);
-    byHost.get(r.host).push(r);
-  }
   let n = 0;
-  for (const [host, list] of byHost) {
-    const slots = planSlots({ now, queuedUntil: queued.get(host)?.until, queuedCount: queued.get(host)?.n || 0, rate: cfg['index.bodyRatePerSec'], want: list.length });
+  for (const [host, { rate, list }] of groupByHost(todo, cfg)) {
+    const slots = planSlots({ now, queuedUntil: queued.get(host)?.until, queuedCount: queued.get(host)?.n || 0, rate, want: list.length });
     for (let i = 0; i < slots.length; i++) {
       const r = list[i];
       await enqueue(ATTACHMENT_JOB, { messageId: r.id, host }, { userId: r.user_id, dedupeKey: `attach:${r.id}`, priority: 9, maxAttempts: 3, runAt: slots[i] });
@@ -261,7 +276,10 @@ export function makeAttachmentHandler(imapManager, { fetchFn = fetch } = {}) {
     const maxChars = cfg['index.attachmentMaxChars'];
     const list = extractableAttachments(row.attachments, { maxBytes });
     if (!list.length) { await setState('skipped', null); return; }
-    const buffers = await imapManager.fetchMultipleAttachments(account, row.uid, row.folder, list.map((a) => ({ part: a.part, encoding: a.encoding })));
+    const buffers = await guardedFetch(
+      { imapManager, account, kind: ATTACHMENT_JOB, messageId },
+      () => imapManager.fetchMultipleAttachments(account, row.uid, row.folder, list.map((a) => ({ part: a.part, encoding: a.encoding }))),
+    );
     let failures = 0;
     let lastError = null;
     for (const a of list) {

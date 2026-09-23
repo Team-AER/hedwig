@@ -271,7 +271,7 @@ export default function LoginPage() {
         <div style={{ marginBottom: 40, textAlign: 'center' }}>
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
             <OwlMark size={40} />
-            <span style={{ fontFamily: "var(--hw-font-display, 'Fraunces', serif)", fontSize: 32, fontWeight: 600, color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>Hedwig</span>
+            <span style={{ fontFamily: "var(--hw-font-display, 'Fraunces', serif)", fontSize: 36, fontWeight: 400, color: 'var(--text-primary)', letterSpacing: '-0.01em' }}>Hedwig</span>
           </div>
           <p style={{ color: 'var(--text-tertiary)', fontSize: 14, margin: 0 }}>{t('login.tagline')}</p>
         </div>

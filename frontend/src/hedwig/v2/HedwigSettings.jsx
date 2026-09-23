@@ -262,6 +262,17 @@ function RulesSection() {
   );
 }
 
+/** One role's routing from /status models ({ primary, fallback, active, degraded }) as a line. */
+export function routingLine(model) {
+  if (typeof model === 'string') return model;
+  if (!model || typeof model !== 'object') return '';
+  const main = model.active || model.primary || model.id || model.model || '';
+  const parts = [main];
+  if (model.degraded && model.primary && model.primary !== main) parts.push(tv('hedwig.v2.power.onFallback', 'standing in for {{model}}', { model: model.primary }));
+  else if (model.fallback && model.fallback !== main) parts.push(tv('hedwig.v2.power.fallback', 'falls back to {{model}}', { model: model.fallback }));
+  return parts.filter(Boolean).join(' · ');
+}
+
 function RoutingSection({ admin }) {
   const status = useHedwig((s) => s.status);
   const models = status?.models || {};
@@ -273,7 +284,7 @@ function RoutingSection({ admin }) {
       {rows.map(([role, model]) => (
         <div key={role} style={{ display: 'grid', gridTemplateColumns: '140px minmax(0, 1fr)', gap: 12, padding: '10px 0', borderTop: `1px solid ${V.line}`, alignItems: 'baseline' }}>
           <span style={{ fontSize: 14 }}>{role}</span>
-          <Mono size={12} color={V.ink} style={{ whiteSpace: 'normal', wordBreak: 'break-all' }}>{typeof model === 'string' ? model : (model.id || model.model || JSON.stringify(model))}</Mono>
+          <Mono size={12} color={V.ink} style={{ whiteSpace: 'normal', overflowWrap: 'anywhere' }}>{routingLine(model)}</Mono>
         </div>
       ))}
     </Section>
@@ -291,7 +302,7 @@ function PromptsSection() {
         <div key={p.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto auto', gap: 14, padding: '10px 0', borderTop: `1px solid ${V.line}`, alignItems: 'baseline' }}>
           <Mono size={13} color={V.ink}>{p.id}</Mono>
           <Mono size={12}>{p.version}{p.tier ? ` · ${p.tier}` : ''}</Mono>
-          <Mono size={12}>{p.hash || ''}</Mono>
+          <Mono size={12} title={p.hash || undefined}>{p.hash ? String(p.hash).slice(0, 8) : ''}</Mono>
         </div>
       ))}
     </Section>
@@ -308,7 +319,11 @@ function IndexSection() {
     <Section title={tv('hedwig.v2.power.index', 'Index')} right={res.data ? <Mono size={12}>{recipe}</Mono> : null}>
       {res.error && <ErrorLine error={res.error.status === 404 ? new Error(tv('hedwig.v2.notYet', 'Not available yet.')) : res.error} onRetry={() => res.reload()} retryLabel={tv('hedwig.v2.action.retry', 'Try again')} />}
       {res.loading && !res.data && <Quiet>{tv('hedwig.v2.loading', 'Loading…')}</Quiet>}
-      {res.data && (
+      {res.data && !d.total && (
+        // No coverage rows yet: "100% · 0 of 0" would claim a finished index.
+        <Quiet>{tv('hedwig.v2.power.indexEmpty', 'Hedwig has not counted this mailbox yet. Indexing starts with the next sync.')}</Quiet>
+      )}
+      {res.data && d.total > 0 && (
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 18, flexWrap: 'wrap', padding: '6px 0 10px' }}>
           <span style={{ fontFamily: V.serif, fontSize: 36, lineHeight: 1 }}>{`${embeddedPct}%`}</span>
           <span style={{ fontSize: 13, color: V.muted }}>{tv('hedwig.v2.power.indexSummary', '{{embedded}} of {{total}} messages searchable · {{pending}} to go', { embedded: (d.embedded ?? 0).toLocaleString(), total: (d.total ?? 0).toLocaleString(), pending: (d.pending ?? 0).toLocaleString() })}</span>

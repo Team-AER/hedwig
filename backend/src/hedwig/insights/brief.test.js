@@ -82,6 +82,21 @@ describe('compileBrief', () => {
     expect(brief.today).toEqual({ screened: 4, bundled: 9, rescued: 1, blocked: 2 });
   });
 
+  it('counts what needs you by conversation, as the People stream does', async () => {
+    db.routes = [
+      [/SELECT to_regclass/, ([name]) => ({ rows: [{ t: name === 'hedwig_sort' ? name : null }] })],
+      [/WHERE s\.user_id = \$1 AND s\.needs_you/, () => ({ rows: [
+        { id: 'm5', thread_key: 'doc', from_name: 'Dr Anand', subject: 'Re: Follow-up', date: '2026-09-22T15:00:00Z', reason: 'Pick a slot' },
+        { id: 'm6', thread_key: 'marta', from_name: 'Marta', subject: 'Invoice 2041', date: '2026-09-23T06:00:00Z', reason: 'Amount differs' },
+      ] })],
+    ];
+    const brief = await compileBrief('u1', { now: NOW });
+    const sql = db.calls.find((s) => /s\.needs_you AND NOT m\.is_deleted/.test(s));
+    expect(sql).toContain('DISTINCT ON (m.account_id, COALESCE(m.thread_key, m.id::text))');
+    expect(brief.needsYou.map((n) => n.messageId)).toEqual(['m5', 'm6']);
+    expect(brief.headline.startsWith('Two things need you.')).toBe(true);
+  });
+
   it('falls back to the template headline when no fresh model briefing exists', async () => {
     db.routes = [
       [/SELECT to_regclass/, () => ({ rows: [{ t: null }] })],

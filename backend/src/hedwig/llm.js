@@ -312,21 +312,31 @@ async function prepare({ userId, feature, role = 'fast', pluginId, model: explic
   return { cfg, attempts, primary, lane };
 }
 
+// How long a call waits for a lane slot when llm.lanes.<lane>.waitMs is not set.
+export const LANE_WAIT_DEFAULTS = { interactive: 30_000, background: 20 * 60_000 };
+
 /**
  * Hold a lane slot for the duration of one chat()/chatStream() call. The lease covers every attempt
  * the call may make (primary, then fallback), each bounded by llm.timeoutMs, plus 30 s of slack, so
  * a slow primary followed by a slow fallback never outlives its slot. Time spent waiting for the
  * slot is reported to the running job (ledger/context.js laneWait) so it does not count against the
  * job's timeout (jobs.js runJob).
+ *
+ * The wait is bounded by llm.lanes.<lane>.waitMs: 30 s for interactive calls (a person is waiting;
+ * the call then fails fast with lane_busy, 503 — the fallback model shares the lane, so switching
+ * models would not find a slot either), 20 min for background calls (a job then gets lane_busy,
+ * which runJob turns into a deferral, attempts untouched).
  */
 async function takeLane(cfg, lane, signal, attemptCount = 1) {
   const limit = cfg[`llm.lanes.${lane}.concurrency`] ?? (lane === 'interactive' ? 2 : 1);
   const timeoutMs = cfg['llm.timeoutMs'] ?? 240_000;
   const leaseMs = Math.max((cfg['llm.lanes.leaseSec'] ?? 300) * 1000, timeoutMs * Math.max(1, attemptCount) + 30_000);
+  const configured = Number(cfg[`llm.lanes.${lane}.waitMs`]);
+  const maxWaitMs = Number.isFinite(configured) && configured > 0 ? configured : (LANE_WAIT_DEFAULTS[lane] ?? timeoutMs);
   const laneWait = currentContext()?.laneWait;
   laneWait?.pause();
   try {
-    return await acquireLane(lane, { limit, leaseMs, maxWaitMs: timeoutMs, signal });
+    return await acquireLane(lane, { limit, leaseMs, maxWaitMs, signal });
   } catch (err) {
     if (err instanceof LlmError) throw err;
     throw new LlmError(errorText(err), { status: err?.status || 503, code: err?.code || 'lane_busy' });

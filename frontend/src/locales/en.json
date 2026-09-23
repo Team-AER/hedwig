@@ -1988,11 +1988,11 @@
         "confidence": "{{n}}% sure",
         "decidedBy": "Decided by {{layer}}",
         "layer": {
-          "classifier": "Your history",
-          "reasoning": "Reasoning model",
-          "reflex": "Reflex model",
-          "rule": "A rule",
-          "user": "You"
+          "classifier": "your history",
+          "reasoning": "the Reasoning model",
+          "reflex": "the Reflex model",
+          "rule": "a rule",
+          "user": "you"
         },
         "moveTo": "Where it belongs",
         "needsMe": "Needs me",

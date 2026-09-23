@@ -4,6 +4,7 @@
 import { query } from '../../services/db.js';
 import { getConfig } from '../config.js';
 import { enqueue } from '../jobs.js';
+import { guardedFetch, ATTACHMENT_JOB } from '../core/mailYield.js';
 import { runPrompt } from '../prompts/index.js';
 import { messageText } from '../text.js';
 import { validTimezone } from '../insights/time.js';
@@ -353,7 +354,11 @@ export function makeIcsHandler(imapManager) {
     const list = calendarAttachments(row.attachments, { maxBytes: cfg['cards.icsMaxBytes'] }).filter((a) => a.part);
     if (list.length) {
       const account = { ...row, id: row.account_id };
-      const buffers = await imapManager.fetchMultipleAttachments(account, row.uid, row.folder, list.map((a) => ({ part: a.part, encoding: a.encoding })));
+      // Yields to mail sync and provider cooldowns like every other Hedwig IMAP fetch.
+      const buffers = await guardedFetch(
+        { imapManager, account, kind: ATTACHMENT_JOB, messageId: row.id },
+        () => imapManager.fetchMultipleAttachments(account, row.uid, row.folder, list.map((a) => ({ part: a.part, encoding: a.encoding }))),
+      );
       for (const a of list) {
         const buf = buffers.get(a.part);
         const error = !buf ? 'attachment part not returned by the server' : buf.length > cfg['cards.icsMaxBytes'] ? 'too large' : null;

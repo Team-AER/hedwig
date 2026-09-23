@@ -11,6 +11,11 @@
 //   enqueue(kind, payload, { userId, dedupeKey, runAt, priority, maxAttempts })
 //   handler returns { status: 'partial', note } for partial success; throwing = failed attempt
 //   reconcile(), retryFailed(kind?), reapStuck(), healthGate(), queueStats()
+//
+// Deferral (queued again later, attempts untouched, last_error 'deferred: …'): the gateway is
+// down (healthGate), a model lane stayed full past llm.lanes.<lane>.waitMs (lane_busy), or the
+// handler threw deferJob() (e.g. a body fetch stepping aside for mail sync). A deferred job is
+// waiting, not failing: it never lands in failed by morning for capacity other work holds.
 import { createHash } from 'node:crypto';
 import { hostname } from 'os';
 import { query } from '../services/db.js';
@@ -18,6 +23,24 @@ import { getConfig } from './config.js';
 import { runInContext } from './ledger/context.js';
 
 const handlers = new Map(); // kind -> { handler, timeoutMs, rebuild, needsGateway }
+
+/**
+ * Thrown by a handler that should run later without spending an attempt (see deferJob).
+ * `delayMs` is how long to wait; runJob puts the job back queued with run_at = now + delayMs.
+ */
+export class JobDeferred extends Error {
+  constructor(reason, delayMs) {
+    super(reason);
+    this.name = 'JobDeferred';
+    this.code = 'job_deferred';
+    this.delayMs = Math.max(1000, Math.round(Number(delayMs) || 60_000));
+  }
+}
+
+/** Stop this run and try again in `delayMs`, attempts untouched. Never returns. */
+export function deferJob(reason, delayMs) {
+  throw new JobDeferred(reason, delayMs);
+}
 
 export const JOB_STATES = ['queued', 'running', 'done', 'partial', 'failed', 'resolved', 'retried'];
 
@@ -137,12 +160,16 @@ export async function fail(job, err, { tokensIn = 0, tokensOut = 0 } = {}) {
   );
 }
 
-/** Put a job back without consuming the attempt its claim took (the gateway was down). */
-async function defer(job, minutes, reason) {
+/**
+ * Put a job back without consuming the attempt its claim took (the gateway was down, a lane stayed
+ * full, or the handler deferred itself).
+ */
+async function defer(job, delayMs, reason, { tokensIn = 0, tokensOut = 0 } = {}) {
   await query(
     `UPDATE hedwig_jobs SET locked_at = NULL, attempts = GREATEST(attempts - 1, 0), status = 'queued',
-            last_error = $2, run_at = NOW() + ($3 || ' minutes')::interval WHERE id = $1`,
-    [job.id, String(reason).slice(0, 1000), String(minutes)],
+            last_error = $2, run_at = NOW() + ($3 || ' seconds')::interval,
+            tokens_in = tokens_in + $4, tokens_out = tokens_out + $5 WHERE id = $1`,
+    [job.id, String(reason).slice(0, 1000), String(Math.max(1, Math.round(delayMs / 1000))), tokensIn | 0, tokensOut | 0],
   );
 }
 
@@ -196,6 +223,11 @@ async function deferMinutes() {
   return cfg?.['jobs.healthDeferMin'] ?? 10;
 }
 
+async function laneDeferMinutes() {
+  const cfg = await getConfig().catch(() => null);
+  return cfg?.['jobs.laneDeferMin'] ?? 5;
+}
+
 /** Push a running job's lock forward by `ms` (the time its handler spent waiting for a lane slot). */
 async function extendLock(job, ms) {
   await query(
@@ -209,27 +241,37 @@ async function extendLock(job, ms) {
  * The job timeout clock. It runs while the handler works and pauses while any of the job's model
  * calls waits for a lane slot (llm.js takeLane calls pause/resume through the ambient context):
  * waiting for capacity other work holds is not the job being slow. Each pause pushes the deadline
- * out by the wait, and a wait of a second or more also pushes the job's lock out (onExtend), so
- * claim() and reapStuck() keep honouring the lock for as long as the handler may legitimately run.
+ * out by the wait. The job's lock is pushed out too (onExtend), so claim() and reapStuck() keep
+ * honouring it for as long as the handler may legitimately run: every `heartbeatMs` while the wait
+ * lasts (a background wait may be 20 min, far past a short kind's lock), and for the remainder when
+ * a wait of a second or more ends.
  */
-export function jobClock(timeoutMs, onTimeout, onExtend = () => {}) {
+export function jobClock(timeoutMs, onTimeout, onExtend = () => {}, { heartbeatMs = 30_000 } = {}) {
   let timer = null; let deadline = 0; let depth = 0; let pausedAt = 0; let stopped = true;
+  let beat = null; let extendedTo = 0;
   const arm = (ms) => { clearTimeout(timer); timer = setTimeout(onTimeout, Math.max(0, ms)); };
+  const stopBeat = () => { clearInterval(beat); beat = null; };
   return {
     start() { stopped = false; deadline = Date.now() + timeoutMs; arm(timeoutMs); },
     pause() {
       if (stopped) return;
-      if (depth++ === 0) { pausedAt = Date.now(); clearTimeout(timer); }
+      if (depth++ === 0) {
+        pausedAt = Date.now(); extendedTo = pausedAt; clearTimeout(timer);
+        beat = setInterval(() => { const t = Date.now(); onExtend(t - extendedTo); extendedTo = t; }, heartbeatMs);
+        beat.unref?.();
+      }
     },
     resume() {
       if (stopped || depth === 0) return;
       if (--depth > 0) return;
-      const waited = Date.now() - pausedAt;
+      stopBeat();
+      const now = Date.now();
+      const waited = now - pausedAt;
       deadline += waited;
-      arm(deadline - Date.now());
-      if (waited >= 1000) onExtend(waited);
+      arm(deadline - now);
+      if (waited >= 1000 && now > extendedTo) onExtend(now - extendedTo);
     },
-    stop() { stopped = true; clearTimeout(timer); },
+    stop() { stopped = true; clearTimeout(timer); stopBeat(); },
   };
 }
 
@@ -247,7 +289,7 @@ export async function runJob(job) {
   if (def.needsGateway && !gateway.ok) {
     const deferMin = await deferMinutes();
     if (Date.now() - gateway.checkedAt < deferMin * 60_000) {
-      await defer(job, deferMin, `deferred: model gateway unreachable (${gateway.error})`);
+      await defer(job, deferMin * 60_000, `deferred: model gateway unreachable (${gateway.error})`);
       return;
     }
   }
@@ -271,11 +313,25 @@ export async function runJob(job) {
     const partial = result && typeof result === 'object' && result.status === 'partial';
     await complete(job.id, { status: partial ? 'partial' : 'done', note: partial ? (result.note || null) : null, tokensIn: usage.tokensIn, tokensOut: usage.tokensOut });
   } catch (err) {
+    const spent = { tokensIn: usage.tokensIn, tokensOut: usage.tokensOut };
+    // The handler asked to run later (e.g. a body fetch yielding to mail sync): waiting, not failing.
+    if (err?.code === 'job_deferred') {
+      await defer(job, err.delayMs, `deferred: ${err.message}`, spent);
+      return;
+    }
+    // A model lane stayed full for its whole wait (llm.lanes.<lane>.waitMs): capacity other work
+    // holds is not this job failing, so it waits its turn again instead of spending an attempt.
+    if (err?.code === 'lane_busy') {
+      const min = await laneDeferMinutes();
+      console.warn(`[hedwig] job ${job.kind}#${job.id} deferred ${min} min: ${err.message}`);
+      await defer(job, min * 60_000, `deferred: ${err.message}`, spent);
+      return;
+    }
     if (gatewayShaped(err)) {
       const r = await probe().catch(() => ({ ok: true }));
       if (!r.ok) {
         console.warn(`[hedwig] job ${job.kind}#${job.id} deferred: model gateway unreachable (${r.error})`);
-        await defer(job, await deferMinutes(), `deferred: model gateway unreachable (${r.error})`);
+        await defer(job, (await deferMinutes()) * 60_000, `deferred: model gateway unreachable (${r.error})`, spent);
         return;
       }
     }
@@ -449,6 +505,7 @@ export async function queueStats() {
             COUNT(*) FILTER (WHERE locked_at IS NOT NULL AND done_at IS NULL AND failed_at IS NULL) AS running,
             COUNT(*) FILTER (WHERE status = 'failed' AND failed_at > NOW() - INTERVAL '24 hours') AS failed_24h,
             COUNT(*) FILTER (WHERE done_at > NOW() - INTERVAL '24 hours') AS done_24h,
+            COUNT(*) FILTER (WHERE done_at IS NULL AND failed_at IS NULL AND locked_at IS NULL AND last_error LIKE 'deferred:%') AS deferred,
             COUNT(*) FILTER (WHERE status = 'queued' OR (status IS NULL AND done_at IS NULL AND failed_at IS NULL AND locked_at IS NULL)) AS s_queued,
             COUNT(*) FILTER (WHERE status = 'running' OR (status IS NULL AND done_at IS NULL AND failed_at IS NULL AND locked_at IS NOT NULL)) AS s_running,
             COUNT(*) FILTER (WHERE status = 'done' OR (status IS NULL AND done_at IS NOT NULL)) AS s_done,
@@ -469,6 +526,7 @@ export async function queueStats() {
     running: Number(r.running) || 0,
     failed_24h: Number(r.failed_24h) || 0,
     done_24h: Number(r.done_24h) || 0,
+    deferred: Number(r.deferred) || 0,
     last_error: r.last_error || null,
     tokens_in: Number(r.tokens_in) || 0,
     tokens_out: Number(r.tokens_out) || 0,

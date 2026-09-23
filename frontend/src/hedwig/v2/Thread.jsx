@@ -445,7 +445,8 @@ export default function Thread({ props }) {
   return (
     <section className="hw-v2 hw-scroll" aria-label={title} style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 18, padding: '30px 36px 24px', overflowY: 'auto', color: V.ink, fontFamily: V.sans, fontSize: 14, lineHeight: 1.45, fontVariantNumeric: 'tabular-nums' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap' }}>
-        <div style={{ flex: '1 1 200px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {/* A title narrower than this wraps to four lines beside the actions; the actions go under it instead. */}
+        <div style={{ flex: '1 1 340px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
           <h2 style={{ margin: 0, fontFamily: V.serif, fontWeight: 400, fontSize: 34, lineHeight: 1.05, letterSpacing: '-0.015em', textWrap: 'pretty' }}>{title}</h2>
           <span style={{ fontSize: 13, color: V.muted }}>{meta}</span>
         </div>

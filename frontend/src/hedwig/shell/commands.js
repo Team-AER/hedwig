@@ -8,7 +8,7 @@ import { exportCurrentLayout } from './layoutFile.js';
 
 // Default key sequences for "Open …" commands. The views register their own commands for the
 // main views (g n, g a, g p, …) and those win on a duplicate sequence; these fill the gaps.
-// Insights gets 'g s' because the views' 'g i' is upstream's "go to inbox", which upstream keeps.
+// Insights is 'g s' (here and in the views' own command): 'g i' is upstream's "go to inbox".
 export const VIEW_KEYS = {
   'hedwig.insights': 'g s',
   'hedwig.layouts': 'g l',

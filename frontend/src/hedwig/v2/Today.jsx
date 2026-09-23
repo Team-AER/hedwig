@@ -102,19 +102,25 @@ export default function Today() {
           <div role="list" style={{ display: 'flex', flexDirection: 'column' }}>
             {entries.map((e) => {
               const undone = e.undone;
+              // Sender-level entries (a decision, a bundle delivery) have no message: the action is the line.
+              const head = [e.sender, e.subject].filter(Boolean).join(' · ');
               return (
                 <div role="listitem" key={e.id} style={{ display: 'grid', gridTemplateColumns: '52px minmax(0, 1fr) auto', columnGap: 12, alignItems: 'baseline', padding: '12px 0', borderTop: `1px solid ${V.line}`, opacity: undone ? 0.55 : 1 }}>
                   <Mono size={12}>{listTime(e.at)}</Mono>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
-                    <button
-                      type="button"
-                      className="hw-link"
-                      onClick={() => e.messageId && openThread({ messageId: e.messageId, threadId: e.threadId, subject: e.subject })}
-                      style={{ font: 'inherit', fontSize: 15, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', padding: 0, border: 0, background: 'none', color: 'inherit', textAlign: 'left', cursor: 'pointer', textDecorationColor: 'transparent' }}
-                    >
-                      {[e.sender, e.subject].filter(Boolean).join(' · ') || e.messageId}
-                    </button>
-                    <span style={{ fontSize: 13, color: V.muted }}>{actionLabel(e)}</span>
+                    {head && e.messageId ? (
+                      <button
+                        type="button"
+                        className="hw-link"
+                        onClick={() => openThread({ messageId: e.messageId, threadId: e.threadId, subject: e.subject })}
+                        style={{ font: 'inherit', fontSize: 15, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', padding: 0, border: 0, background: 'none', color: 'inherit', textAlign: 'left', cursor: 'pointer', textDecorationColor: 'transparent' }}
+                      >
+                        {head}
+                      </button>
+                    ) : head ? (
+                      <span style={{ fontSize: 15, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{head}</span>
+                    ) : null}
+                    <span style={head ? { fontSize: 13, color: V.muted } : { fontSize: 15 }}>{actionLabel(e)}</span>
                     {e.reason && <Why>{e.reason}</Why>}
                   </div>
                   {undone

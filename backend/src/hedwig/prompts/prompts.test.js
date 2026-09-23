@@ -32,7 +32,7 @@ vi.mock('../config.js', () => ({ getConfig: vi.fn(async () => ({ ...cfg, get: (k
 const { definePrompt, runPrompt, listPrompts, PromptOutputError, _resetPrompts } = await import('./index.js');
 const { chat, chatStream, _resetLlmState, stripThinking } = await import('../llm.js');
 const { createThinkFilter } = await import('./think.js');
-const { _resetLanes, setLaneRedis } = await import('./lanes.js');
+const { _resetLanes, setLaneRedis, acquireLane } = await import('./lanes.js');
 const { runInContext } = await import('../ledger/context.js');
 
 const itemSchema = {
@@ -251,6 +251,51 @@ describe('interactive lane fallback', () => {
     const res = await chat({ userId: USER, feature: 'ask', role: 'long', lane: 'interactive', messages: [] });
     expect(res).toMatchObject({ model: QWEN, fellBack: true, content: 'from the fallback' });
     expect(Date.now() - started).toBeLessThan(2000);
+  });
+});
+
+describe('lane waits (llm.lanes.<lane>.waitMs)', () => {
+  const hold = (lane) => acquireLane(lane, { limit: 1, leaseMs: 60_000 });
+
+  it('a background call waits llm.lanes.background.waitMs for a slot, then gives up with lane_busy', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    cfg = { ...cfg, 'llm.lanes.background.concurrency': 1, 'llm.lanes.background.waitMs': 1200, 'llm.timeoutMs': 200 };
+    gw.on('ask', 'late');
+    const held = await hold('background');
+    const started = Date.now();
+    await expect(chat({ userId: USER, feature: 'ask', role: 'fast', lane: 'background', messages: [] }))
+      .rejects.toMatchObject({ code: 'lane_busy', message: 'the background model lane stayed full for 1 s' });
+    expect(Date.now() - started).toBeGreaterThanOrEqual(1150); // not llm.timeoutMs (200)
+    // freed within the wait: the call gets the slot
+    setTimeout(held, 150);
+    await expect(chat({ userId: USER, feature: 'ask', role: 'fast', lane: 'background', messages: [] })).resolves.toMatchObject({ content: 'late' });
+  }, 10_000);
+
+  it('an interactive call fails fast after llm.lanes.interactive.waitMs', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    cfg = { ...cfg, 'llm.lanes.interactive.concurrency': 1, 'llm.lanes.interactive.waitMs': 100, 'llm.lanes.background.waitMs': 60_000 };
+    const held = await hold('interactive');
+    const started = Date.now();
+    await expect(chat({ userId: USER, feature: 'ask', role: 'fast', lane: 'interactive', messages: [] })).rejects.toMatchObject({ code: 'lane_busy', status: 503 });
+    expect(Date.now() - started).toBeLessThan(1000);
+    held();
+  });
+
+  it('a job whose call never got a slot is deferred with its attempt refunded, not failed', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    cfg = { ...cfg, 'llm.lanes.background.concurrency': 1, 'llm.lanes.background.waitMs': 100, 'jobs.laneDeferMin': 7 };
+    const jobs = await import('../jobs.js');
+    jobs._resetJobs();
+    jobs.defineJob('t.laneJob', () => chat({ userId: USER, feature: 'ask', role: 'fast', messages: [] }));
+    const held = await hold('background');
+    await jobs.runJob({ id: 42, kind: 't.laneJob', payload: {}, attempts: 1, max_attempts: 1 });
+    held();
+    const deferred = db.calls.find((c) => /attempts = GREATEST\(attempts - 1, 0\)/.test(c.sql) && c.params[0] === 42);
+    expect(deferred).toBeTruthy();
+    expect(deferred.params[1]).toBe('deferred: the background model lane stayed full for 0 s');
+    expect(deferred.params[2]).toBe(String(7 * 60));
+    expect(db.calls.some((c) => /SET failed_at = NOW\(\)/.test(c.sql) && c.params[0] === 42)).toBe(false);
+    jobs._resetJobs();
   });
 });
 

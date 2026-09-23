@@ -66,7 +66,9 @@ const { useHedwig } = await import('../store.js');
 const { ensureHedwigStyles } = await import('../theme/styles.js');
 const { rescueLine } = await import('./Screener.jsx');
 const { cardParts, todayLine } = await import('./Brief.jsx');
-const { hasListKey } = await import('./WhyDoor.jsx');
+const { hasListKey, whySignals } = await import('./WhyDoor.jsx');
+const { routingLine } = await import('./HedwigSettings.jsx');
+const { firstRowFor } = await import('./rows.jsx');
 const { normaliseStory, normaliseDeadline } = await import('./threadData.js');
 const format = await import('./format.js');
 const tokens = await import('../theme/tokens.js');
@@ -664,6 +666,47 @@ describe('Hedwig today', () => {
     assert.match(text(), /Undone/);
     const log = await mock.mockRequest('GET', '/sort/today');
     assert.equal(log.entries[0].undone, true);
+  });
+});
+
+describe('UI pass', () => {
+  after(cleanup);
+
+  test('Hedwig today: an entry with no message (a bundle delivery) has no empty title line', async () => {
+    await render(h(Today));
+    const row = all('[role="listitem"]').find((li) => li.textContent.includes('Delivered 2 in Deliveries'));
+    assert.ok(row, 'the delivery entry is listed');
+    assert.equal(all('button', row).length, 0, 'no empty link to a message, no Undo');
+    const withMessage = all('[role="listitem"]').find((li) => li.textContent.includes('Screened Nordlys Travel into Records'));
+    assert.ok(all('button', withMessage).some((b) => b.textContent.includes('Nordlys Travel')), 'a message entry still links to it');
+    await cleanup();
+  });
+
+  test('why door: lower-case layer mid-sentence, no signal that repeats the reason', () => {
+    const d = { reason: 'A reply in a thread you wrote in', signals: ['A reply in a thread you wrote in', { label: 'You wrote last' }, 'You wrote last', ''] };
+    assert.deepEqual(whySignals(d), ['You wrote last']);
+    assert.deepEqual(whySignals({ signals: [{ name: 'list' }] }, 'From a list'), ['list']);
+    assert.deepEqual(whySignals(null), []);
+  });
+
+  test('routing reads as the model in use, not the raw status JSON', () => {
+    assert.equal(routingLine({ primary: 'Qwen/Qwen3.8-Flash-Next', fallback: null, active: 'Qwen/Qwen3.8-Flash-Next', degraded: false }), 'Qwen/Qwen3.8-Flash-Next');
+    assert.equal(routingLine({ primary: 'Qwen', fallback: 'Gemma', active: 'Qwen', degraded: false }), 'Qwen · falls back to Gemma');
+    assert.equal(routingLine({ primary: 'Qwen', fallback: 'Gemma', active: 'Gemma', degraded: true }), 'Gemma · standing in for Qwen');
+    assert.equal(routingLine('google/gemma'), 'google/gemma');
+    assert.doesNotMatch(routingLine({ primary: 'a', active: 'a' }), /[{}"]/);
+  });
+
+  test('j / k with no row focused steps into the list of the focused pane (or with nothing focused)', () => {
+    document.body.innerHTML = '<section data-pane-key="p1" tabindex="-1"><div id="list"><button data-row-button id="r1"></button><button data-row-button id="r2"></button></div></section>'
+      + '<section data-pane-key="p2" tabindex="-1"><input id="field"></section>';
+    const list = document.getElementById('list');
+    assert.equal(firstRowFor(document.body, list)?.id, 'r1');
+    assert.equal(firstRowFor(document.querySelector('[data-pane-key="p1"]'), list)?.id, 'r1');
+    assert.equal(firstRowFor(document.getElementById('r2'), list), null, 'a focused row moves on its own');
+    assert.equal(firstRowFor(document.getElementById('field'), list), null, 'typing is never taken');
+    assert.equal(firstRowFor(document.querySelector('[data-pane-key="p2"]'), list), null, 'another pane has focus');
+    document.body.innerHTML = '';
   });
 });
 
