@@ -15,6 +15,8 @@ vi.mock('./spamPipeline.js', () => ({ classifyAndTagMessage: vi.fn() }));
 vi.mock('./mailAccess.js', () => ({ getAccountAddresses: vi.fn(async () => []) }));
 
 import { ImapManager, MIN_SYNC_INTERVAL_MS, AUTO_IDLE_DELAY_MS, countMissingInboxCopies, fetchBackfillBatch, providerProfile, makeClientCfg, relocateExemptGuard, insertCopiedSibling, deleteMessageCopyRow, emitSectionsChanged, ensureMailbox, createKeyedSemaphore, isConnectionRefusal, connectCooldownMs, effectiveSyncIntervalMs, folderSyncDue, planModseqSync, connectStaggerFor, walkStructure, extractBodyFromMsg, bodyFallbackApplies, parsePersistentCap, resolvePersistentCap, persistentEligible, shouldRetryIPv4, classifyMoveBySearch, computeThreadId } from './imapManager.js';
+import { isClientUsable, isDeadConnectionFailure } from './imapManager.js';
+import { logger } from './logger.js';
 import { pluginRegistry } from '../plugins/registry.js';
 import { EventEmitter } from 'node:events';
 import { ImapFlow } from 'imapflow';
@@ -230,6 +232,35 @@ describe('makeClientCfg — auto-IDLE arming', () => {
     const cfg = makeClientCfg(baseAccount, resolved, { enableIdle: true, idleKeepaliveMs: 4 * 60 * 1000 });
     expect(cfg.maxIdleTime).toBe(4 * 60 * 1000);
     expect(cfg.autoIdleDelay).toBe(AUTO_IDLE_DELAY_MS);
+  });
+});
+
+// ── makeClientCfg — per-provider COMPRESS opt-out ────────────────────────────
+//
+// Yahoo's COMPRESS=DEFLATE stream corrupts (zlib `invalid distance too far back` and friends in
+// production, each followed by the connection closing). The opt-out lives in the provider profile
+// and is applied in makeClientCfg so that every client type inherits it, not just the IDLE one.
+
+describe('makeClientCfg — per-provider compression opt-out', () => {
+  const yahooAccount = { ...baseAccount, imap_host: 'imap.mail.yahoo.com' };
+
+  it('disables COMPRESS=DEFLATE for Yahoo on the IDLE connection', () => {
+    expect(makeClientCfg(yahooAccount, resolved, { enableIdle: true }).disableCompression).toBe(true);
+  });
+
+  it('disables it on pool/backfill/snippet connections too', () => {
+    expect(makeClientCfg(yahooAccount, resolved, { enableIdle: false }).disableCompression).toBe(true);
+  });
+
+  it.each(['imap.gmail.com', 'imap.purelymail.com', 'mail.example.org'])('leaves compression alone for %s', (host) => {
+    expect(makeClientCfg({ ...baseAccount, imap_host: host }, resolved, { enableIdle: true }).disableCompression).toBeUndefined();
+  });
+
+  it('keeps a Yahoo keepalive strictly inside the ~300s quiet-session cut', () => {
+    const profile = providerProfile({ imap_host: 'imap.mail.yahoo.com' });
+    expect(profile.disableCompression).toBe(true);
+    expect(profile.keepaliveNoopMs).toBeGreaterThan(0);
+    expect(profile.keepaliveNoopMs).toBeLessThan(300 * 1000);
   });
 });
 
@@ -2792,5 +2823,375 @@ describe('startSnippetIndexer — a message the server will not return', () => {
     expect([...skipped]).toEqual([3]);
     // one full batch, then one message at a time for as many messages as that batch held
     expect(fetched).toEqual([[5, 4, 3, 2, 1], [5], [4], [3], [2], [1]]);
+  });
+});
+
+// ── Persistent connection: a dead socket is not a provider refusal ──────────────────────────
+//
+// Production (Yahoo, 2026-09-23): every sixth minute `Message sync error … Connection not
+// available` → `Connection refused … backing off 30s` → the tick lost → `Reconnecting…` a
+// minute later. ImapFlow rejects every pending command with 'Connection not available' when the
+// socket closes; on an ESTABLISHED session that means the socket died, not that the provider
+// turned us away.
+
+describe('isDeadConnectionFailure', () => {
+  const noConn = (extra = {}) => Object.assign(new Error('Connection not available'), { code: 'NoConnection', ...extra });
+  const dead = { usable: false };
+  const live = { usable: true };
+
+  it('a NoConnection rejection from a client whose socket is gone is a dead socket', () => {
+    expect(isDeadConnectionFailure(noConn(), dead)).toBe(true);
+    expect(isDeadConnectionFailure(noConn(), { usable: true, socket: null })).toBe(true);
+    expect(isDeadConnectionFailure(noConn(), { usable: true, socket: { destroyed: true } })).toBe(true);
+  });
+
+  it('the same text on a client that is still usable is not (a real server answer)', () => {
+    expect(isDeadConnectionFailure(noConn(), live)).toBe(false);
+    expect(isDeadConnectionFailure(noConn(), {})).toBe(false); // test doubles without `usable` count as live
+  });
+
+  it('keeps a real refusal a refusal even though the socket closed', () => {
+    // BYE with a reason: ImapFlow carries it on err.reason.
+    expect(isDeadConnectionFailure(noConn({ reason: 'Too many connections from your IP' }), dead)).toBe(false);
+    // NO [LIMIT] … then close.
+    const limit = Object.assign(new Error('Command failed'), { serverResponseCode: 'LIMIT', responseText: 'Rate limit hit.' });
+    expect(isDeadConnectionFailure(limit, dead)).toBe(false);
+    expect(isDeadConnectionFailure(new Error('Maximum number of connections exceeded'), dead)).toBe(false);
+  });
+
+  it('needs a client to judge', () => {
+    expect(isDeadConnectionFailure(noConn(), null)).toBe(false);
+    expect(isClientUsable(null)).toBe(false);
+  });
+
+  it('does not change connect-time classification: a refused NEW connection still backs off', () => {
+    expect(isConnectionRefusal('Connection not available')).toBe(true);
+  });
+});
+
+describe('_syncTick — dead persistent socket', () => {
+  const yahoo = { id: 'y1', user_id: 'u1', email_address: 'p@yahoo.com', imap_host: 'imap.mail.yahoo.com', imap_port: 993, imap_tls: true, auth_user: 'p', auth_pass: 'enc', enabled: true };
+  const noConn = () => Object.assign(new Error('Connection not available'), { code: 'NoConnection' });
+  let created;
+
+  function fakeClient() {
+    const c = Object.assign(new EventEmitter(), {
+      usable: true,
+      idling: false,
+      connect: vi.fn().mockResolvedValue(),
+      getMailboxLock: vi.fn().mockResolvedValue({ release: vi.fn() }),
+      noop: vi.fn().mockResolvedValue(),
+    });
+    c.close = vi.fn(() => { if (c.usable) { c.usable = false; c.emit('close'); } });
+    return c;
+  }
+
+  function setup() {
+    const mgr = new ImapManager(null);
+    for (const key of ['_healthCheckTimer', '_snippetSchedulerTimer', '_stalenessCheckTimer', '_flagPushReconcilerTimer']) clearInterval(mgr[key]);
+    mgr.broadcast = vi.fn();
+    mgr.syncFolders = vi.fn().mockResolvedValue();
+    mgr._syncSpamFolder = vi.fn().mockResolvedValue();
+    mgr.syncIntervals.set(yahoo.id, 'scheduled'); // the account's 60 s interval is running
+    return mgr;
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    created = [];
+    query.mockReset();
+    query.mockImplementation(async sql => ({ rows: /FROM email_accounts/.test(sql) ? [yahoo] : [] }));
+    getConnectionPolicy.mockResolvedValue({ allowPrivateHosts: true });
+    resolveForConnection.mockResolvedValue({ host: '192.0.2.10', addresses: ['192.0.2.10'], servername: null });
+    ImapFlow.mockImplementation(function () { const c = fakeClient(); created.push(c); return c; });
+    for (const m of ['log', 'warn', 'error']) vi.spyOn(console, m).mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('reconnects and syncs in the same tick when the inherited socket dies mid-sync, without a refusal cooldown', async () => {
+    const mgr = setup();
+    const old = fakeClient();
+    mgr.connections.set(yahoo.id, old);
+    old.on('close', () => mgr._onPersistentClose(yahoo, old));
+    mgr.syncMessages = vi.fn(async (acct, client) => {
+      if (client === old) { old.close(); throw noConn(); } // Yahoo's FIN lands while the tick's command is in flight
+      return { insertedCount: 1 };
+    });
+
+    await mgr._syncTick(yahoo);
+
+    expect(mgr._connectCooldown.has(yahoo.id)).toBe(false);
+    expect(created).toHaveLength(1);
+    expect(mgr.syncMessages).toHaveBeenCalledTimes(2);
+    expect(mgr.syncMessages.mock.calls[1][1]).toBe(created[0]);
+    expect(mgr.connections.get(yahoo.id)).toBe(created[0]);
+    expect(mgr.lastSyncOkAt.has(yahoo.id)).toBe(true);
+    expect(mgr.syncingAccounts.has(yahoo.id)).toBe(false);
+    expect(console.warn).toHaveBeenCalledWith(expect.stringMatching(/died during sync.*not a provider refusal/));
+    expect(console.warn).not.toHaveBeenCalledWith(expect.stringMatching(/Connection refused/));
+  });
+
+  it('drops a client that is already dead at tick start and syncs once on a new connection', async () => {
+    const mgr = setup();
+    const old = fakeClient();
+    old.usable = false; // socket gone, but still sitting in `connections`
+    mgr.connections.set(yahoo.id, old);
+    mgr.syncMessages = vi.fn().mockResolvedValue({ insertedCount: 0 });
+
+    await mgr._syncTick(yahoo);
+
+    expect(mgr.syncMessages).toHaveBeenCalledTimes(1);
+    expect(mgr.syncMessages.mock.calls[0][1]).toBe(created[0]);
+    expect(mgr.connections.get(yahoo.id)).toBe(created[0]);
+    expect(mgr._connectCooldown.has(yahoo.id)).toBe(false);
+  });
+
+  it('keeps the refusal backoff when a connection made in this tick dies at once, and does not loop', async () => {
+    const mgr = setup();
+    mgr.syncMessages = vi.fn(async (acct, client) => { client.usable = false; throw noConn(); });
+
+    await mgr._syncTick(yahoo);
+
+    expect(created).toHaveLength(1);
+    expect(mgr.syncMessages).toHaveBeenCalledTimes(1);
+    expect(mgr._connectCooldown.get(yahoo.id)?.failures).toBe(1);
+  });
+
+  it('retries only once: a replacement that also dies arms the backoff', async () => {
+    const mgr = setup();
+    const old = fakeClient();
+    mgr.connections.set(yahoo.id, old);
+    mgr.syncMessages = vi.fn(async (acct, client) => { client.usable = false; throw noConn(); });
+
+    await mgr._syncTick(yahoo);
+
+    expect(created).toHaveLength(1);
+    expect(mgr.syncMessages).toHaveBeenCalledTimes(2);
+    expect(mgr._connectCooldown.get(yahoo.id)?.failures).toBe(1);
+  });
+
+  it('does not reconnect when disconnectAccount closed the client under the sync (logout, settings change)', async () => {
+    const mgr = setup();
+    const old = fakeClient();
+    mgr.connections.set(yahoo.id, old);
+    old.on('close', () => mgr._onPersistentClose(yahoo, old));
+    let disconnecting = null;
+    mgr.syncMessages = vi.fn(async (acct, client) => {
+      if (client === old) { disconnecting = mgr.disconnectAccount(yahoo.id); throw noConn(); }
+      return { insertedCount: 0 };
+    });
+
+    await mgr._syncTick(yahoo);
+    await disconnecting;
+
+    expect(created).toHaveLength(0);
+    expect(mgr.syncMessages).toHaveBeenCalledTimes(1);
+    expect(mgr.connections.has(yahoo.id)).toBe(false);
+  });
+
+  it('leaves other providers on the old handling: a dead socket is a refusal, no same-tick retry', async () => {
+    const gmail = { ...yahoo, id: 'g1', email_address: 'p@gmail.com', imap_host: 'imap.gmail.com' };
+    query.mockImplementation(async sql => ({ rows: /FROM email_accounts/.test(sql) ? [gmail] : [] }));
+    const mgr = setup();
+    mgr.syncIntervals.set(gmail.id, 'scheduled');
+    const old = fakeClient();
+    mgr.connections.set(gmail.id, old);
+    mgr.syncMessages = vi.fn(async (acct, client) => { client.usable = false; throw noConn(); });
+
+    await mgr._syncTick(gmail);
+
+    expect(created).toHaveLength(0);
+    expect(mgr.syncMessages).toHaveBeenCalledTimes(1);
+    expect(mgr._connectCooldown.get(gmail.id)?.failures).toBe(1);
+  });
+
+  it('still backs off on a real refusal from a live connection', async () => {
+    const mgr = setup();
+    const live = fakeClient();
+    mgr.connections.set(yahoo.id, live);
+    mgr.syncMessages = vi.fn().mockRejectedValue(
+      Object.assign(new Error('Command failed'), { serverResponseCode: 'LIMIT', responseText: 'Rate limit hit.' }));
+
+    await mgr._syncTick(yahoo);
+
+    expect(created).toHaveLength(0);
+    expect(mgr.syncMessages).toHaveBeenCalledTimes(1);
+    expect(mgr._connectCooldown.get(yahoo.id)?.failures).toBe(1);
+  });
+
+  it('logs a successful sync where production can see it, then rate-limits it', async () => {
+    const mgr = setup();
+    const info = vi.spyOn(logger, 'info').mockImplementation(() => {});
+    const debug = vi.spyOn(logger, 'debug').mockImplementation(() => {});
+    const c = fakeClient();
+    mgr.connections.set(yahoo.id, c);
+    mgr._trackPersistentClient(yahoo, c);
+    info.mockClear();
+    mgr.syncMessages = vi.fn().mockResolvedValue({ insertedCount: 0 });
+
+    await mgr._syncTick(yahoo);
+    await mgr._syncTick(yahoo);
+
+    const okLines = info.mock.calls.map(a => a[0]).filter(l => /INBOX sync OK/.test(l));
+    expect(okLines).toHaveLength(1);
+    expect(okLines[0]).toMatch(/\+0 new in \d+ms \(session \d+s old\)/);
+    expect(debug).toHaveBeenCalledWith(expect.stringMatching(/INBOX sync OK/));
+
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+    await mgr._syncTick(yahoo);
+    expect(info.mock.calls.map(a => a[0]).filter(l => /INBOX sync OK/.test(l)).at(-1)).toMatch(/2 successful ticks since the last report/);
+  });
+});
+
+// ── Persistent connection: keepalive and IDLE verification ─────────────────────────────────
+//
+// Yahoo closes a quiet session at ~300 s. IDLE is the keepalive when it runs; when it does not,
+// a provider with keepaliveNoopMs gets a NOOP under a short INBOX lock. Whether IDLE runs is
+// logged once per connection instead of being inferred.
+
+describe('persistent keepalive NOOP', () => {
+  const yahoo = { id: 'y2', user_id: 'u1', imap_host: 'imap.mail.yahoo.com' };
+  const KEEP = providerProfile(yahoo).keepaliveNoopMs;
+  function setup() {
+    const mgr = new ImapManager(null);
+    for (const key of ['_healthCheckTimer', '_snippetSchedulerTimer', '_stalenessCheckTimer', '_flagPushReconcilerTimer']) clearInterval(mgr[key]);
+    const release = vi.fn();
+    const client = { usable: true, idling: false, getMailboxLock: vi.fn().mockResolvedValue({ release }), noop: vi.fn().mockResolvedValue(), close: vi.fn() };
+    mgr.connections.set(yahoo.id, client);
+    mgr._trackPersistentClient(yahoo, client);
+    return { mgr, client, release };
+  }
+  beforeEach(() => {
+    vi.useFakeTimers();
+    query.mockReset();
+    query.mockResolvedValue({ rows: [] });
+    vi.spyOn(logger, 'info').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('sends NOOP under an INBOX lock when the connection is not idling, and releases the lock', async () => {
+    const { client, release } = setup();
+    await vi.advanceTimersByTimeAsync(KEEP);
+    expect(client.getMailboxLock).toHaveBeenCalledWith('INBOX', { acquireTimeout: 10000 });
+    expect(client.noop).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+    expect(logger.info).toHaveBeenCalledWith(expect.stringMatching(/IMAP keepalive: NOOP sent/));
+  });
+
+  it('runs one keepalive at a time: a NOOP stuck on a half-open socket is not joined by another', async () => {
+    const { client } = setup();
+    let finish;
+    client.noop.mockImplementation(() => new Promise((r) => { finish = r; }));
+    await vi.advanceTimersByTimeAsync(KEEP);
+    await vi.advanceTimersByTimeAsync(KEEP);
+    expect(client.getMailboxLock).toHaveBeenCalledOnce();
+    finish();
+    await vi.advanceTimersByTimeAsync(KEEP);
+    expect(client.getMailboxLock).toHaveBeenCalledTimes(2);
+  });
+
+  it('stays silent while the connection is idling or a sync is running', async () => {
+    const { mgr, client } = setup();
+    client.idling = true;
+    await vi.advanceTimersByTimeAsync(KEEP);
+    client.idling = false;
+    mgr.syncingAccounts.add(yahoo.id);
+    await vi.advanceTimersByTimeAsync(KEEP);
+    expect(client.noop).not.toHaveBeenCalled();
+  });
+
+  it('stops for a replaced or dead client, and disconnect clears it', async () => {
+    const { mgr, client } = setup();
+    mgr.connections.set(yahoo.id, { usable: true });
+    await vi.advanceTimersByTimeAsync(KEEP);
+    expect(client.noop).not.toHaveBeenCalled();
+    expect(mgr._keepaliveTimers.has(yahoo.id)).toBe(false);
+
+    const again = setup();
+    await again.mgr.disconnectAccount(yahoo.id);
+    expect(again.mgr._keepaliveTimers.has(yahoo.id)).toBe(false);
+    await vi.advanceTimersByTimeAsync(KEEP);
+    expect(again.client.noop).not.toHaveBeenCalled();
+  });
+
+  it('a late close from an old client does not stop its successor\'s keepalive', () => {
+    const { mgr, client } = setup();
+    const successor = { usable: true, idling: false };
+    mgr.connections.set(yahoo.id, successor);
+    mgr._trackPersistentClient(yahoo, successor);
+    mgr._onPersistentClose(yahoo, client);
+    expect(mgr._keepaliveTimers.get(yahoo.id)?.client).toBe(successor);
+    expect(mgr.connections.get(yahoo.id)).toBe(successor);
+  });
+
+  it('is not armed for a provider without keepaliveNoopMs', () => {
+    const mgr = new ImapManager(null);
+    for (const key of ['_healthCheckTimer', '_snippetSchedulerTimer', '_stalenessCheckTimer', '_flagPushReconcilerTimer']) clearInterval(mgr[key]);
+    mgr._trackPersistentClient({ id: 'g', imap_host: 'imap.gmail.com' }, { usable: true });
+    expect(mgr._keepaliveTimers.size).toBe(0);
+  });
+
+  it('reports what the session negotiated, including compression', () => {
+    setup();
+    expect(logger.info).toHaveBeenCalledWith(expect.stringMatching(/compression=off \(disabled for provider\), idle=on .*keepalive=NOOP every 240s/));
+  });
+});
+
+describe('IDLE verification after a sync', () => {
+  const acct = { id: 'y3', user_id: 'u1', imap_host: 'imap.mail.yahoo.com' };
+  function setup(client) {
+    const mgr = new ImapManager(null);
+    for (const key of ['_healthCheckTimer', '_snippetSchedulerTimer', '_stalenessCheckTimer', '_flagPushReconcilerTimer']) clearInterval(mgr[key]);
+    mgr.connections.set(acct.id, client);
+    mgr._trackPersistentClient(acct, client);
+    return mgr;
+  }
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.spyOn(logger, 'info').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('logs once per connection that IDLE is active', async () => {
+    const client = { usable: true, idling: true };
+    const mgr = setup(client);
+    mgr._verifyIdleAfterSync(acct, client);
+    await vi.advanceTimersByTimeAsync(AUTO_IDLE_DELAY_MS + 2000);
+    mgr._verifyIdleAfterSync(acct, client);
+    await vi.advanceTimersByTimeAsync(AUTO_IDLE_DELAY_MS + 2000);
+    expect(logger.info.mock.calls.filter(([l]) => /IMAP IDLE active/.test(l))).toHaveLength(1);
+  });
+
+  it('says once, with the reason, when IDLE did not start, and again once it does', async () => {
+    const client = { usable: true, idling: false, currentLock: { lockId: 1 }, mailbox: { path: 'INBOX' } };
+    const mgr = setup(client);
+    mgr._verifyIdleAfterSync(acct, client);
+    await vi.advanceTimersByTimeAsync(AUTO_IDLE_DELAY_MS + 2000);
+    mgr._verifyIdleAfterSync(acct, client);
+    await vi.advanceTimersByTimeAsync(AUTO_IDLE_DELAY_MS + 2000);
+    const notActive = console.warn.mock.calls.filter(([l]) => /IMAP IDLE not active/.test(l));
+    expect(notActive).toHaveLength(1);
+    expect(notActive[0][0]).toMatch(/selected: INBOX; busy: lock held/);
+
+    client.idling = true;
+    client.currentLock = false;
+    mgr._verifyIdleAfterSync(acct, client);
+    await vi.advanceTimersByTimeAsync(AUTO_IDLE_DELAY_MS + 2000);
+    expect(logger.info).toHaveBeenCalledWith(expect.stringMatching(/IMAP IDLE active/));
   });
 });

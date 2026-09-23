@@ -254,6 +254,35 @@ export function isConnectionRefusal(detail) {
   return /\[LIMIT\]|connection not available|too many|maximum number|number of connections|rate.?limit|temporarily|try again|connection limit|over quota|throttl|connect timeout/i.test(String(detail || ''));
 }
 
+// Whether an established ImapFlow client can still carry commands. ImapFlow sets `usable` true
+// once the session is up and false in close(), and nulls/destroys the socket there. Clients
+// without the property (test doubles) count as usable, so only a positively dead client fails.
+export function isClientUsable(client) {
+  if (!client) return false;
+  if (client.usable === false) return false;
+  if (client.socket === null || client.socket?.destroyed === true) return false;
+  return true;
+}
+
+// A command on an ALREADY ESTABLISHED client failed because its socket is gone (the server sent
+// FIN, the transport reset, the zlib stream broke), not because the provider refused us.
+//
+// ImapFlow rejects every pending command and lock with the same 'Connection not available' when
+// the socket closes, and isConnectionRefusal matches that text because a provider that turns
+// away a NEW connection often produces exactly it. On an established session it means only
+// "this socket died": treating it as a refusal armed the 30s cooldown, lost the tick, and (via
+// the shared cooldown map) also paused the folder-status monitor and Hedwig's body fetches.
+//
+// Still a refusal when the text says more than the generic phrase: a BYE reason such as
+// "Too many connections" (ImapFlow puts it on err.reason), or a NO [LIMIT] / throttle answer
+// that preceded the close. Pure.
+export function isDeadConnectionFailure(err, client) {
+  if (!client || isClientUsable(client)) return false; // a live client got a real server answer
+  if (err?.reason && isConnectionRefusal(err.reason)) return false;
+  const detail = extractImapError(err).replace(/connection not available/gi, '');
+  return !isConnectionRefusal(detail);
+}
+
 // Stamp an account's last successful sync. Shared by both exits of syncMessages so they cannot
 // drift: a folder that turned out to be empty is still a SUCCESSFUL sync and must be stamped.
 // Without this a brand-new account that has never received mail keeps last_sync = NULL forever,
@@ -482,6 +511,17 @@ export const AUTO_IDLE_DELAY_MS = 3000;
 // before we warn. IDLE covers all but a moment of each cycle, so three straight misses means
 // push is not running and the account has silently degraded to polling.
 const IDLE_MISS_WARN_STREAK = 3;
+
+// How long after a successful sync tick to look at `client.idling` on the persistent connection.
+// ImapFlow arms IDLE AUTO_IDLE_DELAY_MS after the connection goes quiet, so a couple of seconds
+// past that it should be idling. Logged once per connection (see _verifyIdleAfterSync), which
+// makes "IDLE works" / "IDLE never started" a fact in the production log rather than a guess.
+const IDLE_VERIFY_DELAY_MS = AUTO_IDLE_DELAY_MS + 2000;
+
+// A successful INBOX sync is logged at info level on the first tick of each connection, whenever
+// it inserted mail, and otherwise at most this often per account, so success is visible in
+// production (LOG_LEVEL=info) without a line per account per tick. Every tick logs at debug.
+const SYNC_OK_REPORT_MS = 10 * 60 * 1000;
 
 // How often to actively probe each connected account for a "deaf" sync connection —
 // one that still passes commands but has stopped reflecting new mail (the ~60-min
@@ -852,6 +892,19 @@ function safeDate(d) {
 // connectStaggerMs:     base gap between successive account connects at startup, to keep the
 //                       initial burst under a provider's per-IP connection rate limit.
 //                       Omitted → 200ms default. See connectStaggerFor(). (#218)
+// disableCompression:   never negotiate COMPRESS=DEFLATE (ImapFlow `disableCompression`) on any
+//                       connection to this provider. Applied in makeClientCfg, so it covers the
+//                       persistent, pool, backfill, snippet and probe clients alike.
+// keepaliveNoopMs:      on the persistent sync connection, send a NOOP (under a short INBOX lock,
+//                       which also re-SELECTs INBOX if nothing is selected) whenever the
+//                       connection is found NOT idling this often. For providers that close a
+//                       quiet session: IDLE is the normal keepalive, this is the fallback for
+//                       when IDLE did not start. Omitted → no keepalive timer. See
+//                       _armPersistentKeepalive().
+// retryDeadSocket:      when the persistent sync connection is found dead at the start of a tick,
+//                       or dies under a sync it inherited, reconnect and sync again in the same
+//                       tick instead of treating it as a provider refusal (30 s cooldown). For
+//                       providers that cut long sessions on a timer. Omitted → the old handling.
 const PROVIDERS = {
   google: {
     // Gmail folders are label memberships; matching Message-IDs are not proof of a move.
@@ -872,6 +925,15 @@ const PROVIDERS = {
     batchSize: 100, batchDelay: 2000, errorDelay: 30000, batchesPerConn: 10,
     fetchBody: false,
     idleKeepaliveMs: 4 * 60 * 1000, // Yahoo silently drops an IDLE held ~5 min; re-issue before it goes deaf
+    // Yahoo's COMPRESS=DEFLATE stream corrupts: production logged `invalid distance code`,
+    // `invalid distance too far back` and `invalid literal/length code` from zlib, each one
+    // followed by the connection closing. Uncompressed IMAP costs a few KB per sync.
+    disableCompression: true,
+    // Yahoo closes a session it considers quiet at ~300 s (packet capture: FIN exactly 300 s
+    // after connect). 4 min leaves a full minute of margin when IDLE is not running.
+    keepaliveNoopMs: 4 * 60 * 1000,
+    // Yahoo cuts each session ~300 s after connect, so every fifth 60 s tick found it dying.
+    retryDeadSocket: true,
     pushesFlags: true,
     snippetIndex: true,
     speculativeFetch: false,
@@ -1401,6 +1463,9 @@ export function makeClientCfg(account, resolved, { enableIdle = false, policy = 
   // the only one to complain: it drops a non-IDLE session after ~295s, producing an endless
   // reconnect loop.) MUST stay below MIN_SYNC_INTERVAL_MS — see the makeClientCfg tests.
   if (enableIdle) cfg.autoIdleDelay = AUTO_IDLE_DELAY_MS;
+  // Per-provider opt-out of COMPRESS=DEFLATE (see PROVIDERS.yahoo). Every connection is built
+  // here, so the persistent, pool, backfill, snippet and probe clients all honor it.
+  if (providerProfile(account).disableCompression) cfg.disableCompression = true;
   // OAuth2 XOAUTH2 for Gmail and Microsoft
   if ((account.oauth_provider === 'google' || account.oauth_provider === 'microsoft')
       && account.oauth_access_token) {
@@ -1707,6 +1772,9 @@ export class ImapManager {
     this.lastFolderSyncAt = new Map(); // accountId -> last folder-structure sync timestamp
     this._pollOnlyAccounts = new Set(); // accountId — demoted to poll-only (no persistent IDLE) by the per-host connection budget (#379)
     this._idleMissStreak = new Map(); // accountId -> consecutive health checks seen NOT idling despite IDLE being enabled
+    this._persistentMeta = new WeakMap(); // persistent ImapFlow client -> { connectedAt, idleSeen, idleReported, keepaliveLogged, okLogged }
+    this._keepaliveTimers = new Map();    // accountId -> keepalive NOOP interval for providers with keepaliveNoopMs
+    this._syncOkReport = new Map();       // accountId -> { at, ticks } for the rate-limited "INBOX sync OK" line
     this.snippetIndexerRunning = new Set(); // accountId — prevent duplicate snippet-index runs
     this.snippetBackoff = new Map();        // imap_host -> { failures, until } circuit breaker (host-level: a per-host connection limit hits every account on that host, so back them all off together)
     this.lastUserActivity = new Map();      // accountId -> ms timestamp of last live body fetch
@@ -2158,6 +2226,149 @@ export class ImapManager {
     });
   }
 
+  // ── Persistent sync connection: lifecycle, keepalive, IDLE check (Hedwig, 2026-09-24) ─────
+  // Yahoo showed every one of these gaps at once: a session cut at ~300 s, a COMPRESS stream that
+  // corrupts, nothing in the log to say whether IDLE ever ran, and no log line at all for a sync
+  // that worked. These helpers are shared by connectAccount and the in-tick reconnect so both
+  // install a persistent client the same way.
+
+  // Called wherever a client becomes the account's persistent sync connection. Records when it
+  // connected, says once what the session negotiated, and arms the provider's keepalive.
+  _trackPersistentClient(account, client) {
+    this._persistentMeta.set(client, { connectedAt: Date.now(), idleSeen: false, idleReported: null, keepaliveLogged: false, okLogged: false });
+    const profile = providerProfile(account);
+    const idle = profile.usesIdle !== false
+      ? `on (re-issued every ${Math.round((profile.idleKeepaliveMs || 25 * 60 * 1000) / 1000)}s)` : 'off';
+    const keepalive = profile.keepaliveNoopMs
+      ? `NOOP every ${Math.round(profile.keepaliveNoopMs / 1000)}s when not idling` : 'none';
+    // ImapFlow holds an inflate stream on _inflate only while COMPRESS=DEFLATE is active, so this
+    // reports what the session negotiated, not merely what was configured.
+    const compression = `${client._inflate ? 'on' : 'off'}${profile.disableCompression ? ' (disabled for provider)' : ''}`;
+    logger.info(`IMAP session for ${logAccount(account)}: compression=${compression}, idle=${idle}, keepalive=${keepalive}`);
+    this._armPersistentKeepalive(account, client);
+  }
+
+  _connAgeSec(client) {
+    const meta = client && this._persistentMeta.get(client);
+    return meta ? Math.round((Date.now() - meta.connectedAt) / 1000) : null;
+  }
+
+  // 'close' on a persistent client: forget it and stop its keepalive. The session's age is the
+  // useful part of the line: a provider that cuts sessions at a fixed lifetime shows the same
+  // number every time.
+  _onPersistentClose(account, client) {
+    this._clearPersistentKeepalive(account.id, client);
+    if (this.connections.get(account.id) !== client) return;
+    this.connections.delete(account.id);
+    const meta = this._persistentMeta.get(client);
+    const age = this._connAgeSec(client);
+    console.log(`IMAP connection closed for ${logAccount(account)}${age != null ? ` after ${age}s` : ''}${meta ? ` (IDLE ${meta.idleSeen ? 'was seen' : 'never seen'} on it)` : ''}`);
+  }
+
+  // Keepalive for providers that drop a quiet session (profile keepaliveNoopMs). IDLE is the
+  // normal keepalive; this only speaks when the connection is found NOT idling, so a healthy
+  // IDLE connection sees no extra traffic.
+  _armPersistentKeepalive(account, client) {
+    this._clearPersistentKeepalive(account.id);
+    const ms = providerProfile(account).keepaliveNoopMs;
+    if (!ms) return;
+    const timer = setInterval(() => {
+      this._persistentKeepaliveTick(account, client).catch(() => {});
+    }, ms);
+    timer.unref?.();
+    this._keepaliveTimers.set(account.id, { timer, client });
+  }
+
+  // client given: only clear the timer if it belongs to that client (a late 'close' from an old
+  // connection must not stop its successor's keepalive).
+  _clearPersistentKeepalive(accountId, client = null) {
+    const entry = this._keepaliveTimers.get(accountId);
+    if (!entry || (client && entry.client !== client)) return;
+    clearInterval(entry.timer);
+    this._keepaliveTimers.delete(accountId);
+  }
+
+  async _persistentKeepaliveTick(account, client) {
+    if (this.connections.get(account.id) !== client || !isClientUsable(client)) {
+      this._clearPersistentKeepalive(account.id, client); // replaced or dead: the next tick reconnects
+      return;
+    }
+    const meta = this._persistentMeta.get(client);
+    if (client.idling) { if (meta) meta.idleSeen = true; return; }
+    // A sync or reconnect in flight is traffic already, and a lock would only queue behind it.
+    if (this.syncingAccounts.has(account.id) || this.connectingAccounts.has(account.id)) return;
+    // One keepalive at a time: a NOOP stuck on a half-open socket is only ended by ImapFlow's
+    // socketTimeout (300 s), longer than the keepalive period.
+    if (meta?.keepaliveBusy) return;
+    if (meta) meta.keepaliveBusy = true;
+    try {
+      // The INBOX lock re-SELECTs INBOX if nothing is selected, which is what ImapFlow needs before
+      // it will auto-IDLE; releasing the lock re-arms auto-IDLE. No raceTimeout around the lock (an
+      // abandoned request granted later would stay held); ImapFlow's own acquireTimeout takes a
+      // lock that was never granted out of its queue. socketTimeout bounds the NOOP and close()
+      // rejects a pending lock.
+      const lock = await client.getMailboxLock('INBOX', { acquireTimeout: 10_000 });
+      try { await client.noop(); } finally { lock.release(); }
+      if (meta && !meta.keepaliveLogged) {
+        meta.keepaliveLogged = true;
+        logger.info(`IMAP keepalive: NOOP sent on ${logAccount(account)} (not idling, session ${this._connAgeSec(client)}s old); repeats every ${Math.round(providerProfile(account).keepaliveNoopMs / 1000)}s while IDLE is inactive`);
+      }
+    } catch (err) {
+      console.warn(`IMAP keepalive NOOP failed for ${logAccount(account)}: ${extractImapError(err)}`);
+    } finally {
+      if (meta) meta.keepaliveBusy = false;
+    }
+  }
+
+  // Look at the persistent connection shortly after a successful sync, when ImapFlow's auto-IDLE
+  // should have started, and log once per connection whether push is actually running. If not,
+  // say what holds it off: ImapFlow only idles in SELECTED state with no lock, command or download
+  // pending (connectionBusy()). A later check that finds it idling logs that once too.
+  _verifyIdleAfterSync(account, client) {
+    const meta = this._persistentMeta.get(client);
+    if (!meta || meta.idleReported === 'idling') return;
+    const timer = setTimeout(() => {
+      if (this.connections.get(account.id) !== client || !isClientUsable(client)) return;
+      if (client.idling) {
+        meta.idleSeen = true;
+        meta.idleReported = 'idling';
+        logger.info(`IMAP IDLE active for ${logAccount(account)} (session ${this._connAgeSec(client)}s old): push is on`);
+      } else if (meta.idleReported == null) {
+        meta.idleReported = 'not-idling';
+        const busy = [
+          client.currentLock && 'lock held',
+          client.locks?.length && `${client.locks.length} lock(s) queued`,
+          client.currentRequest && `${client.currentRequest.command || 'command'} in flight`,
+          client.requestQueue?.length && `${client.requestQueue.length} command(s) queued`,
+          client._openDownloads && `${client._openDownloads} download(s) open`,
+        ].filter(Boolean);
+        const keep = providerProfile(account).keepaliveNoopMs;
+        console.warn(`IMAP IDLE not active for ${logAccount(account)} ${IDLE_VERIFY_DELAY_MS / 1000}s after a sync (selected: ${client.mailbox?.path || 'none'}; busy: ${busy.join(', ') || 'no'}); push is off on this connection${keep ? `, keepalive NOOP every ${Math.round(keep / 1000)}s holds it open` : ''}`);
+      }
+    }, IDLE_VERIFY_DELAY_MS);
+    timer.unref?.();
+  }
+
+  // One line for a sync that worked, which used to log nothing at all. Info level (visible in
+  // production) on a connection's first successful sync, whenever mail was inserted, and at most
+  // every SYNC_OK_REPORT_MS otherwise; debug for the rest.
+  _reportInboxSyncOk(account, client, result, ms) {
+    const inserted = result?.insertedCount || 0;
+    const age = this._connAgeSec(client);
+    const line = `INBOX sync OK for ${logAccount(account)}: +${inserted} new in ${ms}ms${age != null ? ` (session ${age}s old)` : ''}`;
+    const meta = client && this._persistentMeta.get(client);
+    const rep = this._syncOkReport.get(account.id) || { at: 0, ticks: 0 };
+    rep.ticks += 1;
+    if ((meta && !meta.okLogged) || inserted > 0 || Date.now() - rep.at >= SYNC_OK_REPORT_MS) {
+      if (meta) meta.okLogged = true;
+      logger.info(`${line}${rep.ticks > 1 ? `; ${rep.ticks} successful ticks since the last report` : ''}`);
+      this._syncOkReport.set(account.id, { at: Date.now(), ticks: 0 });
+    } else {
+      logger.debug(line);
+      this._syncOkReport.set(account.id, rep);
+    }
+  }
+
   async connectAccount(account) {
     // Back off if this account is in a connection-refusal cooldown. Retrying a provider that
     // is rejecting connections (per-IP/per-account limit, temporary lock) every health-check
@@ -2217,14 +2428,10 @@ export class ImapManager {
       // Remove from active connections the moment the server closes the socket.
       // Without this, a cleanly-closed connection lingers in this.connections and
       // every subsequent sync call either hangs (half-open TCP) or throws immediately.
-      client.on('close', () => {
-        if (this.connections.get(account.id) === client) {
-          this.connections.delete(account.id);
-          console.log(`IMAP connection closed for ${logAccount(account)}`);
-        }
-      });
+      client.on('close', () => this._onPersistentClose(account, client));
       this._attachIdleListeners(client, account);
       this.connections.set(account.id, client);
+      this._trackPersistentClient(account, client);
       await this._clearAccountError(account);
 
       // Decide whether to auto-backfill BEFORE the initial sync below runs. For providers
@@ -2302,6 +2509,13 @@ export class ImapManager {
       // the health check retries them normally.
       if (isAuthFailure(detail)) this._noteAuthFailure(account);
       else if (isConnectionRefusal(detail)) this._noteConnectionRefusal(account);
+      // A client installed before the failure (a later await threw) has no sync interval: drop it,
+      // so it is not left open with only a keepalive, and the health check can connect again.
+      if (client && this.connections.get(account.id) === client) {
+        this.connections.delete(account.id);
+        this._clearPersistentKeepalive(account.id, client);
+        try { client.close(); } catch { /* already closed */ }
+      }
       await this._recordAccountError(account, detail);
       return false;
     } finally {
@@ -2324,6 +2538,8 @@ export class ImapManager {
     this.syncThrottleSkips.delete(accountId);
     this.syncTickCount.delete(accountId);
     this.lastSyncOkAt.delete(accountId);
+    this._clearPersistentKeepalive(accountId);
+    this._syncOkReport.delete(accountId);
     // The streak describes one client's IDLE state; a reconnect gets a fresh client and must
     // start from zero, or a warning could carry over and fire against a healthy connection.
     this._idleMissStreak.delete(accountId);
@@ -2565,7 +2781,9 @@ export class ImapManager {
   }
 
   // Extracted sync tick — runs on every interval tick for an account.
-  async _syncTick(account) {
+  // deadSocketRetry: set only by the same-tick retry below, so a connection that dies again
+  // straight after reconnecting falls back to the normal (refusal-aware) error handling.
+  async _syncTick(account, { deadSocketRetry = false } = {}) {
     const skips = this.syncThrottleSkips.get(account.id) || 0;
     if (skips > 0) {
       this.syncThrottleSkips.set(account.id, skips - 1);
@@ -2573,12 +2791,25 @@ export class ImapManager {
     }
     if (this.syncingAccounts.has(account.id)) return;
     this.syncingAccounts.add(account.id);
-    this.syncStartedAt.set(account.id, Date.now());
+    const tickStartedAt = Date.now();
+    this.syncStartedAt.set(account.id, tickStartedAt);
     let activeClient = null;
     let usedFreshSyncClient = false;
+    let reconnectedThisTick = false;
+    let retryAfterDeadSocket = false;
     let syncResult;
     try {
       activeClient = this.connections.get(account.id);
+      // A persistent client whose socket is already gone (server FIN, reset, broken zlib stream)
+      // but which is still in `connections`: every command on it fails at once with
+      // 'Connection not available'. Drop it and take the reconnect path below in THIS tick.
+      if (activeClient && providerProfile(account).retryDeadSocket && !isClientUsable(activeClient)) {
+        console.warn(`Persistent IMAP connection for ${logAccount(account)} is dead${this._connAgeSec(activeClient) != null ? ` (session ${this._connAgeSec(activeClient)}s old)` : ''}; reconnecting in this tick`);
+        this._clearPersistentKeepalive(account.id, activeClient);
+        this.connections.delete(account.id);
+        try { activeClient.close(); } catch { /* already closed */ }
+        activeClient = null;
+      }
       // syncAccount tracks the freshest account data available — updated to freshAccount
       // on reconnect so that IDLE listeners, provider detection, and flag syncs all use
       // current credentials and config rather than the stale closure-captured object.
@@ -2622,15 +2853,14 @@ export class ImapManager {
           const reconnected = { client: pendingClient, account: setup.freshAccount };
           activeClient = reconnected.client;
           syncAccount = reconnected.account;
-          activeClient.on('close', () => {
-            if (this.connections.get(account.id) === activeClient) {
-              this.connections.delete(account.id);
-            }
-          });
+          const installed = activeClient; // the closure must not follow later reassignments
+          installed.on('close', () => this._onPersistentClose(account, installed));
           // NB: the 'error' listener is attached before connect() inside the IIFE above
           // (#360) — activeClient is that same pendingClient, so it's already covered here.
           this._attachIdleListeners(activeClient, syncAccount);
           this.connections.set(account.id, activeClient);
+          this._trackPersistentClient(syncAccount, activeClient);
+          reconnectedThisTick = true;
           // Mirror connectAccount's success cleanup: clear the refusal backoff so the next
           // failure starts fresh, and clear the stale sync_error the UI is still showing.
           this._connectCooldown.delete(account.id);
@@ -2687,6 +2917,7 @@ export class ImapManager {
       if ((syncResult?.insertedCount || 0) > 0 && !syncResult?.broadcastedNewMessages) {
         this.broadcast({ type: 'sync_complete', accountId: account.id }, account.user_id);
       }
+      this._reportInboxSyncOk(syncAccount, usedFreshSyncClient ? null : activeClient, syncResult, Date.now() - tickStartedAt);
 
       const ticks = (this.syncTickCount.get(account.id) || 0) + 1;
       this.syncTickCount.set(account.id, ticks);
@@ -2740,16 +2971,35 @@ export class ImapManager {
           );
         });
       }
+      // The sync left INBOX selected and released its lock, so auto-IDLE should start within
+      // AUTO_IDLE_DELAY_MS. Check that it did (logged once per connection). After the periodic
+      // folder sync, whose LIST on this client would otherwise read as "busy".
+      if (!usedFreshSyncClient && providerProfile(syncAccount).usesIdle !== false) {
+        this._verifyIdleAfterSync(syncAccount, activeClient);
+      }
     } catch (err) {
       const detail = extractImapError(err);
-      console.error(`Sync error for ${logAccount(account)}:`, detail);
+      // The persistent socket died under this sync (Yahoo: the session cut at ~300 s lands on
+      // every fifth 60 s tick after a reconnect). That is not a provider refusal, so do not arm
+      // the cooldown; drop the client and sync again on a fresh connection right away. Only for
+      // a connection this tick inherited: one that dies straight after this tick reconnected
+      // keeps the refusal handling below, since that is the shape of a provider pushing back.
+      const deadSocket = !usedFreshSyncClient && !reconnectedThisTick && !deadSocketRetry
+        && Boolean(providerProfile(account).retryDeadSocket) && isDeadConnectionFailure(err, activeClient);
+      if (deadSocket) {
+        retryAfterDeadSocket = true;
+        const age = this._connAgeSec(activeClient);
+        console.warn(`Persistent IMAP connection for ${logAccount(account)} died during sync (${detail}${age != null ? `, session ${age}s old` : ''}); not a provider refusal, reconnecting and syncing again now`);
+      } else {
+        console.error(`Sync error for ${logAccount(account)}:`, detail);
+      }
       if (detail.includes('THROTTLED') || detail.includes('throttl')) {
         this.syncThrottleSkips.set(account.id, 4);
       }
       // A refusal on the sync path (notably the fresh-login poll, which never reaches the
       // reconnect gate) must arm the same backoff the connect paths use — otherwise the poll
       // keeps hammering a provider that's refusing logins. Honored by the check above next tick.
-      if (isConnectionRefusal(detail)) {
+      if (!deadSocket && isConnectionRefusal(detail)) {
         this._noteConnectionRefusal(account);
         // Surface what we backed off on, for the same reason as the poll-only tick: gated on the
         // refusal so a one-off 'Sync wall-clock timeout' doesn't flag an otherwise healthy account.
@@ -2762,6 +3012,7 @@ export class ImapManager {
       const dead = this.connections.get(account.id);
       if (!usedFreshSyncClient && dead && dead === activeClient) {
         this.connections.delete(account.id);
+        this._clearPersistentKeepalive(account.id, dead);
         // LOGOUT queues behind the hung command; destroy the transport so the
         // abandoned sync actually stops before another connection retries it.
         try { dead.close(); } catch { /* already closed */ }
@@ -2770,6 +3021,13 @@ export class ImapManager {
       this.syncingAccounts.delete(account.id);
       this.syncStartedAt.delete(account.id);
     }
+    // After the guard is released, so the retry can take it. The dead client is out of
+    // `connections` (its 'close' handler or the teardown above removed it), so the retry takes
+    // the reconnect path and syncs on the new connection: the tick is not lost.
+    // Only while the account is still scheduled: disconnectAccount (logout, a settings change)
+    // removes the interval before it closes the client, and the sync that close interrupts must
+    // not bring the connection back behind its back.
+    if (retryAfterDeadSocket && this.syncIntervals.has(account.id)) await this._syncTick(account, { deadSocketRetry: true });
   }
 
   // Bulk-apply is_read/is_starred from a fetched {uid, isRead, isStarred}[] onto existing rows
