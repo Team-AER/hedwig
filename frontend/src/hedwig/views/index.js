@@ -1,5 +1,7 @@
 // Registers every core Hedwig view, the palette/keymap commands, and the classic-shell context
-// sidebar. Imported once by hedwig/index.js.
+// sidebar. Imported once by hedwig/index.js. The v2 views (streams, Screener, thread, Brief,
+// Hedwig today, the rail) register first, from ../v2/index.js; the v1 views stay registered so
+// saved layouts that name them keep working.
 import { createElement } from 'react';
 import { registerCommand, registerView } from '../registry.js';
 import { useHedwig } from '../store.js';
@@ -16,6 +18,7 @@ import TriageSettings from './settings/TriageSettings.jsx';
 import PluginSettings from './settings/PluginSettings.jsx';
 import ModelSettings from './settings/ModelSettings.jsx';
 import PersonalSettings from './settings/PersonalSettings.jsx';
+import { registerV2 } from '../v2/index.js';
 
 export const HEDWIG_VIEWS = [
   { id: 'hedwig.needs', title: 'Needs you', icon: 'inbox', group: 'mail', requires: 'triage', component: NeedsYou,
@@ -26,7 +29,7 @@ export const HEDWIG_VIEWS = [
     description: 'Ask a question across all your mail; answers cite their sources.' },
   { id: 'hedwig.timeline', title: 'Topic timeline', icon: 'topic', group: 'context', requires: 'context', component: Timeline,
     description: 'A topic as a dated timeline of who said what and what is owed.' },
-  { id: 'hedwig.people', title: 'People', icon: 'people', group: 'context', requires: 'context', component: People,
+  { id: 'hedwig.people', title: 'Correspondents', icon: 'contacts', group: 'context', requires: 'context', component: People,
     description: 'Everyone you correspond with, most recent first.' },
   { id: 'hedwig.insights', title: 'Insights', icon: 'chart', group: 'insights', requires: 'insights', component: Insights,
     description: 'Volume, reply times, top senders, insight cards and the daily briefing.' },
@@ -51,7 +54,7 @@ export const HEDWIG_COMMANDS = [
     run: () => { useHedwig.getState().setTriageFilter('needs_you'); useHedwig.getState().openView('hedwig.needs', {}); } },
   { id: 'hedwig.insights', title: 'Insights', keys: 'g i', when: on('insights'), run: open('hedwig.insights') },
   { id: 'hedwig.agent', title: 'Agent', keys: 'g .', when: on('agent'), run: open('hedwig.agent') },
-  { id: 'hedwig.people', title: 'People', keys: 'g p', when: on('context'), run: open('hedwig.people') },
+  { id: 'hedwig.people', title: 'Correspondents', when: on('context'), run: open('hedwig.people') },
   { id: 'hedwig.briefing', title: 'Daily briefing', when: on('insights'), run: open('hedwig.insights', { focus: 'briefing' }) },
   { id: 'hedwig.settings', title: 'Hedwig settings', run: open('hedwig.settings.personal') },
 ];
@@ -61,6 +64,7 @@ let registered = false;
 export function registerHedwigViews() {
   if (registered) return;
   registered = true;
+  registerV2();
   for (const v of HEDWIG_VIEWS) registerView(v);
   for (const c of HEDWIG_COMMANDS) registerCommand({ group: 'Hedwig', ...c });
 

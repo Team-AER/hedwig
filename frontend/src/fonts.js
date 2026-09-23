@@ -6,12 +6,13 @@
 export const FONT_SETS = {
   hedwig: {
     label: 'Hedwig',
-    description: 'Fraunces × IBM Plex Sans — warm, legible, precise',
-    preview: { heading: 'Fraunces', body: 'IBM Plex Sans', mono: 'IBM Plex Mono' },
+    description: 'Instrument Serif × Instrument Sans × DM Mono — quiet, editorial, exact',
+    preview: { heading: 'Instrument Serif', body: 'Instrument Sans', mono: 'DM Mono' },
     vars: {
-      '--font-sans': "'IBM Plex Sans', system-ui, sans-serif",
-      '--font-mono': "'IBM Plex Mono', ui-monospace, monospace",
-      '--font-display': "'Fraunces', Georgia, serif",
+      // Loaded by hedwig/theme/fontFaces.js (one Google Fonts css2 link); system fallbacks.
+      '--font-sans': "'Instrument Sans', system-ui, -apple-system, 'Segoe UI', sans-serif",
+      '--font-mono': "'DM Mono', ui-monospace, SFMono-Regular, Menlo, monospace",
+      '--font-display': "'Instrument Serif', Georgia, 'Times New Roman', serif",
     },
   },
 

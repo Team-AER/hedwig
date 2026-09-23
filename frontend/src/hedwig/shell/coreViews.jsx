@@ -29,7 +29,7 @@ function Fill({ children, vars }) {
 function Spinner() {
   return (
     <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div style={{ width: 22, height: 22, border: '2px solid var(--hw-border)', borderTopColor: 'var(--hw-teal)', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+      <div style={{ width: 22, height: 22, border: '2px solid var(--hw-border)', borderTopColor: 'var(--hw-accent)', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
     </div>
   );
 }
@@ -63,8 +63,8 @@ function PickerView({ paneId }) {
   useRegistryVersion();
   const replace = (id) => useShell.getState().replaceView(paneId, id);
   return (
-    <div style={{ flex: 1, overflowY: 'auto', padding: '24px 24px 32px', background: 'var(--hw-surface)', color: 'var(--hw-ink)' }}>
-      <h2 style={{ ...ui.display, margin: '0 0 4px', fontSize: 20 }}>{tr('picker.title', 'Choose a view')}</h2>
+    <div style={{ flex: 1, overflowY: 'auto', padding: '26px 26px 32px', background: 'transparent', color: 'var(--hw-ink)' }}>
+      <h2 style={{ ...ui.display, margin: '0 0 4px', fontSize: 30 }}>{tr('picker.title', 'Choose a view')}</h2>
       <p style={{ margin: '0 0 18px', fontSize: 13, color: 'var(--hw-muted)' }}>{tr('picker.body', 'Any view can live in any pane. Plugin views appear here once their plugin is on.')}</p>
       {groupedViews().map((g) => (
         <section key={g.group} aria-label={g.label} style={{ marginBottom: 18 }}>

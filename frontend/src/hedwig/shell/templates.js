@@ -1,4 +1,5 @@
-// Layout templates. 'triage' and 'research' are Hedwig's; the rest reproduce upstream's
+// Layout templates. 'streams' (the v2 default: rail · People · thread), 'triage' and 'research'
+// are Hedwig's; the rest reproduce upstream's
 // presets from frontend/src/layouts.js as pane trees (nav · list · thread), so a MailFlow user
 // finds the arrangement they know. Each preset template names its upstream preset so applying
 // it also sets upstream's `layout` (row padding, list density, the list's own layout menu).
@@ -6,6 +7,8 @@ import { LAYOUTS } from '../../layouts.js';
 import { view, split, normalise } from './model.js';
 
 export const NAV_WIDTH = 220;
+export const RAIL_WIDTH = 224;
+export const STREAM_WIDTH = 470;
 
 function preset(key) {
   const p = LAYOUTS[key];
@@ -20,6 +23,16 @@ function preset(key) {
 }
 
 export const TEMPLATES = [
+  {
+    id: 'streams',
+    label: 'Streams',
+    note: 'rail · people · thread',
+    build: () => split('row', [
+      view('hedwig.rail'),
+      view('hedwig.stream.people'),
+      view('hedwig.thread'),
+    ], [RAIL_WIDTH, STREAM_WIDTH, null]),
+  },
   {
     id: 'triage',
     label: 'Triage',
@@ -47,7 +60,7 @@ export const TEMPLATES = [
 ];
 
 export const TEMPLATE_IDS = TEMPLATES.map((t) => t.id);
-export const DEFAULT_TEMPLATE = 'triage';
+export const DEFAULT_TEMPLATE = 'streams';
 
 export function getTemplate(id) {
   return TEMPLATES.find((t) => t.id === id) || null;

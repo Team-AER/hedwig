@@ -47,7 +47,7 @@ function Notice({ icon, title, children }) {
   return (
     <div role="status" style={{
       flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-      gap: 12, padding: 24, textAlign: 'center', color: 'var(--hw-muted)', fontSize: 13, background: 'var(--hw-surface)',
+      gap: 12, padding: 24, textAlign: 'center', color: 'var(--hw-muted)', fontSize: 13, background: 'transparent',
     }}>
       <span style={{ color: 'var(--hw-faint)' }}><Icon name={icon} size={22} /></span>
       <div style={{ color: 'var(--hw-ink)', fontWeight: 500, maxWidth: 360 }}>{title}</div>

@@ -41,8 +41,9 @@ export const useShell = create((set, get) => ({
   device: 'desktop',
   ready: false,
   tree: null,
-  name: 'Triage',
-  templateId: 'triage',
+  name: 'Streams',
+  templateId: 'streams',
+  openPalette: null,      // set by the shell that owns the palette (HedwigShell / MobileShell)
   rows: [],               // saved layouts from the server, every device
   saveState: 'idle',      // 'idle' | 'pending' | 'saving' | 'error'
   focused: null,          // pane key
@@ -54,8 +55,8 @@ export const useShell = create((set, get) => ({
   pluginsSettled: false,  // plugin bundles attempted; before this, unknown views render blank
 
   // Phone
-  mobileTab: 'inbox',
-  stacks: { inbox: null, ask: [], people: [] }, // null = not initialised yet
+  mobileTab: 'people',     // 'screener' | 'people' | 'reading' | 'records' | 'brief'
+  stacks: {},              // tab → [{ key, id, props }]; seeded with the tab's root view on first show
 
   // ── Loading and saving ────────────────────────────────────────────────────
   async init(device) {

@@ -1,7 +1,9 @@
-// The Hedwig desktop and tablet shell: top bar, the pane tree, the overlay drawer for views
-// opened on request, and pop-out windows. MailApp renders it in place of its classic desktop
-// layout when useHedwig.shellMode is 'hedwig'; everything else MailApp mounts (compose, admin,
-// palette, toasts, windows) is unchanged.
+// The Hedwig desktop and tablet shell: the paper ground with its two light fields, the pane tree
+// drawn as glass sheets, the overlay sheet for views opened on request, and pop-out windows. The
+// top bar only appears for layouts without the rail (which carries the wordmark, search and
+// settings itself). MailApp renders it in place of its classic desktop layout when
+// useHedwig.shellMode is 'hedwig'; everything else MailApp mounts (compose, admin, palette,
+// toasts, windows) is unchanged.
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useStore } from '../../store/index.js';
 import { applyLayout } from '../../layouts.js';
@@ -17,6 +19,8 @@ import TopBar from './TopBar.jsx';
 import { useKeymap } from './useKeymap.js';
 import { useRegistryVersion } from './useRegistry.js';
 import { useViewRequests } from './useViewRequests.js';
+import * as M from './model.js';
+import { LightFields } from '../v2/primitives.jsx';
 import { tr } from './tr.js';
 
 const FloatingWindow = lazy(() => import('../../components/FloatingWindow.jsx'));
@@ -121,17 +125,18 @@ function OverlayDrawer() {
       ref={panelRef}
       tabIndex={-1}
       aria-label={title}
+      className="hw-sheet"
       style={{
-        position: 'absolute', top: 0, right: 0, bottom: 0, zIndex: 40,
-        width: 'clamp(360px, 42%, 680px)', maxWidth: '100%',
-        display: 'flex', flexDirection: 'column', background: 'var(--hw-surface)',
-        borderLeft: '1px solid var(--hw-border)', boxShadow: 'var(--hw-overlay-shadow)', outline: 'none',
+        position: 'absolute', top: 'var(--hw-shell-pad, 24px)', right: 'var(--hw-shell-pad, 24px)', bottom: 'var(--hw-shell-pad, 24px)', zIndex: 40,
+        width: 'clamp(360px, 42%, 680px)', maxWidth: 'calc(100% - 2 * var(--hw-shell-pad, 24px))', borderRadius: 26, overflow: 'hidden',
+        display: 'flex', flexDirection: 'column', outline: 'none', boxShadow: '0 40px 90px -30px var(--hw-shadow-color)',
+        // Floats over other sheets, so its glass is nearly opaque.
+        '--hw-glass': 'color-mix(in srgb, var(--hw-paper) 95%, transparent)',
         animation: 'hw-drawer-in var(--motion-normal, 180ms) var(--ease-emphasized, ease) both',
       }}
     >
-      <div style={{ height: 40, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8, padding: '0 8px 0 14px', borderBottom: '1px solid var(--hw-border)', background: 'var(--hw-raised)' }}>
-        <Icon name={view?.icon || 'grid'} size={15} />
-        <span style={{ fontWeight: 600, fontSize: 13, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>
+      <div style={{ height: 48, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8, padding: '0 12px 0 22px', borderBottom: '1px solid var(--hw-line)' }}>
+        <span style={{ fontFamily: 'var(--hw-font-display)', fontSize: 20, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>
         <button type="button" className="hw-btn-quiet" aria-label={tr('overlay.dockNamed', 'Add {{title}} to the layout', { title })} title={tr('overlay.dock', 'Add to the layout')} onClick={() => useShell.getState().dockOverlay()} style={{ ...ui.quietIconButton, width: 28, height: 28 }}>
           <Icon name="dock" size={15} />
         </button>
@@ -165,7 +170,7 @@ function Popouts() {
             rect={p.rect}
             zIndex={1300 + order.indexOf(p.key)}
             title={title}
-            accentColor="var(--hw-teal)"
+            accentColor="var(--hw-accent)"
             onFocus={() => useShell.getState().raisePopout(p.key)}
             onCommitRect={(rect) => useShell.getState().movePopout(p.key, rect)}
             onMinimize={() => useShell.getState().dockPopout(p.key)}
@@ -197,20 +202,33 @@ export default function HedwigShell({ onOpenPalette }) {
     if (useShell.getState().saveState === 'pending') useShell.getState().flushSave();
   }, []);
 
+  // Views (the rail's ⌘K, a phone header's search) open the palette through the shell.
+  const paletteRef = useRef(onOpenPalette);
+  paletteRef.current = onOpenPalette;
+  useEffect(() => {
+    useShell.setState({ openPalette: () => paletteRef.current?.() });
+    return () => useShell.setState({ openPalette: null });
+  }, []);
   useViewRequests();
   useContactsBridge();
   useUpstreamLayoutBridge();
   useDensity(tree?.density);
   useKeymap(true);
 
+  const hasRail = Boolean(tree && M.panesHosting(tree, 'hedwig.rail').length);
+  const pad = device === 'desktop' ? 24 : 16;
+  const gap = device === 'desktop' ? 20 : 14;
+
   return (
     <div style={{
-      flex: 1, minWidth: 0, height: '100%', display: 'flex', flexDirection: 'column',
-      background: 'var(--hw-ground)', color: 'var(--hw-ink)', fontFamily: 'var(--hw-font-body)',
-      fontSize: 14, lineHeight: 1.45,
+      flex: 1, minWidth: 0, height: '100%', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden',
+      background: 'var(--hw-paper)', color: 'var(--hw-ink)', fontFamily: 'var(--hw-font-body)',
+      fontSize: 14, lineHeight: 1.45, fontVariantNumeric: 'tabular-nums', WebkitFontSmoothing: 'antialiased',
+      '--hw-shell-pad': `${pad}px`, '--hw-gap': `${gap}px`,
     }}>
-      <TopBar onOpenPalette={onOpenPalette} />
-      <main aria-label={tr('panes', 'Panes')} style={{ flex: 1, minHeight: 0, display: 'flex', position: 'relative', overflow: 'hidden' }}>
+      <LightFields />
+      {!hasRail && <TopBar onOpenPalette={onOpenPalette} />}
+      <main aria-label={tr('panes', 'Panes')} style={{ flex: 1, minHeight: 0, display: 'flex', position: 'relative', overflow: 'hidden', padding: hasRail ? pad : `${Math.round(pad / 2)}px ${pad}px ${pad}px`, zIndex: 1 }}>
         {ready && tree ? <PaneNode node={tree} /> : <div aria-busy="true" style={{ flex: 1 }} />}
         <OverlayDrawer />
       </main>

@@ -10,6 +10,9 @@ const CONTRACT = [
   '--hw-ground', '--hw-surface', '--hw-raised', '--hw-border', '--hw-ink', '--hw-muted',
   '--hw-teal', '--hw-teal-tint', '--hw-teal-text', '--hw-amber', '--hw-amber-tint', '--hw-amber-text',
   '--hw-red', '--hw-font-display', '--hw-font-body', '--hw-font-mono',
+  // v2 (docs/hedwig/V2-BUILD.md §Frontend)
+  '--hw-paper', '--hw-accent', '--hw-accent-ink', '--hw-accent-tint', '--hw-glass', '--hw-edge',
+  '--hw-line', '--hw-line2', '--hw-tint', '--hw-blur', '--hw-font-why',
 ];
 
 describe('Hedwig CSS variables', () => {
@@ -21,12 +24,15 @@ describe('Hedwig CSS variables', () => {
     }
   });
 
-  it('the Hedwig themes use the design tokens exactly', () => {
-    assert.equal(hwVarsFor('hedwig')['--hw-ground'], '#F3EEE4');
-    assert.equal(hwVarsFor('hedwig')['--hw-amber-text'], '#7A4A0E');
-    assert.equal(hwVarsFor('hedwig-night')['--hw-teal'], '#5FB3AB');
+  it('the Hedwig themes use the v2 design tokens exactly', () => {
+    assert.equal(hwVarsFor('hedwig')['--hw-paper'], '#F4F2EC');
+    assert.equal(hwVarsFor('hedwig')['--hw-ground'], '#F4F2EC');
+    assert.equal(hwVarsFor('hedwig')['--hw-line2'], 'rgba(23,24,26,0.18)');
+    assert.equal(hwVarsFor('hedwig-night')['--hw-accent-ink'], '#FF9A66');
+    assert.equal(hwVarsFor('hedwig-night')['--hw-glass'], 'rgba(32,33,37,0.55)');
     assert.equal(THEMES.hedwig.vars['--bg-primary'], HEDWIG_LIGHT.ground);
     assert.equal(THEMES['hedwig-night'].vars['--text-primary'], HEDWIG_DARK.ink);
+    assert.equal(THEMES.hedwig.vars['--accent'], '#E0561A');
   });
 
   it('other themes derive from their own palette rather than Hedwig colours', () => {
@@ -45,8 +51,9 @@ describe('Hedwig defaults', () => {
 
   it('Hedwig themes pair with the Hedwig type unless the user chose another set', () => {
     assert.ok(FONT_SETS.hedwig);
-    assert.match(FONT_SETS.hedwig.vars['--font-display'], /Fraunces/);
-    assert.match(FONT_SETS.hedwig.vars['--font-sans'], /IBM Plex Sans/);
+    assert.match(FONT_SETS.hedwig.vars['--font-display'], /Instrument Serif/);
+    assert.match(FONT_SETS.hedwig.vars['--font-sans'], /Instrument Sans/);
+    assert.match(FONT_SETS.hedwig.vars['--font-mono'], /DM Mono/);
     assert.equal(effectiveFontSet('hedwig', 'default'), 'hedwig');
     assert.equal(effectiveFontSet('hedwig-night', undefined), 'hedwig');
     assert.equal(effectiveFontSet('hedwig', 'editorial'), 'editorial');

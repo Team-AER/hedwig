@@ -333,8 +333,13 @@ describe('templates', () => {
     assert.equal(getTemplate('compact').upstreamLayout, 'compact');
   });
 
-  it('falls back to triage for an unknown id', () => {
-    assert.deepEqual(ids(buildTemplate('nope')), ids(buildTemplate('triage')));
+  it('falls back to the streams template for an unknown id', () => {
+    assert.deepEqual(ids(buildTemplate('nope')), ids(buildTemplate('streams')));
+  });
+
+  it('the default streams template is rail · People · thread, People as the entry', () => {
+    assert.deepEqual(ids(buildTemplate('streams')), ['hedwig.rail', 'hedwig.stream.people', 'hedwig.thread']);
+    assert.deepEqual(buildTemplate('streams').sizes, [224, 470, null]);
   });
 });
 
@@ -366,7 +371,7 @@ describe('layout selection', () => {
     const fresh = pickLayout([], 'desktop', 'research');
     assert.equal(fresh.templateId, 'research');
     assert.equal(fresh.source, 'template');
-    assert.equal(pickLayout(null, 'desktop', 'bogus').templateId, 'triage');
+    assert.equal(pickLayout(null, 'desktop', 'bogus').templateId, 'streams');
   });
 
   it('skips a saved layout that no longer validates', () => {

@@ -1,5 +1,7 @@
-// Shared UI primitives for Hedwig views. Inline styles over the shell's --hw-* tokens, each with
-// a fallback to the light "Hedwig" value so views render before the theme is installed.
+// Shared UI primitives for the v1 Hedwig views. Inline styles over the shell's --hw-* tokens, each
+// with a fallback to the light "Hedwig" value so views render before the theme is installed. They
+// follow the v2 look where it is cheap to: serif titles, italic serif labels (no uppercase
+// eyebrows), hairline cards. The v2 views use ../v2/primitives.jsx.
 import { forwardRef, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
@@ -24,9 +26,11 @@ export const T = {
   amberText: 'var(--hw-amber-text, #7A4A0E)',
   red: 'var(--hw-red, #A8432E)',
   redTint: 'color-mix(in srgb, var(--hw-red, #A8432E) 14%, transparent)',
-  display: "var(--hw-font-display, 'Fraunces', Georgia, serif)",
-  body: "var(--hw-font-body, 'IBM Plex Sans', system-ui, sans-serif)",
-  mono: "var(--hw-font-mono, 'IBM Plex Mono', ui-monospace, monospace)",
+  display: "var(--hw-font-display, 'Instrument Serif', Georgia, serif)",
+  body: "var(--hw-font-body, 'Instrument Sans', system-ui, sans-serif)",
+  mono: "var(--hw-font-mono, 'DM Mono', ui-monospace, monospace)",
+  why: "var(--hw-font-why, 'Instrument Serif', Georgia, serif)",
+  line: 'var(--hw-line, rgba(23,24,26,0.09))',
 };
 
 export const TONES = {
@@ -88,7 +92,7 @@ export function Title({ children, sub, right, level = 1, style }) {
   const H = level === 1 ? 'h1' : 'h2';
   return (
     <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap', ...style }}>
-      <H style={{ margin: 0, fontFamily: T.display, fontSize: level === 1 ? 24 : 18, fontWeight: 600, letterSpacing: '-0.01em' }}>{children}</H>
+      <H style={{ margin: 0, fontFamily: T.display, fontSize: level === 1 ? 32 : 22, fontWeight: 400, letterSpacing: '-0.015em', lineHeight: 1.05 }}>{children}</H>
       {sub != null && <span style={{ fontSize: 12, color: T.muted }}>{sub}</span>}
       {right && <><span style={{ flexGrow: 1 }} />{right}</>}
     </div>
@@ -98,7 +102,7 @@ export function Title({ children, sub, right, level = 1, style }) {
 export function SectionLabel({ children, right, style }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, ...style }}>
-      <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: T.muted }}>{children}</div>
+      <div style={{ fontFamily: T.why, fontStyle: 'italic', fontSize: 16, lineHeight: 1.25, color: T.muted }}>{children}</div>
       {right && <><span style={{ flexGrow: 1 }} />{right}</>}
     </div>
   );
@@ -108,9 +112,9 @@ export function Card({ children, style, tone, as: As = 'div', ...rest }) {
   const dark = tone === 'ink';
   return (
     <As {...rest} style={{
-      padding: '14px 16px', borderRadius: 10, boxSizing: 'border-box',
-      background: dark ? T.ink : T.surface, color: dark ? T.surface : T.ink,
-      border: dark ? 'none' : `1px solid ${T.border}`, display: 'flex', flexDirection: 'column', gap: 8, ...style,
+      padding: '14px 16px', borderRadius: 16, boxSizing: 'border-box',
+      background: dark ? T.ink : 'transparent', color: dark ? T.surface : T.ink,
+      border: dark ? 'none' : `1px solid ${T.line}`, display: 'flex', flexDirection: 'column', gap: 8, ...style,
     }}>
       {children}
     </As>

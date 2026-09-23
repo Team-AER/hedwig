@@ -41,7 +41,7 @@ export function useHedwigPaletteActions(query) {
       run: () => {
         useStore.getState().setSearchQuery(q);
         // On a phone upstream's own list is the search screen; elsewhere show a list pane.
-        if (window.innerWidth < 768) { useShell.getState().setMobileTab('inbox'); useShell.getState().setStack('inbox', []); }
+        if (window.innerWidth < 768) useShell.getState().pushView('core.list');
         else useHedwig.getState().openView('core.list');
       },
     });

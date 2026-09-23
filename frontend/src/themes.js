@@ -3,15 +3,15 @@ import { HEDWIG_LIGHT, HEDWIG_DARK, hwVarsFor, upstreamVarsFor } from './hedwig/
 export const THEMES = {
   hedwig: {
     label: 'Hedwig',
-    description: 'Warm parchment, ink and teal — the Hedwig look',
-    preview: [HEDWIG_LIGHT.ground, HEDWIG_LIGHT.surface, HEDWIG_LIGHT.teal, HEDWIG_LIGHT.ink],
+    description: 'Paper, glass and one accent — the Hedwig look',
+    preview: [HEDWIG_LIGHT.ground, HEDWIG_LIGHT.surface, HEDWIG_LIGHT.amber, HEDWIG_LIGHT.ink],
     vars: upstreamVarsFor(HEDWIG_LIGHT, false),
   },
 
   'hedwig-night': {
     label: 'Hedwig Night',
     description: 'The Hedwig palette after dark',
-    preview: [HEDWIG_DARK.ground, HEDWIG_DARK.surface, HEDWIG_DARK.teal, HEDWIG_DARK.ink],
+    preview: [HEDWIG_DARK.ground, HEDWIG_DARK.surface, HEDWIG_DARK.amber, HEDWIG_DARK.ink],
     vars: upstreamVarsFor(HEDWIG_DARK, true),
   },
 

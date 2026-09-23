@@ -19,7 +19,7 @@ export default function SettingsFrame({ active, title, sub, right, children, lab
   return (
     <section aria-label={label || title} style={{
       height: '100%', minHeight: 0, overflowY: 'auto', boxSizing: 'border-box', padding: '20px 28px 28px', display: 'flex', flexDirection: 'column', gap: 18,
-      background: T.ground, color: T.ink, fontFamily: T.body, fontSize: 14, lineHeight: 1.45,
+      background: 'transparent', color: T.ink, fontFamily: T.body, fontSize: 14, lineHeight: 1.45,
     }}>
       <nav aria-label={tr('settingsFrame.hedwigSettings', 'Hedwig settings')} style={{ display: 'flex', gap: 4, flexWrap: 'wrap', fontSize: 13 }}>
         {PAGES.filter((p) => !p.admin || isAdmin).map((p) => (
@@ -34,7 +34,7 @@ export default function SettingsFrame({ active, title, sub, right, children, lab
         </button>
       </nav>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
-        <h1 style={{ margin: 0, fontFamily: T.display, fontSize: 24, fontWeight: 600, letterSpacing: '-0.01em' }}>{title}</h1>
+        <h1 style={{ margin: 0, fontFamily: T.display, fontSize: 40, fontWeight: 400, lineHeight: 1, letterSpacing: '-0.015em' }}>{title}</h1>
         {sub && <span style={{ fontSize: 12, color: T.muted }}>{sub}</span>}
         {right && <><span style={{ flexGrow: 1 }} />{right}</>}
       </div>

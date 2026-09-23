@@ -1,5 +1,7 @@
-// hedwig.settings.personal — this user's Hedwig settings (scope 'user' keys) and today's model
-// usage against the daily budgets.
+// hedwig.settings.personal — Settings → Hedwig: the v2 Simple switches and look (plus the Power
+// panels when Power is on), this user's Hedwig settings (scope 'user' keys) and today's model
+// usage against the daily budgets. In Simple mode the full settings list is folded away.
+import { useEffect } from 'react';
 import { hedwigApi } from '../../api.js';
 import { useHedwig } from '../../store.js';
 import { formatCount } from '../helpers.js';
@@ -8,21 +10,26 @@ import ConfigForm from './ConfigForm.jsx';
 import SettingsFrame from './SettingsFrame.jsx';
 import { Card, Loading, Meter, SectionLabel, StateView, T } from '../ui.jsx';
 import { tr } from '../i18n.js';
+import HedwigSettingsV2 from '../../v2/HedwigSettings.jsx';
+import { useV2 } from '../../v2/state.js';
+import { tv } from '../../v2/i18n.js';
 
 export default function PersonalSettings() {
   const settings = useResource('/settings');
   const usage = useResource('/usage', { pollMs: 60_000 });
   const loadStatus = useHedwig((s) => s.loadStatus);
+  const power = useV2((s) => s.prefs.powerMode);
+  useEffect(() => { if (Array.isArray(settings.data)) useV2.getState().setSettingsFields(settings.data); }, [settings.data]);
   const save = async (patch) => {
     const next = await hedwigApi.patch('/settings', patch);
-    if (Array.isArray(next)) settings.setData(next);
+    if (Array.isArray(next)) { settings.setData(next); useV2.getState().setSettingsFields(next); }
     else await settings.reload({ quiet: true });
     // Feature switches change which views and commands the shell offers.
     if (Object.keys(patch).some((k) => k.startsWith('features.'))) loadStatus?.();
   };
 
-  return (
-    <SettingsFrame active="hedwig.settings.personal" title={tr('personalSettings.yourHedwig', 'Your Hedwig')} sub="Only affects your account">
+  const all = (
+    <>
       <Usage res={usage} />
       <Card style={{ gap: 12, maxWidth: 900 }}>
         <SectionLabel>{tr('personalSettings.settings', 'Settings')}</SectionLabel>
@@ -30,6 +37,18 @@ export default function PersonalSettings() {
         {settings.error && !settings.data && <StateView error={settings.error} onRetry={settings.reload} what="Hedwig settings" />}
         {settings.data && <ConfigForm fields={settings.data} onSave={save} resettable="user" />}
       </Card>
+    </>
+  );
+
+  return (
+    <SettingsFrame active="hedwig.settings.personal" title={tr('personalSettings.yourHedwig', 'Your Hedwig')} sub="Only affects your account">
+      <HedwigSettingsV2 />
+      {power ? all : (
+        <details style={{ maxWidth: 900 }}>
+          <summary style={{ cursor: 'pointer', fontFamily: T.display, fontSize: 20, padding: '6px 0' }}>{tv('hedwig.v2.settings.all', 'All settings and usage')}</summary>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 18, paddingTop: 12 }}>{all}</div>
+        </details>
+      )}
     </SettingsFrame>
   );
 }

@@ -1,6 +1,9 @@
 // Renders a pane tree: splits with resizable splitters, tab groups, and a PaneFrame per view.
-// Splitter drags move the DOM directly and commit the size once on release, so a drag never
-// re-renders the mail list sixty times a second.
+// Each pane is a glass sheet (v2 design) and the splitters are the gaps between sheets. Splitter
+// drags move the DOM directly and commit the size once on release, so a drag never re-renders
+// the mail list sixty times a second. A view registered with `wide: true` (the Daily Brief)
+// takes the room of any sibling registered with `hideBesideWide: true` (the thread) while it is
+// on screen, as in the Brief mockup.
 import { Fragment, memo, useMemo, useRef } from 'react';
 import { getView } from '../registry.js';
 import { useStore } from '../../store/index.js';
@@ -36,19 +39,24 @@ const SplitNode = memo(function SplitNode({ node }) {
   // A view may ask for a narrower column than its pane (core.nav while upstream's sidebar is
   // collapsed). Re-render when that state flips.
   useStore((s) => s.sidebarCollapsed);
+  const viewOf = (c) => (c.type === 'view' ? getView(c.id) : null);
+  const wideOn = row && node.children.some((c) => viewOf(c)?.wide);
+  const hidden = node.children.map((c) => wideOn && Boolean(viewOf(c)?.hideBesideWide));
 
   return (
-    <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: node.dir, overflow: 'hidden' }}>
+    <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: node.dir, overflow: 'visible' }}>
       {node.children.map((child, i) => {
-        const narrow = row && child.type === 'view' ? getView(child.id)?.paneWidth?.() : null;
-        const size = narrow ?? node.sizes[i];
+        const narrow = row && child.type === 'view' ? viewOf(child)?.paneWidth?.() : null;
+        const wide = wideOn && viewOf(child)?.wide;
+        const size = wide ? null : (narrow ?? node.sizes[i]);
+        const prevVisible = hidden.slice(0, i).some((h) => !h);
         return (
           <Fragment key={child.key}>
-            {i > 0 && <Splitter node={node} index={i - 1} refs={refs} row={row} />}
+            {i > 0 && !hidden[i] && prevVisible && <Splitter node={node} index={i - 1} refs={refs} row={row} />}
             <div
               ref={(el) => { refs.current[i] = el; }}
               style={{
-                display: 'flex', position: 'relative', overflow: 'hidden', minWidth: 0, minHeight: 0,
+                display: hidden[i] ? 'none' : 'flex', position: 'relative', minWidth: 0, minHeight: 0,
                 flex: size == null ? '1 1 0' : `0 1 ${size}px`,
                 ...(size == null ? (row ? { minWidth: M.MIN_PANE_PX } : { minHeight: M.MIN_PANE_PX / 1.5 }) : null),
               }}
@@ -145,15 +153,14 @@ function Splitter({ node, index, refs, row }) {
       onDoubleClick={resetBoth}
       onKeyDown={onKeyDown}
       style={{
-        position: 'relative', flex: '0 0 1px', zIndex: 5, touchAction: 'none',
+        position: 'relative', flex: '0 0 var(--hw-gap, 20px)', zIndex: 5, touchAction: 'none',
         cursor: row ? 'col-resize' : 'row-resize',
-        [row ? 'width' : 'height']: 1,
+        [row ? 'width' : 'height']: 'var(--hw-gap, 20px)',
       }}
     >
-      <span style={{ position: 'absolute', inset: 0, background: 'var(--hw-border)' }} />
-      <span aria-hidden style={{
-        position: 'absolute', background: 'transparent',
-        ...(row ? { top: 0, bottom: 0, left: -4, right: -4 } : { left: 0, right: 0, top: -4, bottom: -4 }),
+      <span style={{
+        position: 'absolute', borderRadius: 1, background: 'transparent',
+        ...(row ? { top: '12%', bottom: '12%', left: 'calc(50% - 1px)', width: 2 } : { left: '12%', right: '12%', top: 'calc(50% - 1px)', height: 2 }),
       }} />
     </div>
   );
@@ -173,8 +180,8 @@ function TabsNode({ node }) {
     requestAnimationFrame(() => document.getElementById(`hw-tab-${node.children[j].key}`)?.focus());
   };
   return (
-    <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', background: 'var(--hw-surface)' }}>
-      <div role="tablist" aria-label={tr('tabs.label', 'Pane tabs')} style={{ display: 'flex', alignItems: 'stretch', gap: 2, padding: '0 4px', height: 32, flexShrink: 0, borderBottom: '1px solid var(--hw-border)', background: 'var(--hw-raised)', overflowX: 'auto' }}>
+    <div className="hw-sheet" style={{ position: 'relative', flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', borderRadius: 26, overflow: 'hidden' }}>
+      <div role="tablist" aria-label={tr('tabs.label', 'Pane tabs')} style={{ display: 'flex', alignItems: 'stretch', gap: 2, padding: '0 14px', height: 44, flexShrink: 0, borderBottom: '1px solid var(--hw-line)', overflowX: 'auto' }}>
         {node.children.map((c, i) => {
           const active = i === node.active;
           const title = getView(c.id)?.title || c.id;
@@ -189,9 +196,9 @@ function TabsNode({ node }) {
                 tabIndex={active ? 0 : -1}
                 onClick={() => edit((t) => M.setActiveTab(t, node.key, i))}
                 onKeyDown={(e) => onKey(e, i)}
-                style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 6px 0 8px', height: '100%', border: 0, background: 'transparent', color: active ? 'var(--hw-ink)' : 'var(--hw-muted)', fontFamily: 'inherit', fontSize: 12, fontWeight: active ? 600 : 400, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 6px 0 8px', height: '100%', border: 0, background: 'transparent', color: active ? 'var(--hw-ink)' : 'var(--hw-muted)', fontFamily: 'inherit', fontSize: 14, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
               >
-                <Icon name={getView(c.id)?.icon} size={13} />{title}
+                {title}
               </button>
               <button type="button" className="hw-btn-quiet" aria-label={tr('tabs.close', 'Close {{title}} tab', { title })} onClick={() => useShell.getState().closePane(c.key)} style={{ ...ui.quietIconButton, width: 20, height: 20 }}>
                 <Icon name="close" size={12} />
@@ -235,14 +242,14 @@ export function PaneFrame({ node, inTabs = false }) {
 
   return (
     <section
-      className="hw-pane"
       data-pane-key={node.key}
       data-flash={flash ? 'true' : undefined}
       tabIndex={-1}
       aria-label={title}
       onFocusCapture={onFocusCapture}
       onPointerDownCapture={onFocusCapture}
-      style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', background: 'var(--hw-surface)', position: 'relative' }}
+      className={inTabs ? 'hw-pane' : 'hw-pane hw-sheet'}
+      style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative', borderRadius: inTabs ? 0 : 26, overflow: 'hidden', background: inTabs ? 'transparent' : undefined }}
     >
       {showHeader && <PaneHeader node={node} view={view} title={title} focused={isFocused} />}
       <ViewHost
@@ -266,9 +273,9 @@ function PaneHeader({ node, view, title, focused }) {
   );
   return (
     <div style={{
-      height: 30, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4, padding: '0 6px 0 4px',
-      borderBottom: '1px solid var(--hw-border)',
-      background: focused ? 'var(--hw-teal-tint)' : 'var(--hw-raised)', fontSize: 12, color: 'var(--hw-ink)',
+      height: 36, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4, padding: '0 10px 0 10px',
+      borderBottom: '1px solid var(--hw-line)',
+      background: focused ? 'var(--hw-accent-tint)' : 'transparent', fontSize: 12, color: 'var(--hw-ink)',
     }}>
       <MenuButton
         label={tr('pane.changeView', '{{title}} — change view', { title })}

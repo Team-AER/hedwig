@@ -140,7 +140,17 @@ const SAME_VALUE_ALLOWED = {
   'admin.sso.scopesPh':                     'any', // openid email profile
   'login.totp.placeholder':                 'any', // 000000
 
+  'hedwig.v2.brand':                       'any', // Hedwig — product name, same everywhere
+
   // ── Specific language groups ───────────────────────────────────────────────
+  // Hedwig v2: French shares these words with English ("Message", "Conversation"); Spanish and
+  // Italian say "No" like English; Italian and Portuguese both say "sempre" (always)
+  'hedwig.v2.thread.citation':      [['en', 'fr']],
+  'hedwig.v2.thread.messagesMany':  [['en', 'fr']],
+  'hedwig.v2.thread.messagesOne':   [['en', 'fr']],
+  'hedwig.v2.view.thread':          [['en', 'fr']],
+  'hedwig.v2.question.no':          [['en', 'es', 'it']],
+  'hedwig.v2.question.always':      [['it', 'ptBR']],
   // "Version" — same spelling in de, en, fr
   'admin.about.version': [['de', 'en', 'fr']],
   // "via" (on-behalf-of sender, #366) — identical preposition in en and fr

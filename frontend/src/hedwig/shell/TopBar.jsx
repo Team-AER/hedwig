@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useStore } from '../../store/index.js';
 import { useHedwig } from '../store.js';
-import { Icon, OwlMark } from '../icons.jsx';
+import { Icon } from '../icons.jsx';
 import { ui } from '../theme/styles.js';
 import { useShell } from './state.js';
 import { TEMPLATES } from './templates.js';
@@ -62,7 +62,7 @@ export function SyncStatus({ compact = false }) {
       title={text}
       style={{ display: 'flex', alignItems: 'center', gap: 6, height: 28, padding: '0 8px', border: 0, borderRadius: 8, background: 'transparent', color: 'var(--hw-muted)', fontFamily: 'inherit', fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}
     >
-      <span aria-hidden style={{ width: 8, height: 8, borderRadius: '50%', background: failing ? 'var(--hw-amber)' : 'var(--hw-teal)', flexShrink: 0 }} />
+      <span aria-hidden style={{ width: 8, height: 8, borderRadius: '50%', background: failing ? 'var(--hw-red)' : 'var(--hw-ink)', flexShrink: 0 }} />
       {!compact && <span>{text}</span>}
     </button>
   );
@@ -71,7 +71,7 @@ export function SyncStatus({ compact = false }) {
 export function layoutMenuItems() {
   const s = useShell.getState();
   const saved = s.savedLayouts();
-  const items = [{ type: 'header', label: `Templates · ${s.device}` }];
+  const items = [{ type: 'header', label: `Templates, ${s.device}` }];
   for (const t of TEMPLATES) {
     items.push({ id: `t:${t.id}`, label: t.label, hint: t.upstreamLayout ? 'upstream' : undefined, checked: s.templateId === t.id && s.name === t.label, onSelect: () => s.applyTemplate(t.id) });
   }
@@ -102,13 +102,12 @@ export default function TopBar({ onOpenPalette }) {
 
   return (
     <header style={{
-      height: 48, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 16, padding: '0 16px',
-      borderBottom: '1px solid var(--hw-border)', background: 'var(--hw-raised)', color: 'var(--hw-ink)',
+      height: 56, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 16, padding: '0 24px',
+      background: 'transparent', color: 'var(--hw-ink)', position: 'relative', zIndex: 2,
       fontFamily: 'var(--hw-font-body)',
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, width: narrow ? 'auto' : 204, flexShrink: 0 }}>
-        <OwlMark size={22} />
-        <span style={{ ...ui.display, fontSize: 19 }}>{tr('brand', 'Hedwig')}</span>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, width: narrow ? 'auto' : 204, flexShrink: 0 }}>
+        <span style={{ ...ui.display, fontSize: 28, lineHeight: 1 }}>{tr('brand', 'Hedwig')}</span>
       </div>
       <button
         type="button"
@@ -117,16 +116,16 @@ export default function TopBar({ onOpenPalette }) {
         onClick={onOpenPalette}
         className="hw-btn"
         style={{
-          flex: '1 1 auto', maxWidth: 560, minWidth: 0, height: 32, display: 'flex', alignItems: 'center', gap: 10,
-          padding: '0 12px', border: '1px solid var(--hw-border)', borderRadius: 8, background: 'var(--hw-surface)',
-          color: 'var(--hw-muted)', fontFamily: 'inherit', fontSize: 13, textAlign: 'left', cursor: 'pointer',
+          flex: '1 1 auto', maxWidth: 560, minWidth: 0, height: 38, display: 'flex', alignItems: 'center', gap: 10,
+          padding: '0 12px', border: 0, borderBottom: '1px solid var(--hw-line2)', borderRadius: 0, background: 'transparent',
+          color: 'var(--hw-muted)', fontFamily: 'inherit', fontSize: 14, textAlign: 'left', cursor: 'pointer',
         }}
       >
         <Icon name="search" size={15} strokeWidth={2} />
         <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {tr('palette.placeholder', 'Search mail, people, topics, or run a command')}
         </span>
-        <kbd style={{ fontFamily: 'var(--hw-font-mono)', fontSize: 11, padding: '2px 6px', border: '1px solid var(--hw-border)', borderRadius: 4, color: 'var(--hw-muted)', background: 'transparent' }}>
+        <kbd style={{ fontFamily: 'var(--hw-font-mono)', fontSize: 11, padding: 0, border: 0, color: 'var(--hw-muted)', background: 'transparent' }}>
           {isMac ? '⌘K' : 'Ctrl K'}
         </kbd>
       </button>

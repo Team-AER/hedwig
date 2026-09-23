@@ -1,7 +1,8 @@
 // Boots the Hedwig UI. Imported once from main.jsx, before first paint: registers the core pane
 // views (upstream's sidebar, list, reading pane, contacts), the layout editor, every Hedwig view
-// (views/index.js) and the shell's commands. Work that needs a signed-in user — Hedwig status
-// and plugin bundles — starts from <HedwigRuntime/>, which MailApp mounts.
+// (views/index.js, which registers the v2 views first) and the shell's commands, and injects the
+// styles and the font link. Work that needs a signed-in user — Hedwig status, the ui.* settings
+// and stream counts, plugin bundles — starts from <HedwigRuntime/>, which MailApp mounts.
 import { useEffect } from 'react';
 import { registerView, getView } from './registry.js';
 import { useHedwig } from './store.js';
@@ -13,6 +14,7 @@ import { installShellCommands } from './shell/commands.js';
 import { useShell } from './shell/state.js';
 import { ensureHedwigStyles } from './theme/styles.js';
 import { initPluginRuntime } from '../plugins/runtimeLoader.js';
+import { startV2Session, stopV2Session, v2SessionAllowed } from './v2/index.js';
 
 const PLUGIN_SETTLE_MS = 3000;
 
@@ -48,7 +50,21 @@ function startSession(userId) {
 
 export function HedwigRuntime() {
   const userId = useStore((s) => s.user?.id);
-  useEffect(() => { if (userId) startSession(userId); }, [userId]);
+  const shellMode = useHedwig((s) => s.shellMode);
+  const status = useHedwig((s) => s.status);
+  useEffect(() => {
+    if (userId) startSession(userId);
+    else sessionUser = undefined;
+  }, [userId]);
+  // The v2 counts, settings and scheme watch run only in the Hedwig shell with Hedwig on, and
+  // stop (forgetting that user's state) on sign-out, a switch to the classic shell, or Hedwig
+  // turning off. A different user restarts them.
+  const v2 = v2SessionAllowed({ userId, shellMode, status });
+  useEffect(() => {
+    if (!v2) return undefined;
+    startV2Session();
+    return () => stopV2Session();
+  }, [v2, userId]);
   return null;
 }
 

@@ -79,20 +79,21 @@ export function MenuButton({
           role="menu"
           aria-label={label}
           onKeyDown={onMenuKey}
+          className="hw-sheet"
           style={{
             position: 'fixed', top: pos.top, left: pos.left, width, maxHeight: pos.maxHeight,
-            overflowY: 'auto', zIndex: 9000, padding: 4,
-            background: 'var(--hw-surface)', color: 'var(--hw-ink)',
-            border: '1px solid var(--hw-border)', borderRadius: 10,
-            boxShadow: 'var(--hw-overlay-shadow)', fontFamily: 'var(--hw-font-body)', fontSize: 13,
+            overflowY: 'auto', zIndex: 9000, padding: 6,
+            '--hw-glass': 'color-mix(in srgb, var(--hw-paper) 84%, transparent)',
+            color: 'var(--hw-ink)', borderRadius: 16,
+            boxShadow: '0 24px 60px -24px var(--hw-shadow-color)', fontFamily: 'var(--hw-font-body)', fontSize: 14,
             animation: 'hw-pop-in var(--motion-fast, 120ms) var(--ease-standard, ease) both',
           }}
         >
           {list.map((item, i) => {
-            if (item.type === 'separator') return <div key={`sep${i}`} role="separator" style={{ height: 1, margin: '4px 6px', background: 'var(--hw-border)' }} />;
+            if (item.type === 'separator') return <div key={`sep${i}`} role="separator" style={{ height: 1, margin: '6px 10px', background: 'var(--hw-line)' }} />;
             if (item.type === 'header') {
               return (
-                <div key={`h${i}`} role="presentation" style={{ padding: '8px 10px 4px', fontSize: 11, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--hw-muted)' }}>
+                <div key={`h${i}`} role="presentation" style={{ padding: '8px 10px 4px', fontFamily: 'var(--hw-font-why)', fontStyle: 'italic', fontSize: 15, color: 'var(--hw-muted)' }}>
                   {item.label}
                 </div>
               );
@@ -109,9 +110,9 @@ export function MenuButton({
                 tabIndex={-1}
                 onClick={() => { if (item.disabled) return; close(); item.onSelect?.(); }}
                 style={{
-                  width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '7px 10px',
-                  border: 0, borderRadius: 6, background: 'transparent', color: 'inherit',
-                  fontFamily: 'inherit', fontSize: 13, textAlign: 'left', cursor: item.disabled ? 'default' : 'pointer',
+                  width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '0 10px', minHeight: 36,
+                  border: 0, borderRadius: 8, background: 'transparent', color: 'inherit',
+                  fontFamily: 'inherit', fontSize: 14, textAlign: 'left', cursor: item.disabled ? 'default' : 'pointer',
                 }}
               >
                 <span style={{ width: 16, display: 'inline-flex', color: 'var(--hw-muted)' }}>
