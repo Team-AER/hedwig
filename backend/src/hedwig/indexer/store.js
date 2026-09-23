@@ -263,13 +263,23 @@ export async function embedPending({ messageIds = null, maxChunks = 256 } = {}) 
     [ids, recipe.version, recipe.full, maxChunks],
   );
   const batch = cfg['index.embedBatch'];
-  const store = async (slice, out) => {
-    await query(
-      `INSERT INTO hedwig_chunk_vectors (chunk_id, user_id, model, recipe, dims, vector)
-       SELECT x.id, x.uid, $3, $4, $5, x.vec::vector FROM UNNEST($1::bigint[], $2::uuid[], $6::text[]) AS x(id, uid, vec)
-       ON CONFLICT (chunk_id, recipe) DO UPDATE SET vector = EXCLUDED.vector, model = EXCLUDED.model, created_at = NOW()`,
-      [slice.map((c) => c.id), slice.map((c) => c.user_id), out.model, recipe.full, out.dims, out.vectors.map(toVectorLiteral)],
-    );
+  // A body landing between the SELECT above and this INSERT re-chunks its message, so some of
+  // these chunk ids may be gone: join on hedwig_chunks to skip them, and if a delete commits in
+  // between anyway (FK 23503), retry once — the next sweep picks up whatever is still missing.
+  const store = async (slice, out, attempt = 0) => {
+    try {
+      await query(
+        `INSERT INTO hedwig_chunk_vectors (chunk_id, user_id, model, recipe, dims, vector)
+         SELECT x.id, x.uid, $3, $4, $5, x.vec::vector
+           FROM UNNEST($1::bigint[], $2::uuid[], $6::text[]) AS x(id, uid, vec)
+           JOIN hedwig_chunks c ON c.id = x.id
+         ON CONFLICT (chunk_id, recipe) DO UPDATE SET vector = EXCLUDED.vector, model = EXCLUDED.model, created_at = NOW()`,
+        [slice.map((c) => c.id), slice.map((c) => c.user_id), out.model, recipe.full, out.dims, out.vectors.map(toVectorLiteral)],
+      );
+    } catch (err) {
+      if (err.code !== '23503' || attempt > 0) throw err;
+      await store(slice, out, attempt + 1);
+    }
   };
   let done = 0;
   try {

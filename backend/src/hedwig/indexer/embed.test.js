@@ -99,3 +99,23 @@ describe('embedPending failures', () => {
     expect(db.state.get('index.embedBackoff')).toBeNull();
   });
 });
+
+describe('embedPending vector insert race', () => {
+  it('joins on hedwig_chunks so a re-chunked message cannot violate the foreign key, and retries once on 23503', async () => {
+    embed.mockImplementation(async (texts) => vectors(texts.length));
+    const { query } = await import('../../services/db.js');
+    let inserts = 0;
+    const real = query.getMockImplementation();
+    query.mockImplementation(async (sql, params) => {
+      if (/INSERT INTO hedwig_chunk_vectors/.test(sql)) {
+        inserts++;
+        expect(sql).toMatch(/JOIN hedwig_chunks c ON c\.id = x\.id/);
+        if (inserts === 1) { const e = new Error('violates foreign key constraint'); e.code = '23503'; throw e; }
+      }
+      return real(sql, params);
+    });
+    expect(await embedPending({ messageIds: ids })).toBe(4);
+    expect(inserts).toBe(2);
+    query.mockImplementation(real);
+  });
+});
