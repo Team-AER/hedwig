@@ -1659,6 +1659,7 @@
       "test": "Otestovat připojení",
       "testing": "Testování…",
       "notConfigured": "Zatím není nastaven žádný poskytovatel AI.",
+      "inheritedHedwig": "Používá se brána modelů Hedwig ({{model}}). Chcete-li ji přepsat, uložte níže vlastního poskytovatele.",
       "connectionMethod": "Způsob připojení",
       "connectionMethodPlaceholder": "Vyberte způsob připojení",
       "connectionMethodApi": "Použít klíč API",

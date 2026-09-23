@@ -4275,6 +4275,12 @@ function AISection() {
         </div>
       )}
 
+      {config?.inherited === 'hedwig' && (
+        <div style={{ padding: '10px 14px', borderRadius: 8, background: 'var(--bg-secondary)', border: '1px solid var(--border)', fontSize: 13, color: 'var(--text-secondary)', marginBottom: 20 }}>
+          {t('admin.ai.inheritedHedwig', { model: config.apiKeyConfig?.model })}
+        </div>
+      )}
+
       <form onSubmit={handleSave}>
         {toggle(t('admin.ai.enabled'), form.enabled, () => setForm(f => ({ ...f, enabled: !f.enabled })))}
 

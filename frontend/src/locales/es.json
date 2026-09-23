@@ -1154,6 +1154,7 @@
       "test": "Probar conexión",
       "testing": "Probando…",
       "notConfigured": "Ningún proveedor de IA configurado aún.",
+      "inheritedHedwig": "Usando la pasarela de modelos de Hedwig ({{model}}). Guarda tu propio proveedor abajo para reemplazarla.",
       "connectionMethod": "Método de conexión",
       "connectionMethodPlaceholder": "Elige un método de conexión",
       "connectionMethodApi": "Usar una clave de API",

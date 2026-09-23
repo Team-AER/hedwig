@@ -1154,6 +1154,7 @@
       "test": "Проверить подключение",
       "testing": "Проверка…",
       "notConfigured": "Провайдер ИИ не настроен.",
+      "inheritedHedwig": "Используется шлюз моделей Hedwig ({{model}}). Чтобы заменить его, сохраните своего провайдера ниже.",
       "connectionMethod": "Способ подключения",
       "connectionMethodPlaceholder": "Выберите способ подключения",
       "connectionMethodApi": "Использовать API-ключ",

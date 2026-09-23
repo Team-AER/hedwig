@@ -501,3 +501,36 @@ describe('status and provider test', () => {
     await expect(provider.testAiProvider()).resolves.toEqual({ ok: true });
   });
 });
+
+describe('Hedwig gateway default', () => {
+  const gateway = { baseUrl: 'http://llm-proxy.cls/v1', apiKey: null, model: 'Qwen/Qwen3.8-Flash-Next' };
+
+  it('uses the Hedwig gateway when no assistant config is saved', async () => {
+    const { provider, deps } = factory({ defaultGatewayFn: vi.fn().mockResolvedValue(gateway) });
+    deps.fetchFn.mockResolvedValue(jsonResponse({ choices: [{ message: { content: 'hello' }, finish_reason: 'stop' }] }));
+    const config = await provider.getAdminAiConfig();
+    expect(config).toMatchObject({ enabled: true, provider: AI_PROVIDER_API_KEY, inherited: 'hedwig',
+      apiKeyConfig: { baseUrl: 'http://llm-proxy.cls/v1', model: 'Qwen/Qwen3.8-Flash-Next' } });
+    expect(await provider.completeText([{ role: 'user', content: 'hi' }])).toBe('hello');
+    expect(deps.fetchFn.mock.calls[0][0]).toBe('http://llm-proxy.cls/v1/chat/completions');
+  });
+
+  it('prefers a saved config over the gateway default', async () => {
+    const { provider } = factory({
+      initial: { provider: AI_PROVIDER_API_KEY, apiKeyConfig: { baseUrl: 'https://api.example.com/v1', model: 'm' } },
+      defaultGatewayFn: vi.fn().mockResolvedValue(gateway),
+    });
+    const config = await provider.getAdminAiConfig();
+    expect(config.apiKeyConfig.baseUrl).toBe('https://api.example.com/v1');
+    expect(config.inherited).toBeUndefined();
+  });
+
+  it('lets an admin save the trusted gateway URL without allowing private hosts, but not other private hosts', async () => {
+    const validateHostFn = vi.fn().mockResolvedValue('private addresses are not allowed');
+    const { provider } = factory({ validateHostFn, defaultGatewayFn: vi.fn().mockResolvedValue(gateway) });
+    await expect(provider.saveAiConfig({ provider: AI_PROVIDER_API_KEY, apiKeyConfig: { baseUrl: 'http://llm-proxy.cls/v1/', model: 'x' } }))
+      .resolves.toMatchObject({ apiKeyConfig: { baseUrl: 'http://llm-proxy.cls/v1' } });
+    await expect(provider.saveAiConfig({ provider: AI_PROVIDER_API_KEY, apiKeyConfig: { baseUrl: 'http://10.0.0.9/v1', model: 'x' } }))
+      .rejects.toThrow(/private addresses/);
+  });
+});

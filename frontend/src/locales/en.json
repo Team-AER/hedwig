@@ -1154,6 +1154,7 @@
       "test": "Test connection",
       "testing": "Testing…",
       "notConfigured": "No AI provider configured yet.",
+      "inheritedHedwig": "Using Hedwig's model gateway ({{model}}). Save your own provider below to override it.",
       "connectionMethod": "Connection method",
       "connectionMethodPlaceholder": "Choose a connection method",
       "connectionMethodApi": "Use an API key",

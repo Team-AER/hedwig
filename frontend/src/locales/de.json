@@ -1083,6 +1083,7 @@
       "test": "Verbindung testen",
       "testing": "Teste…",
       "notConfigured": "Noch kein KI-Anbieter konfiguriert.",
+      "inheritedHedwig": "Verwendet das Modell-Gateway von Hedwig ({{model}}). Speichere unten einen eigenen Anbieter, um es zu überschreiben.",
       "connectionMethod": "Verbindungsmethode",
       "connectionMethodPlaceholder": "Verbindungsmethode auswählen",
       "connectionMethodApi": "API-Schlüssel verwenden",

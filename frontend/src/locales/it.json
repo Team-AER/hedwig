@@ -1154,6 +1154,7 @@
       "test": "Testa connessione",
       "testing": "Test in corso…",
       "notConfigured": "Nessun provider IA configurato.",
+      "inheritedHedwig": "In uso il gateway dei modelli di Hedwig ({{model}}). Salva qui sotto un tuo provider per sostituirlo.",
       "connectionMethod": "Metodo di connessione",
       "connectionMethodPlaceholder": "Scegli un metodo di connessione",
       "connectionMethodApi": "Usa una chiave API",

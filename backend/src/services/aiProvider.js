@@ -146,10 +146,24 @@ export function createAiProvider({
   getCodexStatusFn = getCodexStatus,
   streamCodexResponsesFn = streamCodexResponses,
   completeCodexTextFn = completeCodexText,
+  // Hedwig: when no assistant config is saved, borrow the Hedwig model gateway so the assistant
+  // works out of the box. Returns { baseUrl, apiKey, model } or null. Also names the one private
+  // gateway the operator already trusts, so saving it does not need allow_private_hosts.
+  defaultGatewayFn = null,
 } = {}) {
   async function loadAiConfig() {
     const result = await queryFn("SELECT value FROM system_settings WHERE key = 'ai_config'");
-    if (!result.rows.length) return null;
+    if (!result.rows.length) {
+      const gw = defaultGatewayFn ? await defaultGatewayFn().catch(() => null) : null;
+      if (!gw?.baseUrl || !gw?.model) return null;
+      return {
+        ...normalizeAiConfig({
+          provider: AI_PROVIDER_API_KEY,
+          apiKeyConfig: { baseUrl: gw.baseUrl, model: gw.model, apiKey: gw.apiKey ? encryptFn(gw.apiKey) : null },
+        }),
+        inherited: 'hedwig',
+      };
+    }
     const parsed = parseJson(result.rows[0].value);
     return parsed ? normalizeAiConfig(parsed) : null;
   }
@@ -186,9 +200,13 @@ export function createAiProvider({
       } catch {
         throw new AiProviderError('Invalid API base URL', { status: 400 });
       }
-      const policy = await getConnectionPolicyFn();
-      const hostError = await validateHostFn(hostname, { allowPrivate: policy.allowPrivateHosts });
-      if (hostError) throw new AiProviderError(`API base URL: ${hostError}`, { status: 400 });
+      const gw = defaultGatewayFn ? await defaultGatewayFn().catch(() => null) : null;
+      const trustedGateway = gw?.baseUrl && normalizeBaseUrl(gw.baseUrl) === config.apiKeyConfig.baseUrl;
+      if (!trustedGateway) {
+        const policy = await getConnectionPolicyFn();
+        const hostError = await validateHostFn(hostname, { allowPrivate: policy.allowPrivateHosts });
+        if (hostError) throw new AiProviderError(`API base URL: ${hostError}`, { status: 400 });
+      }
     }
 
     await queryFn(
@@ -385,7 +403,20 @@ export function createAiProvider({
   };
 }
 
-const defaultProvider = createAiProvider();
+// Hedwig's gateway as the default assistant provider: its base URL, key, and whichever model is
+// currently serving the 'long' role (the primary, or the fallback while the primary is degraded).
+async function hedwigGateway() {
+  const [{ getConfig }, { activeModels }] = await Promise.all([
+    import('../hedwig/config.js'),
+    import('../hedwig/llm.js'),
+  ]);
+  const cfg = await getConfig();
+  if (!cfg.enabled || !cfg['llm.baseUrl']) return null;
+  const models = await activeModels(null);
+  return { baseUrl: cfg['llm.baseUrl'], apiKey: cfg['llm.apiKey'] || null, model: models.long.active };
+}
+
+const defaultProvider = createAiProvider({ defaultGatewayFn: hedwigGateway });
 
 export const loadAiConfig = defaultProvider.loadAiConfig;
 export const getAdminAiConfig = defaultProvider.getAdminAiConfig;

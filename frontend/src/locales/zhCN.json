@@ -1154,6 +1154,7 @@
       "test": "测试连接",
       "testing": "测试中…",
       "notConfigured": "尚未配置 AI 提供商。",
+      "inheritedHedwig": "正在使用 Hedwig 的模型网关（{{model}}）。在下方保存你自己的提供商即可覆盖。",
       "connectionMethod": "连接方式",
       "connectionMethodPlaceholder": "选择连接方式",
       "connectionMethodApi": "使用 API 密钥",

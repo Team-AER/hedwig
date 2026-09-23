@@ -1173,6 +1173,7 @@
       "test": "Testuj połączenie",
       "testing": "Testowanie…",
       "notConfigured": "Brak skonfigurowanego dostawcy AI.",
+      "inheritedHedwig": "Używana jest brama modeli Hedwig ({{model}}). Zapisz poniżej własnego dostawcę, aby ją zastąpić.",
       "connectionMethod": "Metoda połączenia",
       "connectionMethodPlaceholder": "Wybierz metodę połączenia",
       "connectionMethodApi": "Użyj klucza API",
