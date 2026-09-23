@@ -3,13 +3,13 @@ import { query } from '../../services/db.js';
 import { getConfig, describeConfig, saveSystemConfig, saveUserConfig, SCHEMA } from '../config.js';
 import { defineJob, queueStats, pruneJobs, enqueue, retryFailed, gatewayHealth } from '../jobs.js';
 import { pipelineStats, resetBackfill, definedSteps } from '../pipeline.js';
-import { getCatalog, llmAvailable, activeModels } from '../llm.js';
+import { getCatalog, llmAvailable, activeModels, tierStatus } from '../llm.js';
 import { embeddingProfile, embed } from '../embeddings.js';
 import { defineSchedule, definedSchedules } from '../schedule.js';
 import { hedwigStatus } from '../status.js';
 import { makeFetchBodyHandler } from './bodies.js';
 import { indexHealth } from '../indexer/service.js';
-import { runtimeAdminRoutes } from '../ledger/routes.js';
+import { runtimeAdminRoutes, reconcileOnLoad } from '../ledger/routes.js';
 import { registerRuntimeSchedules } from '../ledger/schedules.js';
 
 const LAYOUT_DEVICES = ['desktop', 'tablet', 'phone'];
@@ -60,6 +60,9 @@ export default {
         enabled: cfg.enabled,
         llm: await llmAvailable(req.session.userId),
         models: await activeModels(req.session.userId),
+        // Which model serves Tier 1 Reflex and Tier 2 Reasoning right now, and a notice such as
+        // "Tier 2 is slow; using the lighter model" when the probe has marked one degraded.
+        tiers: await tierStatus(req.session.userId).catch(() => null),
         embeddings: await embeddingProfile(),
         features: {
           context: cfg['features.context'],
@@ -163,6 +166,7 @@ export default {
       } catch (err) { res.json({ ok: false, error: err.message, ms: Date.now() - started }); }
     });
     r.get('/health', async (req, res) => {
+      reconcileOnLoad();
       const [jobs, pipeline, calls, index] = await Promise.all([
         queueStats(),
         pipelineStats(),
@@ -171,7 +175,7 @@ export default {
                  FROM hedwig_ai_calls WHERE created_at > NOW() - INTERVAL '24 hours' GROUP BY feature ORDER BY calls DESC`),
         indexHealth().catch((err) => ({ error: err.message })),
       ]);
-      res.json({ status: hedwigStatus, models: await activeModels(null), gateway: gatewayHealth(), jobs, pipeline, index, aiCalls24h: calls.rows, steps: definedSteps(), schedules: definedSchedules() });
+      res.json({ status: hedwigStatus, models: await activeModels(null), tiers: await tierStatus(null).catch(() => null), gateway: gatewayHealth(), jobs, pipeline, index, aiCalls24h: calls.rows, steps: definedSteps(), schedules: definedSchedules() });
     });
     r.post('/reindex', async (req, res) => {
       // Re-run the pipeline over history: clears per-message state (derived data only).

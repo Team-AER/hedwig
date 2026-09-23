@@ -136,6 +136,22 @@ export const SCHEMA = [
   { key: 'jobs.reconcileEverySec', type: 'number', default: 900, min: 60, max: 86400, group: 'pipeline', label: 'Reconcile failed jobs every (s)' },
   { key: 'jobs.laneDeferMin', type: 'number', default: 5, min: 1, max: 1440, group: 'pipeline', label: 'Defer a job by (min) when its model lane stayed full for the whole wait', help: 'Deferred, not failed: attempts are untouched.' },
   // --- end v2 runtime ---
+  // --- v2 runtime audit ---
+  { key: 'llm.probe.enabled', type: 'boolean', default: true, group: 'models', label: 'Probe each configured model on a schedule', help: 'A tiny completion per model. A model that does not answer is marked degraded and its calls go straight to the fallback until it answers again, so no call pays the fallback wait.' },
+  { key: 'llm.probe.everySec', type: 'number', default: 60, min: 15, max: 3600, group: 'models', label: 'Probe every (s)' },
+  { key: 'llm.probe.timeoutMs', type: 'number', default: 10_000, min: 1000, max: 120_000, group: 'models', label: 'A probe that gets no answer within (ms) marks the model degraded', help: 'Tier 2 targets a first token under 5 s; a model slower than this is treated as unavailable.' },
+  { key: 'llm.probe.degradeAfter', type: 'number', default: 1, min: 1, max: 10, group: 'models', label: 'Failed probes in a row before a model is degraded' },
+  { key: 'llm.probe.recoverAfter', type: 'number', default: 2, min: 1, max: 10, group: 'models', label: 'Answered probes in a row before traffic returns to a degraded model' },
+  { key: 'llm.probe.degradedEverySec', type: 'number', default: 300, min: 60, max: 3600, group: 'models', label: 'Probe a degraded model only every (s)', help: 'A saturated model server may still queue and run a probe the client gave up on, so a degraded model is probed less often until it answers again.' },
+  { key: 'llm.stream.firstToken', type: 'boolean', default: true, group: 'models', label: 'Measure the fallback wait to the first token', help: 'Calls that may fall back are streamed internally, so a slow but working answer is not cut off at the wait. Off: the wait bounds the whole answer.' },
+  { key: 'routing.summary.tier', type: 'enum', default: 'auto', options: ['auto', 'reflex', 'reasoning'], group: 'routing', label: 'Summaries (people, topics, topic labels): model tier', help: 'auto = what each call site asks for (prompts/inline.js).' },
+  { key: 'routing.extraction.tier', type: 'enum', default: 'auto', options: ['auto', 'reflex', 'reasoning'], group: 'routing', label: 'Commitments and facts extraction: model tier' },
+  { key: 'routing.triage.tier', type: 'enum', default: 'auto', options: ['auto', 'reflex', 'reasoning'], group: 'routing', label: 'Triage stage 3: model tier' },
+  { key: 'routing.insights.tier', type: 'enum', default: 'auto', options: ['auto', 'reflex', 'reasoning'], group: 'routing', label: 'Briefings: model tier' },
+  { key: 'routing.assistant.tier', type: 'enum', default: 'auto', options: ['auto', 'reflex', 'reasoning'], group: 'routing', label: 'Upstream AI (message summaries, categories, compose assistant): model tier', help: 'auto = one-line summaries and categories on Reflex, the compose assistant on Reasoning.' },
+  { key: 'jobs.retryEverySec', type: 'number', default: 3600, min: 600, max: 86400, group: 'pipeline', label: 'Retry failed jobs from their rebuild list every (s)', help: 'Only kinds that can rebuild their work from the data, and only rows that failed at least this long ago. Read when the worker starts: a change applies after a worker restart.' },
+  { key: 'jobs.retryMaxPerRun', type: 'number', default: 200, min: 1, max: 10000, group: 'pipeline', label: 'Most jobs one scheduled retry enqueues' },
+  // --- end v2 runtime audit ---
 
   // --- v2 labels ---
   { key: 'labels.questionsPerDay', type: 'number', default: 3, min: 0, max: 20, group: 'labels', label: 'Questions Hedwig may ask per day', scope: 'user' },
@@ -187,6 +203,9 @@ export const SCHEMA = [
   ] },
   { key: 'rules.maxPerUser', type: 'number', default: 200, min: 1, max: 5000, group: 'sort', label: 'Sorting rules per user' },
   // --- end v2 sort ---
+  // --- v2 sort audit ---
+  { key: 'sort.reflexTriesPerDay', type: 'number', default: 3, min: 1, max: 24, group: 'sort', label: 'Reflex jobs per message a day before the Reflex sweep waits until tomorrow', help: 'The sweep re-enqueues mail still waiting for Reflex after its job failed or gave no answer.' },
+  // --- end v2 sort audit ---
   // --- v2 index ---
   { key: 'index.tikaUrl', type: 'string', default: 'http://10.0.1.69:9998', group: 'index', label: 'Apache Tika URL (attachment text)' },
   { key: 'index.tikaEnabled', type: 'boolean', default: false, group: 'index', label: 'Extract attachment text with Tika', help: 'Off: attachments are indexed by name only. Never blocks the rest of indexing.' },
@@ -249,8 +268,8 @@ export const SCHEMA = [
   { key: 'cards.batchSize', type: 'number', default: 4, min: 1, max: 8, group: 'cards', label: 'Messages per Reflex card extraction call' },
   { key: 'cards.reflexPerJob', type: 'number', default: 5, min: 0, max: 50, group: 'cards', label: 'Reflex extraction calls per cards job (rate limit)' },
   { key: 'cards.reflexBundles', type: 'json', default: ['purchases', 'finance', 'travel', 'deliveries', 'calendar'], group: 'cards', label: 'Bundles whose mail goes to the Reflex model when no deterministic card is found' },
-  { key: 'cards.maxAgeDays', type: 'number', default: 120, min: 1, max: 3650, group: 'cards', label: 'Make cards from mail up to (days) old' },
-  { key: 'cards.reflexMaxAgeDays', type: 'number', default: 45, min: 0, max: 3650, group: 'cards', label: 'Ask the Reflex model about mail up to (days) old' },
+  { key: 'cards.maxAgeDays', type: 'number', default: 400, min: 1, max: 3650, group: 'cards', label: 'Make cards from mail up to (days) old' },
+  { key: 'cards.reflexMaxAgeDays', type: 'number', default: 365, min: 0, max: 3650, group: 'cards', label: 'Ask the Reflex model about mail up to (days) old' },
   { key: 'cards.textChars', type: 'number', default: 3000, min: 300, max: 20000, group: 'cards', label: 'Characters of each message sent to the Reflex model' },
   { key: 'cards.subscriptionMinCharges', type: 'number', default: 2, min: 2, max: 12, group: 'cards', label: 'Receipts from one merchant at a steady interval before it counts as a subscription' },
   { key: 'cards.codeFreshMin', type: 'number', default: 15, min: 1, max: 1440, group: 'cards', label: 'Show a one-time code on the Brief for (min) after it arrives' },
@@ -280,6 +299,31 @@ export const SCHEMA = [
   { key: 'onboarding.readyShare', type: 'number', default: 0.9, min: 0.1, max: 1, group: 'onboarding', label: 'Share of history indexed and sorted before "Sort the past" is ready' },
   { key: 'onboarding.done', type: 'boolean', default: false, group: 'onboarding', label: '"Sort the past" finished or dismissed', scope: 'user' },
   // --- end v2 profile/onboarding/admin ---
+  // --- v2 work audit ---
+  { key: 'work.summariesEager', type: 'boolean', default: true, group: 'work', label: 'Write thread stories and message TL;DRs as mail arrives (not only when a thread is opened)', scope: 'user' },
+  { key: 'work.summariseThreadsPerCall', type: 'number', default: 4, min: 1, max: 8, group: 'work', label: 'Threads per summarise call (Tier 1)' },
+  { key: 'work.tldrPerCall', type: 'number', default: 6, min: 1, max: 10, group: 'work', label: 'Messages per TL;DR call (Tier 1)' },
+  { key: 'work.summariseThreadsPerJob', type: 'number', default: 12, min: 0, max: 200, group: 'work', label: 'Threads a summarise job writes before handing on to the next job' },
+  { key: 'work.summariseMessagesPerJob', type: 'number', default: 36, min: 0, max: 500, group: 'work', label: 'Message TL;DRs a summarise job writes before handing on to the next job' },
+  { key: 'work.storyEscalateAbove', type: 'number', default: 8, min: 2, max: 100, group: 'work', label: 'Threads with more messages than this get their story from Tier 2 (Tier 1 with a "lighter model" label while Tier 2 is degraded)' },
+  { key: 'work.tldrChars', type: 'number', default: 1500, min: 200, max: 10000, group: 'work', label: 'Characters of each message the TL;DR reads' },
+  { key: 'work.summariesEverySec', type: 'number', default: 1800, min: 60, max: 86400, group: 'work', label: 'Sweep for threads and messages without a summary every (s)' },
+  { key: 'work.summariseRetryHours', type: 'number', default: 6, min: 1, max: 720, group: 'work', label: 'Retry a failed summary after (hours)' },
+  { key: 'work.replyOverdueDays', type: 'number', default: 2, min: 1, max: 60, group: 'work', label: 'Needs you: a person who wrote to you directly has waited this many days for a reply', scope: 'user' },
+  { key: 'work.deadlineSoonDays', type: 'number', default: 3, min: 0, max: 60, group: 'work', label: 'Needs you: something you owe is due within (days)', scope: 'user' },
+  { key: 'work.needsDays', type: 'number', default: 30, min: 1, max: 365, group: 'work', label: 'Derive Needs you reasons over mail up to (days) old' },
+  // --- end v2 work audit ---
+  // --- v2 cards audit ---
+  { key: 'cards.signalReflex', type: 'boolean', default: true, group: 'cards', label: 'Ask the Reflex model about People and Records mail that looks like an order, booking, invoice, ticket or delivery, whatever its bundle' },
+  // --- end v2 cards audit ---
+  // --- v2 index audit ---
+  { key: 'labels.judgeDeferHours', type: 'number', default: 18, min: 0, max: 168, group: 'labels', label: 'While Tier 2 is degraded, wait up to (hours) for it before judging on Tier 1 alone', help: 'The judge needs two different models. Until then the nightly job waits (no attempt spent); after this many hours it runs only the Tier 1 side and marks its labels single-judge.' },
+  { key: 'labels.historyDays', type: 'number', default: 3650, min: 30, max: 36500, group: 'labels', label: 'Learn "you replied" and "you wrote to them" labels from mail up to (days) old', help: 'Replies and sent mail are facts whatever their age; a newly connected account has little recent behaviour.' },
+  { key: 'labels.behaviourQuestions', type: 'number', default: 5, min: 0, max: 50, group: 'labels', label: 'Questions queued per behaviour sweep where what you did disagrees with how Hedwig sorted', help: 'They join the judge\'s questions in one queue; at most labels.questionsPerDay are asked a day.' },
+  { key: 'profile.deferHours', type: 'number', default: 24, min: 0, max: 168, group: 'profile', label: 'While Tier 2 is degraded, wait up to (hours) before rebuilding the profile on Tier 1 (marked provisional)' },
+  { key: 'profile.fallbackDays', type: 'number', default: 365, min: 30, max: 3650, group: 'profile', label: 'When the last profile.windowDays hold too few facts, learn from up to (days) instead' },
+  { key: 'insights.briefProseTier2Only', type: 'boolean', default: true, group: 'insights', label: 'Daily briefing prose only from Tier 2; the template (flagged) while Tier 2 is degraded' },
+  // --- end v2 index audit ---
 ];
 
 const BY_KEY = new Map(SCHEMA.map((f) => [f.key, f]));

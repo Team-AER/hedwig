@@ -23,6 +23,8 @@ describe.skipIf(!process.env.HEDWIG_IT)('runtime against the dev database', () =
     await query("DELETE FROM hedwig_ai_calls WHERE workflow LIKE 'it.runtime%'");
     if (userId) await query("DELETE FROM hedwig_corrections WHERE user_id = $1 AND note LIKE 'it.runtime%'", [userId]);
     await pool.end();
+    const { redisClient } = await import('../../services/redis.js');
+    if (redisClient.isOpen) await redisClient.quit().catch(() => {});
   });
 
   async function runAll() {
@@ -51,7 +53,7 @@ describe.skipIf(!process.env.HEDWIG_IT)('runtime against the dev database', () =
     expect(await jobs.reconcile()).toMatchObject({ resolved: expect.any(Number) });
     expect((await row(j1)).status).toBe('resolved'); // rebuild() no longer lists n:1
     broken = false;
-    expect(await jobs.retryFailed(`${K}.a`)).toEqual({ retried: 1, enqueued: 2, resolved: 0 });
+    expect(await jobs.retryFailed(`${K}.a`)).toEqual({ retried: 1, enqueued: 2, resolved: 0, skipped: 0 });
     expect((await row(j2)).status).toBe('retried');
     await runAll();
     stats = (await jobs.queueStats()).find((s) => s.kind === `${K}.a`);
@@ -73,6 +75,7 @@ describe.skipIf(!process.env.HEDWIG_IT)('runtime against the dev database', () =
     const r = await row(g);
     expect(new Date(r.run_at).getTime()).toBeGreaterThan(Date.now() + 5 * 60_000);
     expect(r.attempts).toBe(0);
+    expect(r.status).toBe('deferred');
     probe.ok = true;
     await jobs.healthGate();
   });
@@ -97,10 +100,59 @@ describe.skipIf(!process.env.HEDWIG_IT)('runtime against the dev database', () =
       expect(job.status).toBe('done');
       expect(job.tokens_in).toBeGreaterThan(0);
       const { rows } = await query('SELECT * FROM hedwig_ai_calls WHERE id = $1', [prov.aiCallId]);
-      expect(rows[0]).toMatchObject({ prompt_id: 'it.runtime', prompt_version: 'v1', prompt_hash: prov.promptHash, lane: 'background', tier: 'reflex', workflow: 'it.runtime', job_id: String(id), ok: true });
+      expect(rows[0]).toMatchObject({ prompt_id: 'it.runtime', prompt_version: 'v1', prompt_hash: prov.promptHash, lane: 'background', tier: 'reflex', workflow: 'it.runtime', job_id: String(id), ok: true, fell_back: false, escalated: false });
     } finally {
       gw.restore();
       for (const [k, v] of [['HEDWIG_LLM_BASE_URL', env.base], ['HEDWIG_LLM_CATALOG_URL', env.catalog]]) {
+        if (v === undefined) delete process.env[k]; else process.env[k] = v;
+      }
+      invalidateConfigCache();
+    }
+  });
+
+  it('runtime audit: inline calls, the usage report and shared model health on real Postgres and Redis', { timeout: 20_000 }, async () => {
+    const gw = mockGateway().install();
+    const env = { base: process.env.HEDWIG_LLM_BASE_URL, catalog: process.env.HEDWIG_LLM_CATALOG_URL, fb: process.env.HEDWIG_LLM_FALLBACK_MODEL, pt: process.env.HEDWIG_LLM_PROBE_TIMEOUT_MS };
+    process.env.HEDWIG_LLM_PROBE_TIMEOUT_MS = '1000';
+    const { invalidateConfigCache } = await import('../config.js');
+    process.env.HEDWIG_LLM_BASE_URL = gw.baseUrl;
+    process.env.HEDWIG_LLM_CATALOG_URL = gw.catalogUrl;
+    process.env.HEDWIG_LLM_FALLBACK_MODEL = 'google/gemma-4-12B-it-qat-w4a16-ct';
+    invalidateConfigCache();
+    const llm = await import('../llm.js');
+    const { connectRuntimeRedis, runtimeRedis } = await import('../prompts/lanes.js');
+    const QWEN = 'Qwen/Qwen3.8-Flash-Next';
+    try {
+      llm._resetLlmState();
+      // An unregistered call gets an inline prompt id, version, hash, tier and the user.
+      gw.on('it.runtime.inline', 'fine');
+      const out = await llm.chat({ userId, feature: 'admin', role: 'long', workflow: 'it.runtime.inline', budgetExempt: 'integration test', messages: [{ role: 'system', content: 'S' }, { role: 'user', content: 'u' }] });
+      const { rows } = await query('SELECT * FROM hedwig_ai_calls WHERE id = $1', [out.aiCallId]);
+      expect(rows[0]).toMatchObject({ prompt_id: 'admin.inline', prompt_version: 'inline', tier: 'reasoning', workflow: 'it.runtime.inline', fell_back: false });
+      expect(rows[0].prompt_hash).toMatch(/^[0-9a-f]{16}$/);
+
+      const { usageReport } = await import('./admin.js');
+      const report = await usageReport({ days: 2 });
+      expect(report.features.find((f) => f.feature === 'admin' && f.tier === 'reasoning')).toMatchObject({ calls: expect.any(Number) });
+      expect(report.daily.length).toBeGreaterThan(0);
+
+      // Probe verdicts are shared through Redis (REDIS_URL from .env.hedwig-dev).
+      if (process.env.REDIS_URL) {
+        expect(await connectRuntimeRedis()).toBe(true);
+        gw.health(QWEN, 'hang');
+        const { models } = await llm.probeModels({ force: true });
+        expect(models.find((m) => m.model === QWEN)).toMatchObject({ degraded: true });
+        await new Promise((r) => setTimeout(r, 50));
+        const c = await runtimeRedis();
+        expect(JSON.parse(await c.get(`hedwig:model-health:${QWEN}`))).toMatchObject({ degraded: true });
+        llm._resetLlmState();
+        expect((await llm.tierStatus(null)).reasoning).toMatchObject({ degraded: true, lighterModel: true, active: 'google/gemma-4-12B-it-qat-w4a16-ct' });
+        await c.del(`hedwig:model-health:${QWEN}`);
+      }
+    } finally {
+      gw.restore();
+      llm._resetLlmState();
+      for (const [k, v] of [['HEDWIG_LLM_BASE_URL', env.base], ['HEDWIG_LLM_CATALOG_URL', env.catalog], ['HEDWIG_LLM_FALLBACK_MODEL', env.fb], ['HEDWIG_LLM_PROBE_TIMEOUT_MS', env.pt]]) {
         if (v === undefined) delete process.env[k]; else process.env[k] = v;
       }
       invalidateConfigCache();

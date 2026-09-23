@@ -95,3 +95,13 @@ main().then(() => process.exit(0)).catch((err) => {
   console.error('[hedwig-worker] fatal:', err);
   process.exit(1);
 });
+
+// --- v2 runtime audit ---
+// Connect the shared Redis client at start-up. The API connects it at boot; the worker used to
+// connect only on its first model call, which then ran on a per-process lane limit and logged
+// "lanes: redis not connected". Lanes and model health (llm.js) share this client.
+import('./prompts/lanes.js')
+  .then(({ connectRuntimeRedis }) => connectRuntimeRedis())
+  .then((ok) => { if (!ok && process.env.REDIS_URL) console.warn('[hedwig-worker] redis not reachable yet; lane limits are per process until it is'); })
+  .catch((err) => console.warn('[hedwig-worker] redis connect failed:', err?.message || err));
+// --- end v2 runtime audit ---

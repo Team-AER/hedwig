@@ -7,7 +7,7 @@ vi.mock('../../services/redis.js', () => ({ redisClient: {} }));
 const cfg = { enabled: true, 'llm.baseUrl': 'http://gw/v1', 'llm.catalogUrl': 'http://gw/catalog.json', 'llm.apiKey': '', 'jobs.healthDeferMin': 10, 'jobs.reapAfterMin': 30 };
 vi.mock('../config.js', () => ({ getConfig: vi.fn(async () => ({ ...cfg, get: (k) => cfg[k] })) }));
 const probe = { ok: true, error: null };
-vi.mock('../llm.js', () => ({ probeGateway: vi.fn(async () => ({ ...probe })) }));
+vi.mock('../llm.js', () => ({ probeGateway: vi.fn(async () => ({ ...probe })), probeModels: vi.fn(async () => ({ models: [] })) }));
 vi.mock('../prompts/index.js', () => ({ listPrompts: async () => [] }));
 
 const jobs = await import('../jobs.js');
@@ -96,7 +96,7 @@ describe('job ledger', () => {
     await runAll();
     broken = false;
     const out = await retryFailed('t.extract');
-    expect(out).toEqual({ retried: 1, enqueued: 2, resolved: 1 });
+    expect(out).toEqual({ retried: 1, enqueued: 2, resolved: 1, skipped: 0 });
     expect(rebuild).toHaveBeenCalledWith(U1);
     expect(fake.row(m1).status).toBe('resolved');
     expect(fake.row(m2).status).toBe('retried');
@@ -106,14 +106,14 @@ describe('job ledger', () => {
     expect(fresh[1].dedupe_key).toMatch(/^rb:t\.extract:[0-9a-f]{40}$/);
     await runAll();
     expect(fake.state.rows.filter((r) => r.status === 'done')).toHaveLength(2);
-    expect(await retryFailed()).toEqual({ retried: 0, enqueued: 0, resolved: 0 }); // failed counts only rows still failed
+    expect(await retryFailed()).toEqual({ retried: 0, enqueued: 0, resolved: 0, skipped: 0 }); // failed counts only rows still failed
   });
 
   it('retryFailed copies failed jobs of kinds without rebuild()', async () => {
     defineJob('t.plain', async () => { throw Object.assign(new Error('nope'), { permanent: true }); });
     const id = await enqueue('t.plain', { a: 1 }, { userId: U1, priority: 3, maxAttempts: 2 });
     await runAll();
-    expect(await retryFailed()).toEqual({ retried: 1, enqueued: 1, resolved: 0 });
+    expect(await retryFailed()).toEqual({ retried: 1, enqueued: 1, resolved: 0, skipped: 0 });
     expect(fake.row(id).status).toBe('retried');
     const copy = fake.state.rows.find((r) => r.id !== id);
     expect(copy).toMatchObject({ kind: 't.plain', payload: { a: 1 }, user_id: U1, priority: 3, max_attempts: 2, status: 'queued', attempts: 0 });
@@ -152,7 +152,7 @@ describe('job ledger', () => {
     // a job claimed while the gate is closed goes back without losing its attempt
     fake.row(llm).run_at = fake.state.now;
     await runAll();
-    expect(fake.row(llm)).toMatchObject({ status: 'queued', attempts: 0 });
+    expect(fake.row(llm)).toMatchObject({ status: 'deferred', attempts: 0 });
     probe.ok = true;
     expect(await healthGate()).toEqual({ ok: true, deferred: 0 });
     fake.row(llm).run_at = fake.state.now;
@@ -167,7 +167,7 @@ describe('job ledger', () => {
     const id = await enqueue('t.extract', {}, { maxAttempts: 1 });
     probe.ok = false; probe.error = 'timeout';
     await runAll();
-    expect(fake.row(id)).toMatchObject({ status: 'queued', attempts: 0 });
+    expect(fake.row(id)).toMatchObject({ status: 'deferred', attempts: 0 });
     expect(fake.row(id).last_error).toMatch(/gateway unreachable/);
     // gateway up: the same error is a real failure
     probe.ok = true;
@@ -185,7 +185,7 @@ describe('job ledger', () => {
     const probes = (await import('../llm.js')).probeGateway;
     probes.mockClear();
     await runAll();
-    expect(fake.row(id)).toMatchObject({ status: 'queued', attempts: 0, failed_at: null, tokens_in: 10 });
+    expect(fake.row(id)).toMatchObject({ status: 'deferred', attempts: 0, failed_at: null, tokens_in: 10 });
     expect(fake.row(id).last_error).toBe('deferred: the background model lane stayed full for 1200 s');
     expect(fake.row(id).run_at).toBe(fake.state.now + 5 * 60_000); // jobs.laneDeferMin default
     expect(probes).not.toHaveBeenCalled(); // not mistaken for the gateway being down
@@ -195,7 +195,7 @@ describe('job ledger', () => {
     defineJob('t.yield', async () => jobs.deferJob('mail sync is running', 15_000));
     const id = await enqueue('t.yield', {}, { maxAttempts: 1 });
     await runAll();
-    expect(fake.row(id)).toMatchObject({ status: 'queued', attempts: 0, last_error: 'deferred: mail sync is running' });
+    expect(fake.row(id)).toMatchObject({ status: 'deferred', attempts: 0, last_error: 'deferred: mail sync is running' });
     expect(fake.row(id).run_at).toBe(fake.state.now + 15_000);
     expect(console.warn).not.toHaveBeenCalledWith(expect.stringMatching(/t\.yield.*failed/), expect.anything());
   });
@@ -230,7 +230,7 @@ describe('job locks and timeouts (review fixes)', () => {
     Object.assign(fake.row(id), { locked_at: fake.state.now, status: 'running', attempts: 1 });
     fake.advance(40 * MIN); // past jobs.reapAfterMin (30), well inside a worker kind's 60 min timeout
     const routes = {};
-    runtimeAdminRoutes({ get() {}, post(path, fn) { routes[path] = fn; } });
+    runtimeAdminRoutes({ get() {}, put() {}, post(path, fn) { routes[path] = fn; } });
     let body = null;
     await routes['/jobs/reconcile']({ body: {} }, { json: (b) => { body = b; }, status() { return this; } });
     expect(body).toMatchObject({ resolved: 0 });
@@ -283,4 +283,71 @@ describe('job locks and timeouts (review fixes)', () => {
     expect(extend.params[0]).toBe(id);
     expect(extend.params[1]).toBeGreaterThanOrEqual(WAIT / 1000 - 0.05);
   }, 10_000);
+});
+
+describe('runtime audit: deferrals and the scheduled retry', () => {
+  it('a lane-full error wrapped by a handler is still a deferral, not a failure', async () => {
+    defineJob('t.wrapped', async () => {
+      const inner = Object.assign(new Error('the background model lane stayed full for 1200 s'), { code: 'lane_busy', status: 503 });
+      throw new Error(`reflex batch failed: ${inner.message}`, { cause: inner });
+    });
+    const id = await enqueue('t.wrapped', {}, { maxAttempts: 1 });
+    await runAll();
+    expect(fake.row(id)).toMatchObject({ status: 'deferred', attempts: 0, failed_at: null });
+  });
+
+  it('a job whose tier is degraded (allowLighter: false) is deferred by jobs.healthDeferMin', async () => {
+    defineJob('t.judge', async () => { throw Object.assign(new Error('Tier 2 Reasoning model Q is degraded'), { name: 'LlmError', code: 'tier_degraded', status: 503 }); });
+    const id = await enqueue('t.judge', {}, { maxAttempts: 1 });
+    const probes = (await import('../llm.js')).probeGateway;
+    probes.mockClear();
+    await runAll();
+    expect(fake.row(id)).toMatchObject({ status: 'deferred', attempts: 0, failed_at: null });
+    expect(fake.row(id).run_at).toBe(fake.state.now + 10 * 60_000);
+    expect(probes).not.toHaveBeenCalled();
+  });
+
+  it('the healthGate marks the jobs it pushes back as deferred', async () => {
+    defineJob('t.gw', async () => {}, { needsGateway: true });
+    const id = await enqueue('t.gw', {});
+    probe.ok = false; probe.error = 'connect ECONNREFUSED';
+    await healthGate();
+    expect(fake.row(id)).toMatchObject({ status: 'deferred', attempts: 0 });
+  });
+
+  it('retryFailed({ rebuildOnly, olderThanSec, max }) retries only rebuildable kinds that failed a while ago', async () => {
+    const rebuild = vi.fn(async () => [{ m: 1 }, { m: 2 }, { m: 3 }]);
+    defineJob('t.rb', async () => { throw Object.assign(new Error('x'), { permanent: true }); }, { rebuild });
+    defineJob('t.copy', async () => { throw Object.assign(new Error('x'), { permanent: true }); });
+    const old = await enqueue('t.rb', { m: 1 }, { userId: U1 });
+    const fresh = await enqueue('t.rb', { m: 2 }, { userId: U1 });
+    const copy = await enqueue('t.copy', { a: 1 }, { userId: U1 });
+    await runAll();
+    fake.row(old).failed_at = Date.now() - 2 * 3600_000;
+    fake.row(copy).failed_at = Date.now() - 2 * 3600_000;
+    const out = await retryFailed(null, { rebuildOnly: true, olderThanSec: 3000, max: 1 });
+    expect(out).toMatchObject({ enqueued: 1, retried: 1, skipped: 2 });
+    expect(fake.row(old).status).toBe('retried');
+    expect(fake.row(fresh).status).toBe('failed'); // failed too recently
+    expect(fake.row(copy).status).toBe('failed'); // no rebuild(): never copied unattended
+    expect(fake.state.rows.filter((r) => r.status === 'queued').map((r) => r.payload)).toEqual([{ m: 1 }]);
+  });
+
+  it('the worker schedules the probe and the rebuild-based retry next to reconcile and the reaper', async () => {
+    const { _resetSchedules, definedSchedules } = await import('../schedule.js');
+    _resetSchedules();
+    const { registerRuntimeSchedules, scheduledRetry } = await import('./schedules.js');
+    await registerRuntimeSchedules();
+    expect(Object.fromEntries(definedSchedules().map((s) => [s.name, s.everySec]))).toMatchObject({
+      'runtime.healthGate': 60, 'runtime.reapStuck': 300, 'runtime.reconcile': 900, 'runtime.probeModels': 15, 'runtime.retryFailed': 3600, // the probe ticks; llm.js decides per model
+    });
+    _resetSchedules();
+    const rebuild = vi.fn(async () => [{ m: 9 }]);
+    defineJob('t.sched', async () => { throw Object.assign(new Error('x'), { permanent: true }); }, { rebuild });
+    const id = await enqueue('t.sched', { m: 9 }, { userId: U1 });
+    await runAll();
+    fake.row(id).failed_at = Date.now() - 2 * 3600_000;
+    expect(await scheduledRetry()).toMatchObject({ enqueued: 1, retried: 1 });
+    expect(fake.row(id).status).toBe('retried');
+  });
 });

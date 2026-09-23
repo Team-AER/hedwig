@@ -67,18 +67,18 @@ export function createFakeJobsDb() {
       r.tokens_in += tin; r.tokens_out += tout;
       return { rowCount: 1 };
     }
-    if (s.startsWith("UPDATE hedwig_jobs SET locked_at = NULL, attempts = GREATEST(attempts - 1, 0), status = 'queued', last_error = $2, run_at = NOW() + ($3 || ' seconds')")) {
-      const [id, msg, sec, tin = 0, tout = 0] = params;
+    if (s.startsWith("UPDATE hedwig_jobs SET locked_at = NULL, attempts = GREATEST(attempts - 1, 0), status = $6, last_error = $2, run_at = NOW() + ($3 || ' seconds')")) {
+      const [id, msg, sec, tin = 0, tout = 0, status = 'deferred'] = params;
       const r = byId(id);
-      Object.assign(r, { locked_at: null, attempts: Math.max(r.attempts - 1, 0), status: 'queued', last_error: msg, run_at: now + Number(sec) * 1000 });
+      Object.assign(r, { locked_at: null, attempts: Math.max(r.attempts - 1, 0), status, last_error: msg, run_at: now + Number(sec) * 1000 });
       r.tokens_in += tin; r.tokens_out += tout;
       return { rowCount: 1 };
     }
-    if (s.startsWith("UPDATE hedwig_jobs SET run_at = NOW() + ($2 || ' minutes')::interval, last_error = $3")) {
+    if (s.startsWith("UPDATE hedwig_jobs SET run_at = NOW() + ($2 || ' minutes')::interval, last_error = $3, status = 'deferred'")) {
       const [kinds, min, msg] = params;
       const until = now + Number(min) * 60_000;
       const hit = state.rows.filter((r) => active(r) && !r.locked_at && r.run_at <= until && kinds.includes(r.kind));
-      for (const r of hit) Object.assign(r, { run_at: until, last_error: msg });
+      for (const r of hit) Object.assign(r, { run_at: until, last_error: msg, status: 'deferred' });
       return { rowCount: hit.length };
     }
     if (s.startsWith("UPDATE hedwig_jobs f SET status = 'resolved', note = 'a later run succeeded'")) {

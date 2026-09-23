@@ -14,7 +14,7 @@
 //   3. index.bodyConcurrency Hedwig fetches already in flight for the account → defer briefly
 //   4. fetch. A refusal-shaped error arms or extends the per-account backoff (1, 2, 4, 8, 15 min
 //      cap), pushes the account's queued fetches behind it, and defers the job; a success clears it.
-// Deferring = jobs.js deferJob(): the job goes back to queued with run_at pushed out and its attempt
+// Deferring = jobs.js deferJob(): the job goes back to 'deferred' with run_at pushed out and its attempt
 // refunded, recorded as 'deferred: …' like the gateway health gate does. It is not a failure.
 //
 // Upstream state is read, never written, straight off the ImapManager instance (the same way

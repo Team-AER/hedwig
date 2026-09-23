@@ -127,7 +127,7 @@ describe('yielding to upstream', () => {
     await jobs.runJob(job);
     expect(m.fetchMessageBody).not.toHaveBeenCalled();
     const row = fake.row(id);
-    expect(row).toMatchObject({ status: 'queued', attempts: 0, failed_at: null });
+    expect(row).toMatchObject({ status: 'deferred', attempts: 0, failed_at: null });
     expect(row.last_error).toMatch(/^deferred: mail first: the provider refused a connection/);
     expect(row.run_at - fake.state.now).toBeGreaterThanOrEqual(90_000);
     expect(pushes).toHaveLength(1); // the rest of the account's queue moves behind the cooldown too
@@ -141,7 +141,7 @@ describe('yielding to upstream', () => {
     const id = await jobs.enqueue('mail.fetchBody', { messageId: MSG }, { maxAttempts: 3 });
     await jobs.runJob((await jobs.claim(5))[0]);
     expect(m.fetchMessageBody).not.toHaveBeenCalled();
-    expect(fake.row(id)).toMatchObject({ status: 'queued', attempts: 0 });
+    expect(fake.row(id)).toMatchObject({ status: 'deferred', attempts: 0 });
     expect(fake.row(id).last_error).toMatch(/mail sync is running/);
     // sync over: the next run fetches
     m.syncingAccounts.clear();
@@ -180,7 +180,7 @@ describe('per-account backoff', () => {
       Date.now = () => before; // guardedFetch reads the clock; keep it on the fake DB's
       try { await jobs.runJob((await jobs.claim(5))[0]); } finally { Date.now = realNow; }
       const row = fake.row(id);
-      expect(row).toMatchObject({ status: 'queued', attempts: 0, failed_at: null });
+      expect(row).toMatchObject({ status: 'deferred', attempts: 0, failed_at: null });
       expect(row.last_error).toMatch(/deferred: mail server pushed back \("Connection not available"\)/);
       expect(state.get(key)).toMatchObject({ failures: i + 1, error: 'Connection not available' });
       waits.push(Math.round((row.run_at - before) / 60_000));

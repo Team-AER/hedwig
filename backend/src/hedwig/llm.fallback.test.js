@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../services/db.js', () => ({ query: vi.fn(async () => ({ rows: [{ n: 0 }] })), pool: {} }));
+// Model health is shared through Redis; a unit test must not read or write the dev Redis (HEDWIG_IT runs).
+vi.mock('../services/redis.js', () => ({ redisClient: {} }));
 const cfg = {
   enabled: true, 'llm.baseUrl': 'http://gw/v1', 'llm.apiKey': '', 'llm.catalogUrl': '',
   'llm.models.fast': 'primary-model', 'llm.models.long': 'primary-model', 'llm.models.agent': 'primary-model',

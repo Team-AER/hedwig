@@ -119,6 +119,22 @@ describe('runPrompt', () => {
     expect(provenance).toMatchObject({ model: QWEN, tier: 'reasoning', repaired: true, escalated: true, aiCallId: 3, attempts: 3 });
   });
 
+  it('flags lighterModel when the retry chain ends on the other tier for a Tier 2 prompt, but not for an escalated Tier 1 one', async () => {
+    definePrompt({
+      id: 'test.deep', version: '1', tier: 'reasoning', feature: 'sort',
+      system: 'Think.', user: 'Q: {{subject}}',
+      schema: { type: 'object', required: ['stream'], properties: { stream: { type: 'string', enum: ['people', 'reading', 'records'] } } },
+    });
+    gw.on('test.deep', [{ stream: 'spam' }, { stream: 'nope' }, { stream: 'records' }]);
+    const { provenance } = await run('test.deep');
+    expect(gw.calls.map((c) => c.model)).toEqual([QWEN, QWEN, GEMMA]);
+    expect(provenance).toMatchObject({ model: GEMMA, tier: 'reflex', servedTier: 'reflex', fellBack: false, repaired: true, lighterModel: true });
+    // The reverse (a Reflex prompt rescued by Qwen) got a heavier model, not a lighter one.
+    gw.reset().install();
+    gw.on('test.single', [{ stream: 'spam' }, { stream: 'nope' }, { stream: 'records' }]);
+    expect((await run('test.single')).provenance).toMatchObject({ model: QWEN, servedTier: 'reasoning', lighterModel: false });
+  });
+
   it('throws PromptOutputError with provenance when every attempt is invalid', async () => {
     gw.on('test.single', 'not json at all');
     const err = await run('test.single').catch((e) => e);
@@ -229,7 +245,7 @@ describe('think stripping', () => {
   });
 
   it('chat() and chatStream() return content without reasoning', async () => {
-    gw.on('ask', '<think>let me think about this carefully</think>The answer is 42.');
+    gw.on('ask.inline', '<think>let me think about this carefully</think>The answer is 42.');
     const res = await chat({ userId: USER, feature: 'ask', role: 'long', messages: [{ role: 'user', content: 'q' }] });
     expect(res.content).toBe('The answer is 42.');
     const deltas = [];
@@ -239,14 +255,14 @@ describe('think stripping', () => {
     }
     expect(deltas.join('')).toBe('The answer is 42.');
     expect(done).toMatchObject({ content: 'The answer is 42.', aiCallId: expect.any(Number), lane: 'interactive' });
-    expect(gw.calls.every((c) => c.sessionId === 'hedwig' && c.workflow === 'ask')).toBe(true);
+    expect(gw.calls.every((c) => c.sessionId === 'hedwig' && c.workflow === 'ask.inline')).toBe(true);
   });
 });
 
 describe('interactive lane fallback', () => {
   it('switches to the fallback after llm.lanes.interactive.fallbackAfterMs, not the global wait', async () => {
     cfg = { ...cfg, 'llm.fallbackModel': QWEN, 'llm.models.long': GEMMA, 'llm.fallbackAfterMs': 30000, 'llm.lanes.interactive.fallbackAfterMs': 30 };
-    gw.on('ask', (req) => (req.model === GEMMA ? gw.hang() : 'from the fallback'));
+    gw.on('ask.inline', (req) => (req.model === GEMMA ? gw.hang() : 'from the fallback'));
     const started = Date.now();
     const res = await chat({ userId: USER, feature: 'ask', role: 'long', lane: 'interactive', messages: [] });
     expect(res).toMatchObject({ model: QWEN, fellBack: true, content: 'from the fallback' });
@@ -260,7 +276,7 @@ describe('lane waits (llm.lanes.<lane>.waitMs)', () => {
   it('a background call waits llm.lanes.background.waitMs for a slot, then gives up with lane_busy', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     cfg = { ...cfg, 'llm.lanes.background.concurrency': 1, 'llm.lanes.background.waitMs': 1200, 'llm.timeoutMs': 200 };
-    gw.on('ask', 'late');
+    gw.on('ask.inline', 'late');
     const held = await hold('background');
     const started = Date.now();
     await expect(chat({ userId: USER, feature: 'ask', role: 'fast', lane: 'background', messages: [] }))
@@ -322,7 +338,7 @@ describe('review fixes (wave 1)', () => {
 
   it('a budgeted feature without a user fails loudly unless the caller marks it budget-exempt', async () => {
     cfg = { ...cfg, 'llm.tokenBudget.assistant': 500000 };
-    gw.on('assistant', 'ok');
+    gw.on('assistant.inline', 'ok');
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     await expect(chat({ feature: 'assistant', role: 'long', messages: [] })).rejects.toMatchObject({ code: 'user_required' });
     const out = await chat({ feature: 'assistant', role: 'long', messages: [], budgetExempt: 'admin connection test' });
@@ -335,7 +351,7 @@ describe('review fixes (wave 1)', () => {
     const evals = [];
     setLaneRedis({ isReady: true, eval: async (_lua, { arguments: args }) => { evals.push(args); return 1; }, zRem: async () => 1 });
     cfg = { ...cfg, 'llm.lanes.leaseSec': 1, 'llm.timeoutMs': 5000, 'llm.fallbackModel': QWEN };
-    gw.on('ask', 'hi');
+    gw.on('ask.inline', 'hi');
     await chat({ userId: USER, feature: 'ask', role: 'fast', messages: [] });
     expect(Number(evals[0][1])).toBe(2 * 5000 + 30_000);
     cfg = { ...cfg, 'llm.fallbackModel': '' };

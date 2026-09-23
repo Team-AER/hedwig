@@ -23,9 +23,12 @@
 //   - every call is logged to hedwig_ai_calls with prompt id/version/hash, tier, lane, workflow.
 //   - X-Workflow: <prompt id> and X-Session-ID: hedwig on every request (llm.js).
 //
-// provenance = { aiCallId, promptId, promptVersion, promptHash, model, tier, fellBack, tokensIn,
-//                tokensOut, attempts, escalated, repaired, dropped, routed }
+// provenance = { aiCallId, promptId, promptVersion, promptHash, model, tier, servedTier, fellBack,
+//                lighterModel, tokensIn, tokensOut, attempts, escalated, repaired, dropped, routed }
 //   routed: the admin's routing.<feature>.tier moved this call off the prompt's own tier.
+//   tier: the tier the answer was asked of; model/servedTier: what actually answered;
+//   lighterModel: a Tier 2 prompt was answered by the fallback (Tier 2 slow or down). Outputs that
+//   show provenance should say so ("answered by the lighter model").
 import { createHash } from 'node:crypto';
 import { readdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
@@ -33,6 +36,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { chat, extractJson, outputCap, activeModels, LlmError } from '../llm.js';
 import { getConfig } from '../config.js';
 import { validateSchema } from '../agent/validate.js';
+import { listInlinePrompts } from './inline.js';
 
 export const TIERS = { reflex: 'fast', reasoning: 'long' };
 const OTHER_TIER = { reflex: 'reasoning', reasoning: 'reflex' };
@@ -131,12 +135,16 @@ export async function getPrompt(id) {
   return registry.get(id) || null;
 }
 
-/** For the admin page: id, version, hash, tier of every registered prompt. */
-export async function listPrompts() {
+/**
+ * For the admin page and the routing table: id, version, hash, tier of every registered prompt,
+ * plus the inline call sites (prompts/inline.js, `inline: true`) unless `inline: false`.
+ */
+export async function listPrompts({ inline = true } = {}) {
   await loadPrompts();
-  return [...registry.values()]
-    .map((p) => ({ id: p.id, version: p.version, hash: p.hash, tier: p.tier, feature: p.feature, maxTokens: p.maxTokens, batch: Boolean(p.batch) }))
-    .sort((a, b) => a.id.localeCompare(b.id));
+  const registered = [...registry.values()]
+    .map((p) => ({ id: p.id, version: p.version, hash: p.hash, tier: p.tier, feature: p.feature, maxTokens: p.maxTokens, batch: Boolean(p.batch) }));
+  const extra = inline ? listInlinePrompts().filter((p) => !registry.has(p.id)) : [];
+  return [...registered, ...extra].sort((a, b) => a.id.localeCompare(b.id));
 }
 
 function renderTemplate(template, vars) {
@@ -192,13 +200,17 @@ function schemaName(id) {
  * @param {string} id
  * @param {object} vars   template variables / argument to the prompt's user() function
  * @param {{ userId?: string, feature?: string, lane?: 'interactive'|'background', escalate?: boolean,
- *           signal?: AbortSignal, pluginId?: string, fetchFn?: Function }} [opts]
+ *           signal?: AbortSignal, pluginId?: string, fetchFn?: Function, tier?: 'reflex'|'reasoning',
+ *           allowLighter?: boolean }} [opts]
  * @returns {Promise<{ data: any, provenance: object }>}
  */
 export async function runPrompt(id, vars = {}, opts = {}) {
   const p = await getPrompt(id);
   if (!p) throw new LlmError(`unknown prompt ${id}`, { status: 400, code: 'unknown_prompt' });
   const { userId, lane, escalate = false, signal, pluginId, fetchFn } = opts;
+  // allowLighter: false = this prompt must be answered by its own tier's model, never the fallback
+  // (a degraded tier then throws tier_degraded, which a job defers). Default true.
+  const noFallback = opts.allowLighter === false;
   const feature = opts.feature || p.feature;
   const cfg = await getConfig(userId);
   // Admin routing (routing.<feature>.tier): 'reflex' | 'reasoning' replaces the prompt's own tier
@@ -214,8 +226,8 @@ export async function runPrompt(id, vars = {}, opts = {}) {
   const base = [{ role: 'system', content: system }, { role: 'user', content: user }];
 
   const provenance = {
-    aiCallId: null, promptId: p.id, promptVersion: p.version, promptHash: p.hash, model: null, tier: startTier,
-    fellBack: false, tokensIn: 0, tokensOut: 0, attempts: 0, escalated: startTier !== routedTier, repaired: false,
+    aiCallId: null, promptId: p.id, promptVersion: p.version, promptHash: p.hash, model: null, tier: startTier, servedTier: null,
+    fellBack: false, lighterModel: false, tokensIn: 0, tokensOut: 0, attempts: 0, escalated: startTier !== routedTier, repaired: false,
     dropped: [], routed: routedTier !== p.tier,
   };
 
@@ -227,7 +239,7 @@ export async function runPrompt(id, vars = {}, opts = {}) {
     for (;;) {
       const useSchema = !jsonSchemaRejected.has(schemaKey(p.id, active));
       const send = (schemaMode) => chat({
-        userId, feature, pluginId, role, lane, signal, fetchFn,
+        userId, feature, pluginId, role, lane, signal, fetchFn, noFallback,
         messages: schemaMode ? messages : withSchemaInstruction(messages, p.schema),
         maxTokens, temperature: p.temperature, reasoning: p.reasoning,
         responseFormat: schemaMode
@@ -235,6 +247,7 @@ export async function runPrompt(id, vars = {}, opts = {}) {
           : { type: 'json_object' },
         workflow: p.id,
         prompt: { id: p.id, version: p.version, hash: p.hash, tier },
+        escalated: tier !== routedTier,
       });
       let res;
       provenance.attempts++;
@@ -256,6 +269,10 @@ export async function runPrompt(id, vars = {}, opts = {}) {
       provenance.model = res.model;
       provenance.fellBack = Boolean(res.fellBack);
       provenance.tier = tier;
+      provenance.servedTier = res.servedTier || tier;
+      // A Tier 2 prompt answered by anything but Tier 2's own model: the fallback, or the last
+      // retry of the chain, which runs on the other tier (Reflex).
+      provenance.lighterModel = startTier === 'reasoning' && (Boolean(res.fellBack) || (res.servedTier || tier) !== 'reasoning');
       if (res.finishReason === 'length') {
         cap = await outputCap(res.model, cfg, { fetchFn });
         if (maxTokens < cap) {
@@ -275,7 +292,17 @@ export async function runPrompt(id, vars = {}, opts = {}) {
   ];
   let lastErrors = [];
   let lastContent = '';
+  let lastModel = null;
   for (const step of steps) {
+    if (step.tier !== startTier) {
+      // The last try runs on the other tier. Not for a prompt that must stay on its own tier
+      // (allowLighter: false), and not when the other tier is served by the model that just failed
+      // twice (Tier 2 degraded: its fallback is the Reflex model), which would only repeat the call.
+      if (noFallback) break;
+      const role = TIERS[step.tier];
+      const other = (await activeModels(userId).catch(() => null))?.[role]?.active || cfg[`llm.models.${role}`];
+      if (other && other === lastModel) break;
+    }
     const messages = step.repair
       ? [...base,
         { role: 'assistant', content: String(lastContent || '').slice(0, 6000) },
@@ -291,9 +318,20 @@ export async function runPrompt(id, vars = {}, opts = {}) {
     }
     lastErrors = truncatedAt ? [`the reply was cut off at ${truncatedAt} tokens`, ...checked.errors] : checked.errors;
     lastContent = res.content;
+    lastModel = res.model;
     console.warn(`[hedwig] prompt ${p.id}@${p.version} on ${res.model}: invalid output (${lastErrors.slice(0, 3).join('; ')})`);
   }
   throw new PromptOutputError(p.id, lastErrors, provenance);
+}
+
+/**
+ * Is escalating to Tier 2 worth a call right now? Not while Tier 2 is degraded: its calls go to the
+ * fallback (the Reflex model), so an escalation would ask the same model the same question again,
+ * or, with no fallback, wait on a model that is not answering. Callers keep the Reflex answer.
+ */
+export async function escalationUseful(userId) {
+  const models = await activeModels(userId).catch(() => null);
+  return !models?.long?.degraded;
 }
 
 function withSchemaInstruction(messages, schema) {

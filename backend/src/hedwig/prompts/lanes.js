@@ -64,10 +64,16 @@ return 0
 `;
 
 let injected = null;          // tests: setLaneRedis(mock)
-let connectTried = false;
+let connecting = null;        // the pending connect() of services/redis.js, if one is running
+let connectFailedAt = 0;
 let redisDownUntil = 0;
 let warnedLocal = false;
 const local = new Map();      // lane -> { active, queue: [] }
+
+// How long the first caller waits for services/redis.js to finish connecting before it falls back
+// to a per-process limit. The worker never connected the shared client at boot, so its first model
+// call used to run on a local semaphore and log "redis not connected" even though Redis was fine.
+const CONNECT_WAIT_MS = 3000;
 
 /** Tests (or an embedding host) can hand in a client; null restores services/redis.js. */
 export function setLaneRedis(client) {
@@ -80,15 +86,48 @@ function redis() {
   const c = injected || redisClient;
   if (!c) return null;
   if (c.isReady) return c;
-  // The API connects the shared client at boot; the worker does not, so connect it on first use
-  // when REDIS_URL says where Redis is. Never in tests (no REDIS_URL).
-  if (c === redisClient && !c.isOpen && !connectTried && process.env.REDIS_URL && typeof c.connect === 'function') {
-    connectTried = true;
-    Promise.resolve()
-      .then(() => c.connect())
-      .catch((err) => console.warn('[hedwig] lanes: redis connect failed, using per-process limits:', err?.message || err));
-  }
+  startConnect(c);
   return null;
+}
+
+// The API connects the shared client at boot; the worker does not, so connect it on first use when
+// REDIS_URL says where Redis is. Never in tests (no REDIS_URL). A failed connect is retried after
+// REDIS_RETRY_MS rather than never.
+function startConnect(c) {
+  if (c !== redisClient || c.isOpen || connecting || !process.env.REDIS_URL || typeof c.connect !== 'function') return connecting;
+  if (connectFailedAt && Date.now() - connectFailedAt < REDIS_RETRY_MS) return null;
+  connecting = Promise.resolve()
+    .then(() => c.connect())
+    .then(() => { connectFailedAt = 0; })
+    .catch((err) => {
+      connectFailedAt = Date.now();
+      console.warn('[hedwig] lanes: redis connect failed, using per-process limits:', err?.message || err);
+    })
+    .finally(() => { connecting = null; });
+  return connecting;
+}
+
+/**
+ * The shared Redis client once it is ready, or null. When the shared client is still connecting
+ * (the worker's first call), waits up to `waitMs` for it instead of giving up at once. Also used by
+ * llm.js to share model health across processes.
+ */
+export async function runtimeRedis({ waitMs = CONNECT_WAIT_MS } = {}) {
+  const now = redis();
+  if (now) return now;
+  const c = injected || redisClient;
+  const pending = c ? startConnect(c) : null;
+  if (!pending || !(waitMs > 0)) return null;
+  let timer = null;
+  await Promise.race([pending, new Promise((r) => { timer = setTimeout(r, waitMs); timer.unref?.(); })]);
+  clearTimeout(timer);
+  return redis();
+}
+
+/** Connect the shared client now (the worker calls this at start-up). Resolves either way. */
+export async function connectRuntimeRedis({ waitMs = 10_000 } = {}) {
+  const c = await runtimeRedis({ waitMs });
+  return Boolean(c);
 }
 
 function markRedisDown(err) {
@@ -159,8 +198,8 @@ export async function acquireLane(lane, { limit, leaseMs, maxWaitMs = 300_000, s
     Promise.resolve().then(() => Promise.all([c.zRem(queueKey, id), c.zRem(aliveKey, id)])).catch(() => {});
   };
   try {
-    for (;;) {
-      const c = redis();
+    for (let first = true; ; first = false) {
+      const c = first ? await runtimeRedis() : redis();
       if (!c) { leave(); return await acquireLocal(lane, limit, signal, Math.max(0, deadline - Date.now())); }
       let got;
       try {
@@ -209,7 +248,8 @@ export async function laneStats(limits = {}) {
 export function _resetLanes() {
   local.clear();
   injected = null;
-  connectTried = false;
+  connecting = null;
+  connectFailedAt = 0;
   redisDownUntil = 0;
   warnedLocal = false;
 }

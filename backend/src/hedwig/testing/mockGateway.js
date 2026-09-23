@@ -13,6 +13,12 @@
 //   gw.on('x', gw.reply(data, { finishReason, usage, toolCalls, model }));
 //   gw.on('x', gw.error(400, 'response_format json_schema not supported'));
 //   gw.on('x', gw.hang());                    // never answers (until the request is aborted)
+//   gw.on('x', gw.stall());                   // sends 200 headers at once, then no token (a queued
+//                                             //   request on a server that does not hold headers)
+//   gw.on('x', gw.delay(300, data));          // answers after 300 ms; a stream sends its first
+//                                             //   chunk after 300 ms ({ firstChunkMs, totalMs })
+//   gw.health(model, 'hang' | 'ok' | 503)     // how the model answers the runtime probe
+//                                             //   (X-Workflow runtime.probe; default: 'ok')
 //   gw.otherwise(handler);                    // for workflows with no route (default: 404, loud)
 //
 //   gw.calls                                  // every chat request, in order:
@@ -26,6 +32,8 @@
 // Qwen 32768 by default, override with { catalog }), GET <base>/models, and POST <base>/embeddings
 // returning deterministic lexical hash vectors (similar text → similar vector; { dims } default 1024).
 // Streaming requests (body.stream) get the reply as SSE deltas plus a usage event.
+// Probe requests (X-Workflow runtime.probe, from llm.js probeModels) answer 'ok' unless routed or
+// set per model with gw.health().
 // Requests to any other URL go to the original fetch.
 
 const DEFAULT_CATALOG = [
@@ -57,11 +65,21 @@ export function hashVector(text, dims = 1024) {
 
 const estimate = (s) => Math.max(1, Math.ceil(String(s || '').length / 4));
 
+function isLoopback(url) {
+  try {
+    const host = new URL(url).hostname.replace(/^\[|\]$/g, '');
+    return host === 'localhost' || host === '::1' || /^127\./.test(host);
+  } catch {
+    return false;
+  }
+}
+
 export function mockGateway({ baseUrl = 'http://llm-proxy.cls/v1', catalog = DEFAULT_CATALOG, dims = 1024, catalogUrl } = {}) {
   const base = baseUrl.replace(/\/+$/, '');
   const origin = new URL(base).origin;
   const catUrl = catalogUrl || `${origin}/catalog.json`;
   const routes = new Map();     // workflow -> { handler, queue }
+  const probeHealth = new Map(); // model -> 'ok' | 'hang' | status code
   let fallbackHandler = null;
   let original = null;
 
@@ -77,7 +95,8 @@ export function mockGateway({ baseUrl = 'http://llm-proxy.cls/v1', catalog = DEF
     },
     otherwise(handler) { fallbackHandler = handler; return gw; },
     callsFor(workflow) { return gw.calls.filter((c) => c.workflow === workflow); },
-    reset() { gw.calls.length = 0; gw.embeddings.length = 0; routes.clear(); fallbackHandler = null; return gw; },
+    reset() { gw.calls.length = 0; gw.embeddings.length = 0; routes.clear(); probeHealth.clear(); fallbackHandler = null; return gw; },
+    health(model, how = 'ok') { probeHealth.set(model, how); return gw; },
 
     reply(data, { finishReason = 'stop', usage = null, toolCalls = null, model = null } = {}) {
       return { [SPEC]: true, content: typeof data === 'string' ? data : JSON.stringify(data), finishReason, usage, toolCalls, model };
@@ -89,12 +108,19 @@ export function mockGateway({ baseUrl = 'http://llm-proxy.cls/v1', catalog = DEF
       return { [SPEC]: true, status, errorBody: typeof message === 'string' ? message : JSON.stringify(message) };
     },
     hang() { return { [SPEC]: true, hang: true }; },
+    stall() { return { [SPEC]: true, stall: true }; },
+    delay(ms, data, { firstChunkMs = ms, totalMs = ms } = {}) {
+      const inner = data && data[SPEC] ? data : gw.reply(data === undefined ? '' : data);
+      return { ...inner, [SPEC]: true, delayMs: ms, firstChunkMs, totalMs };
+    },
 
     fetch: async (input, init = {}) => {
       const url = typeof input === 'string' ? input : input.url;
       if (url === catUrl) return json({ models: catalog });
       if (!url.startsWith(base)) {
-        if (original) return original(input, init);
+        // Only loopback passes through (a local test server, a dead 127.0.0.1:9 URL). Anything
+        // else would be a test reaching a real host: the live gateway, Tika, the internet.
+        if (original && isLoopback(url)) return original(input, init);
         throw new Error(`mockGateway: unexpected request to ${url}`);
       }
       const path = url.slice(base.length);
@@ -131,9 +157,12 @@ export function mockGateway({ baseUrl = 'http://llm-proxy.cls/v1', catalog = DEF
           init.signal?.addEventListener('abort', () => reject(init.signal.reason), { once: true });
         });
       }
+      if (spec.stall) return stalled(init.signal);
+      if (spec.delayMs && !req.stream) await wait(spec.delayMs, init.signal);
       if (spec.status) return new Response(spec.errorBody || 'error', { status: spec.status });
       const usage = spec.usage || { prompt_tokens: estimate(req.text), completion_tokens: estimate(spec.content) };
       const model = spec.model || body.model;
+      if (req.stream && spec.delayMs) return slowSse(spec, usage, model, init.signal);
       if (req.stream) return sse(spec, usage, model);
       return json({
         id: `mock-${gw.calls.length}`,
@@ -160,6 +189,12 @@ export function mockGateway({ baseUrl = 'http://llm-proxy.cls/v1', catalog = DEF
   };
 
   async function resolve(req) {
+    if (req.workflow === 'runtime.probe' && !routes.has('runtime.probe')) {
+      const how = probeHealth.get(req.model) ?? 'ok';
+      if (how === 'hang') return gw.hang();
+      if (typeof how === 'number') return gw.error(how, 'probe refused');
+      return gw.reply('ok');
+    }
     const route = routes.get(req.workflow);
     let handler;
     if (!route) handler = fallbackHandler;
@@ -185,6 +220,46 @@ function lowerHeaders(h) {
   }
   for (const [k, v] of Object.entries(h)) out[k.toLowerCase()] = v;
   return out;
+}
+
+function wait(ms, signal) {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(resolve, ms);
+    signal?.addEventListener('abort', () => { clearTimeout(t); reject(signal.reason); }, { once: true });
+  });
+}
+
+/** 200 with SSE headers and a body that never sends a byte (until the request is aborted). */
+function stalled(signal) {
+  const body = new ReadableStream({
+    start(controller) {
+      signal?.addEventListener('abort', () => controller.error(signal.reason), { once: true });
+    },
+  });
+  return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+}
+
+/** SSE whose first chunk arrives after firstChunkMs and whose last arrives after totalMs. */
+function slowSse(spec, usage, model, signal) {
+  const text = sse(spec, usage, model);
+  const enc = new TextEncoder();
+  const body = new ReadableStream({
+    async start(controller) {
+      try {
+        const all = await text.text();
+        const events = all.split('\n\n').filter(Boolean).map((e) => `${e}\n\n`);
+        await wait(spec.firstChunkMs ?? spec.delayMs, signal);
+        controller.enqueue(enc.encode(events[0]));
+        const rest = Math.max(0, (spec.totalMs ?? spec.delayMs) - (spec.firstChunkMs ?? spec.delayMs));
+        await wait(rest, signal);
+        for (const e of events.slice(1)) controller.enqueue(enc.encode(e));
+        controller.close();
+      } catch (err) {
+        controller.error(err);
+      }
+    },
+  });
+  return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
 }
 
 function json(obj, status = 200) {

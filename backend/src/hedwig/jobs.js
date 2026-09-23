@@ -3,7 +3,10 @@
 // process runs them with bounded concurrency and exponential backoff.
 //
 // Ledger states (hedwig_jobs.status, written on every transition):
-//   queued → running → done | partial | (back to queued with backoff) | failed
+//   queued → running → done | partial | (back to queued with backoff) | deferred | failed
+//   deferred             waiting: a lane stayed full, the gateway is down, the tier the job needs
+//                        is degraded, or the handler deferred itself (deferJob). Claimed again at
+//                        run_at like queued; the attempt its claim took is refunded.
 //   failed → resolved   a later run of the same work succeeded, or rebuild() no longer lists it
 //   failed → retried    retryFailed() enqueued a fresh job for it
 //
@@ -12,10 +15,11 @@
 //   handler returns { status: 'partial', note } for partial success; throwing = failed attempt
 //   reconcile(), retryFailed(kind?), reapStuck(), healthGate(), queueStats()
 //
-// Deferral (queued again later, attempts untouched, last_error 'deferred: …'): the gateway is
-// down (healthGate), a model lane stayed full past llm.lanes.<lane>.waitMs (lane_busy), or the
-// handler threw deferJob() (e.g. a body fetch stepping aside for mail sync). A deferred job is
-// waiting, not failing: it never lands in failed by morning for capacity other work holds.
+// Deferral (status 'deferred', attempts untouched, last_error 'deferred: …'): the gateway is down
+// (healthGate), a model lane stayed full past llm.lanes.<lane>.waitMs (lane_busy), the tier a
+// noFallback call needs is degraded (tier_degraded), or the handler threw deferJob() (e.g. a body
+// fetch stepping aside for mail sync). A deferred job is waiting, not failing: it never lands in
+// failed by morning for capacity other work holds.
 import { createHash } from 'node:crypto';
 import { hostname } from 'os';
 import { query } from '../services/db.js';
@@ -42,7 +46,7 @@ export function deferJob(reason, delayMs) {
   throw new JobDeferred(reason, delayMs);
 }
 
-export const JOB_STATES = ['queued', 'running', 'done', 'partial', 'failed', 'resolved', 'retried'];
+export const JOB_STATES = ['queued', 'running', 'deferred', 'done', 'partial', 'failed', 'resolved', 'retried'];
 
 /**
  * Register a job handler.
@@ -162,15 +166,30 @@ export async function fail(job, err, { tokensIn = 0, tokensOut = 0 } = {}) {
 
 /**
  * Put a job back without consuming the attempt its claim took (the gateway was down, a lane stayed
- * full, or the handler deferred itself).
+ * full, its tier is degraded, or the handler deferred itself). Status 'deferred'.
  */
-async function defer(job, delayMs, reason, { tokensIn = 0, tokensOut = 0 } = {}) {
+async function defer(job, delayMs, reason, { tokensIn = 0, tokensOut = 0, status = 'deferred' } = {}) {
   await query(
-    `UPDATE hedwig_jobs SET locked_at = NULL, attempts = GREATEST(attempts - 1, 0), status = 'queued',
+    `UPDATE hedwig_jobs SET locked_at = NULL, attempts = GREATEST(attempts - 1, 0), status = $6,
             last_error = $2, run_at = NOW() + ($3 || ' seconds')::interval,
             tokens_in = tokens_in + $4, tokens_out = tokens_out + $5 WHERE id = $1`,
-    [job.id, String(reason).slice(0, 1000), String(Math.max(1, Math.round(delayMs / 1000))), tokensIn | 0, tokensOut | 0],
+    [job.id, String(reason).slice(0, 1000), String(Math.max(1, Math.round(delayMs / 1000))), tokensIn | 0, tokensOut | 0, status === 'queued' ? 'queued' : 'deferred'],
   );
+}
+
+/** A model lane stayed full for its whole wait, even when a handler wrapped the error. */
+function laneBusy(err) {
+  for (let e = err, depth = 0; e && depth < 4; e = e.cause, depth++) {
+    if (e.code === 'lane_busy') return true;
+  }
+  return /model lane stayed full/i.test(String(err?.message || ''));
+}
+
+function tierDegraded(err) {
+  for (let e = err, depth = 0; e && depth < 4; e = e.cause, depth++) {
+    if (e.code === 'tier_degraded') return true;
+  }
+  return false;
 }
 
 // ── Gateway health ─────────────────────────────────────────────────────────────
@@ -192,7 +211,7 @@ async function probe() {
 
 function gatewayShaped(err) {
   if (!err) return false;
-  if (['budget_exceeded', 'llm_disabled', 'user_required', 'invalid_output', 'unknown_prompt'].includes(err.code)) return false;
+  if (['budget_exceeded', 'llm_disabled', 'user_required', 'invalid_output', 'unknown_prompt', 'tier_degraded', 'lane_busy'].includes(err.code)) return false;
   if (err.name === 'LlmError' || err.name === 'PromptOutputError') return (err.status || 0) >= 500;
   return err.name === 'TimeoutError' || /fetch failed|ECONNREFUSED|ENOTFOUND|EHOSTUNREACH|ETIMEDOUT|socket hang up/i.test(err.message || '');
 }
@@ -209,7 +228,7 @@ export async function healthGate() {
   if (!kinds.length) return { ok: false, deferred: 0, error: r.error };
   const cfg = await getConfig();
   const { rowCount } = await query(
-    `UPDATE hedwig_jobs SET run_at = NOW() + ($2 || ' minutes')::interval, last_error = $3
+    `UPDATE hedwig_jobs SET run_at = NOW() + ($2 || ' minutes')::interval, last_error = $3, status = 'deferred'
       WHERE done_at IS NULL AND failed_at IS NULL AND locked_at IS NULL AND run_at <= NOW() + ($2 || ' minutes')::interval
         AND kind = ANY($1::text[])`,
     [kinds, String(cfg['jobs.healthDeferMin']), `deferred: model gateway unreachable (${r.error})`.slice(0, 1000)],
@@ -321,8 +340,16 @@ export async function runJob(job) {
     }
     // A model lane stayed full for its whole wait (llm.lanes.<lane>.waitMs): capacity other work
     // holds is not this job failing, so it waits its turn again instead of spending an attempt.
-    if (err?.code === 'lane_busy') {
+    if (laneBusy(err)) {
       const min = await laneDeferMinutes();
+      console.warn(`[hedwig] job ${job.kind}#${job.id} deferred ${min} min: ${err.message}`);
+      await defer(job, min * 60_000, `deferred: ${err.message}`, spent);
+      return;
+    }
+    // The job asked for its tier's own model (allowLighter: false) and that model is degraded:
+    // wait for the probe to see it recover rather than fail.
+    if (tierDegraded(err)) {
+      const min = await deferMinutes();
       console.warn(`[hedwig] job ${job.kind}#${job.id} deferred ${min} min: ${err.message}`);
       await defer(job, min * 60_000, `deferred: ${err.message}`, spent);
       return;
@@ -426,11 +453,21 @@ export async function reconcile() {
  * Re-enqueue failed work. Kinds with rebuild() are re-enqueued from it (per user with failed rows),
  * so the new jobs reflect what is needed now; others get a fresh copy of each failed job. Old rows
  * become retried (or resolved when rebuild() no longer lists them).
+ *
+ * The worker runs this hourly with `{ rebuildOnly: true, olderThanSec }` (ledger/schedules.js):
+ * only kinds that can say what work is still missing are retried unattended, and only rows that
+ * failed a while ago, so a job that fails for good is not re-run every hour by copy. The admin
+ * route retries everything on request.
  * @param {string} [kind]
- * @returns {Promise<{ retried: number, enqueued: number, resolved: number }>}
+ * @param {{ rebuildOnly?: boolean, olderThanSec?: number, max?: number }} [opts]
+ * @returns {Promise<{ retried: number, enqueued: number, resolved: number, skipped: number }>}
  */
-export async function retryFailed(kind = null) {
-  const rows = await failedRows(kind);
+export async function retryFailed(kind = null, { rebuildOnly = false, olderThanSec = 0, max = Infinity } = {}) {
+  const cutoff = olderThanSec > 0 ? Date.now() - olderThanSec * 1000 : Infinity;
+  const all = await failedRows(kind);
+  const rows = all.filter((r) => (!rebuildOnly || handlers.get(r.kind)?.rebuild)
+    && (!Number.isFinite(cutoff) || !r.failed_at || new Date(r.failed_at).getTime() <= cutoff));
+  const skipped = all.length - rows.length;
   let retried = 0; let enqueued = 0; let resolved = 0;
   const byKind = new Map();
   for (const r of rows) {
@@ -449,28 +486,31 @@ export async function retryFailed(kind = null) {
           continue;
         }
         const byCanon = new Map(userRows.map((r) => [canonical(payloadOf(r)), r]));
-        const wanted = new Set();
+        const wanted = new Set(payloads.map(canonical));
+        const handled = new Set(); // enqueued now, or already pending under the same dedupe key
         for (const payload of payloads) {
+          if (enqueued >= max) break;
           const c = canonical(payload);
-          wanted.add(c);
           const old = byCanon.get(c);
           const id = await enqueue(k, payload, {
             userId, dedupeKey: old?.dedupe_key || rebuildKey(k, payload), priority: old?.priority ?? 5, maxAttempts: old?.max_attempts ?? 5,
           });
           if (id) enqueued++;
+          handled.add(c);
         }
-        retried += await setStatus(userRows.filter((r) => wanted.has(canonical(payloadOf(r)))).map((r) => r.id), 'retried', null);
+        retried += await setStatus(userRows.filter((r) => handled.has(canonical(payloadOf(r)))).map((r) => r.id), 'retried', null);
         resolved += await setStatus(userRows.filter((r) => !wanted.has(canonical(payloadOf(r)))).map((r) => r.id), 'resolved', 'no longer needed (rebuild)');
       }
     } else {
       for (const r of list) {
+        if (enqueued >= max) break;
         const id = await enqueue(k, payloadOf(r), { userId: r.user_id, dedupeKey: r.dedupe_key, priority: r.priority, maxAttempts: r.max_attempts });
         if (id) enqueued++;
         retried += await setStatus([r.id], 'retried', null);
       }
     }
   }
-  return { retried, enqueued, resolved };
+  return { retried, enqueued, resolved, skipped };
 }
 
 /**
@@ -508,6 +548,7 @@ export async function queueStats() {
             COUNT(*) FILTER (WHERE done_at IS NULL AND failed_at IS NULL AND locked_at IS NULL AND last_error LIKE 'deferred:%') AS deferred,
             COUNT(*) FILTER (WHERE status = 'queued' OR (status IS NULL AND done_at IS NULL AND failed_at IS NULL AND locked_at IS NULL)) AS s_queued,
             COUNT(*) FILTER (WHERE status = 'running' OR (status IS NULL AND done_at IS NULL AND failed_at IS NULL AND locked_at IS NOT NULL)) AS s_running,
+            COUNT(*) FILTER (WHERE status = 'deferred') AS s_deferred,
             COUNT(*) FILTER (WHERE status = 'done' OR (status IS NULL AND done_at IS NOT NULL)) AS s_done,
             COUNT(*) FILTER (WHERE status = 'partial') AS s_partial,
             COUNT(*) FILTER (WHERE status = 'failed' OR (status IS NULL AND failed_at IS NOT NULL)) AS s_failed,
