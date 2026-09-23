@@ -3,7 +3,7 @@ import { query } from '../../services/db.js';
 import { getConfig, describeConfig, saveSystemConfig, saveUserConfig, SCHEMA } from '../config.js';
 import { defineJob, queueStats, pruneJobs, enqueue } from '../jobs.js';
 import { pipelineStats, resetBackfill, definedSteps } from '../pipeline.js';
-import { getCatalog, llmAvailable } from '../llm.js';
+import { getCatalog, llmAvailable, activeModels } from '../llm.js';
 import { embeddingProfile, embed } from '../embeddings.js';
 import { defineSchedule, definedSchedules } from '../schedule.js';
 import { hedwigStatus } from '../status.js';
@@ -55,6 +55,7 @@ export default {
         error: hedwigStatus.error,
         enabled: cfg.enabled,
         llm: await llmAvailable(req.session.userId),
+        models: await activeModels(req.session.userId),
         embeddings: await embeddingProfile(),
         features: {
           context: cfg['features.context'],
@@ -162,7 +163,7 @@ export default {
                       COALESCE(AVG(latency_ms),0)::int AS avg_latency_ms
                  FROM hedwig_ai_calls WHERE created_at > NOW() - INTERVAL '24 hours' GROUP BY feature ORDER BY calls DESC`),
       ]);
-      res.json({ status: hedwigStatus, jobs, pipeline, aiCalls24h: calls.rows, steps: definedSteps(), schedules: definedSchedules() });
+      res.json({ status: hedwigStatus, models: await activeModels(null), jobs, pipeline, aiCalls24h: calls.rows, steps: definedSteps(), schedules: definedSchedules() });
     });
     r.post('/reindex', async (req, res) => {
       // Re-run the pipeline over history: clears per-message state (derived data only).

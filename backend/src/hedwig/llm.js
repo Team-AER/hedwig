@@ -161,17 +161,52 @@ export async function llmAvailable(userId) {
   return Boolean(cfg.enabled && cfg['llm.baseUrl']);
 }
 
+// ── Fallback ────────────────────────────────────────────────────────────────
+// When llm.fallbackModel is set, a call that gets no response from the primary model within
+// llm.fallbackAfterMs (or fails with a 5xx or connection error) is retried once on the fallback
+// model, and the primary is skipped for llm.fallbackCooldownSec so every call does not pay the wait.
+// After the cooldown the primary is tried again, so traffic returns to it on its own.
+const degradedUntil = new Map(); // model -> epoch ms
+
+export function primaryDegraded(model, now = Date.now()) {
+  const until = degradedUntil.get(model) || 0;
+  return until > now;
+}
+
+function markDegraded(model, cooldownSec) {
+  degradedUntil.set(model, Date.now() + cooldownSec * 1000);
+}
+
+/** Which model currently serves each role, for status pages. */
+export async function activeModels(userId) {
+  const cfg = await getConfig(userId);
+  const fallback = cfg['llm.fallbackModel'];
+  return Object.fromEntries(ROLES.map((role) => {
+    const primary = cfg[`llm.models.${role}`];
+    const degraded = Boolean(fallback) && primaryDegraded(primary);
+    return [role, { primary, fallback: fallback || null, active: degraded ? fallback : primary, degraded }];
+  }));
+}
+
 async function prepare({ userId, feature, role = 'fast', pluginId, model: explicitModel, reasoning }) {
   const cfg = await getConfig(userId);
   if (!cfg.enabled) throw new LlmDisabledError('Hedwig intelligence is disabled');
   if (!cfg['llm.baseUrl']) throw new LlmDisabledError('no model gateway configured');
   if (!ROLES.includes(role)) throw new LlmError(`unknown model role ${role}`, { status: 400 });
   await checkBudget(cfg, userId, feature, pluginId);
-  const model = explicitModel || cfg[`llm.models.${role}`];
   const catalog = await getCatalog();
-  const entry = (catalog.models || []).find((m) => m.id === model);
-  const effort = clampEffort(reasoning || cfg[`llm.reasoning.${role}`], entry, cfg['llm.offSpelling']);
-  return { cfg, model, effort, catalogEntry: entry };
+  const requested = reasoning || cfg[`llm.reasoning.${role}`];
+  const plan = (model) => ({
+    model,
+    effort: clampEffort(requested, (catalog.models || []).find((m) => m.id === model), cfg['llm.offSpelling']),
+  });
+  const primary = explicitModel || cfg[`llm.models.${role}`];
+  const fallback = !explicitModel && cfg['llm.fallbackModel'] && cfg['llm.fallbackModel'] !== primary ? cfg['llm.fallbackModel'] : null;
+  // Attempts in order. A degraded primary is skipped while its cooldown lasts.
+  const attempts = fallback
+    ? (primaryDegraded(primary) ? [plan(fallback)] : [{ ...plan(primary), firstByteMs: cfg['llm.fallbackAfterMs'] }, plan(fallback)])
+    : [plan(primary)];
+  return { cfg, attempts, primary };
 }
 
 function buildBody({ model, effort, messages, tools, toolChoice, json, maxTokens, temperature, stream }) {
@@ -191,6 +226,50 @@ function buildBody({ model, effort, messages, tools, toolChoice, json, maxTokens
   return body;
 }
 
+class FirstByteTimeout extends Error {
+  constructor(ms) { super(`no response within ${ms} ms`); this.name = 'FirstByteTimeout'; }
+}
+
+/** Worth trying the fallback model after this error? (Not for 4xx: the request itself is wrong.) */
+function retryable(err) {
+  if (err instanceof FirstByteTimeout) return true;
+  if (err?.name === 'TimeoutError') return true;
+  if (err instanceof LlmError) return err.status >= 500;
+  return true; // connection-level failures
+}
+
+/**
+ * POST one attempt and resolve once response headers arrive. `firstByteMs` bounds the wait for the
+ * headers only; the overall `timeoutMs` bounds the whole exchange including the body.
+ */
+async function openAttempt({ cfg, attempt, body, signal, fetchFn }) {
+  const overall = AbortSignal.timeout(cfg['llm.timeoutMs']);
+  const firstByte = new AbortController();
+  const signals = [overall, firstByte.signal];
+  if (signal) signals.push(signal);
+  let timer = null;
+  if (attempt.firstByteMs) timer = setTimeout(() => firstByte.abort(new FirstByteTimeout(attempt.firstByteMs)), attempt.firstByteMs);
+  try {
+    const res = await fetchFn(`${cfg['llm.baseUrl'].replace(/\/+$/, '')}/chat/completions`, {
+      method: 'POST',
+      headers: authHeaders(cfg['llm.apiKey']),
+      body: JSON.stringify(body),
+      signal: AbortSignal.any(signals),
+    });
+    return res;
+  } catch (err) {
+    if (firstByte.signal.aborted) throw firstByte.signal.reason;
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function errorText(err) {
+  if (err?.name === 'TimeoutError') return 'timeout';
+  return err?.message || String(err);
+}
+
 /**
  * One chat completion.
  * @param {object} opts
@@ -200,46 +279,54 @@ function buildBody({ model, effort, messages, tools, toolChoice, json, maxTokens
  * @param {Array} opts.messages
  * @param {Array} [opts.tools]    OpenAI tool definitions
  * @param {boolean|object} [opts.json] true for json_object, or a JSON schema
- * @returns {Promise<{content: string|null, toolCalls: Array, usage: object, model: string, finishReason: string}>}
+ * @returns {Promise<{content: string|null, toolCalls: Array, usage: object, model: string, finishReason: string, fellBack: boolean}>}
  */
 export async function chat(opts) {
   const { userId, feature, pluginId, messages, tools, toolChoice, json, maxTokens, temperature, signal, fetchFn = fetch } = opts;
-  const { cfg, model, effort } = await prepare(opts);
-  const body = buildBody({ model, effort, messages, tools, toolChoice, json, maxTokens, temperature, stream: false });
-  const releaseSlot = await acquire(model, cfg['llm.concurrency']);
-  const started = Date.now();
-  let ok = false; let error = null; let usage = {};
-  try {
-    const timeout = AbortSignal.timeout(cfg['llm.timeoutMs']);
-    const res = await fetchFn(`${cfg['llm.baseUrl'].replace(/\/+$/, '')}/chat/completions`, {
-      method: 'POST',
-      headers: authHeaders(cfg['llm.apiKey']),
-      body: JSON.stringify(body),
-      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
-    });
-    const text = await res.text();
-    if (!res.ok) throw new LlmError(`gateway ${res.status}: ${text.slice(0, 300)}`, { status: res.status >= 500 ? 502 : res.status });
-    let parsed;
-    try { parsed = JSON.parse(text); } catch { throw new LlmError('gateway returned invalid JSON'); }
-    const choice = parsed.choices?.[0];
-    if (!choice) throw new LlmError('gateway returned no choices');
-    usage = parsed.usage || {};
-    ok = true;
-    return {
-      content: typeof choice.message?.content === 'string' ? choice.message.content : null,
-      toolCalls: (choice.message?.tool_calls || []).map(normaliseToolCall),
-      usage,
-      model,
-      finishReason: choice.finish_reason || 'stop',
-    };
-  } catch (err) {
-    error = err.name === 'TimeoutError' ? 'timeout' : err.message;
-    if (err instanceof LlmError) throw err;
-    throw new LlmError(error);
-  } finally {
-    releaseSlot();
-    logCall({ userId, feature: pluginId ? 'plugin' : feature, pluginId, model, reasoning: effort, promptTokens: usage.prompt_tokens, completionTokens: usage.completion_tokens, latencyMs: Date.now() - started, ok, error });
+  const { cfg, attempts, primary } = await prepare(opts);
+  let lastErr = null;
+  for (let i = 0; i < attempts.length; i++) {
+    const attempt = attempts[i];
+    const { model, effort } = attempt;
+    const body = buildBody({ model, effort, messages, tools, toolChoice, json, maxTokens, temperature, stream: false });
+    const releaseSlot = await acquire(model, cfg['llm.concurrency']);
+    const started = Date.now();
+    let ok = false; let error = null; let usage = {};
+    try {
+      const res = await openAttempt({ cfg, attempt, body, signal, fetchFn });
+      const text = await res.text();
+      if (!res.ok) throw new LlmError(`gateway ${res.status}: ${text.slice(0, 300)}`, { status: res.status >= 500 ? 502 : res.status });
+      let parsed;
+      try { parsed = JSON.parse(text); } catch { throw new LlmError('gateway returned invalid JSON'); }
+      const choice = parsed.choices?.[0];
+      if (!choice) throw new LlmError('gateway returned no choices');
+      usage = parsed.usage || {};
+      ok = true;
+      return {
+        content: typeof choice.message?.content === 'string' ? choice.message.content : null,
+        toolCalls: (choice.message?.tool_calls || []).map(normaliseToolCall),
+        usage,
+        model,
+        finishReason: choice.finish_reason || 'stop',
+        fellBack: model !== primary,
+      };
+    } catch (err) {
+      error = errorText(err);
+      lastErr = err;
+      const more = i < attempts.length - 1 && !signal?.aborted && retryable(err);
+      if (more) {
+        markDegraded(model, cfg['llm.fallbackCooldownSec']);
+        console.warn(`[hedwig] model ${model} unavailable (${error}); falling back to ${attempts[i + 1].model} for ${cfg['llm.fallbackCooldownSec']} s`);
+        continue;
+      }
+      if (err instanceof LlmError) throw err;
+      throw new LlmError(error);
+    } finally {
+      releaseSlot();
+      logCall({ userId, feature: pluginId ? 'plugin' : feature, pluginId, model, reasoning: effort, promptTokens: usage.prompt_tokens, completionTokens: usage.completion_tokens, latencyMs: Date.now() - started, ok, error });
+    }
   }
+  throw lastErr instanceof LlmError ? lastErr : new LlmError(errorText(lastErr));
 }
 
 function normaliseToolCall(tc) {
@@ -253,73 +340,91 @@ function normaliseToolCall(tc) {
 }
 
 /**
- * Streaming chat completion. Yields { type: 'delta', text } and { type: 'tool_call_delta', … } events,
- * then a final { type: 'done', content, toolCalls, usage, finishReason }.
+ * Streaming chat completion. Yields { type: 'delta', text } events, then a final
+ * { type: 'done', content, toolCalls, usage, finishReason, model, fellBack }.
+ * Falls back only before the first response byte; a stream that has started is never switched.
  */
 export async function* chatStream(opts) {
   const { userId, feature, pluginId, messages, tools, toolChoice, json, maxTokens, temperature, signal, fetchFn = fetch } = opts;
-  const { cfg, model, effort } = await prepare(opts);
-  const body = buildBody({ model, effort, messages, tools, toolChoice, json, maxTokens, temperature, stream: true });
-  const releaseSlot = await acquire(model, cfg['llm.concurrency']);
-  const started = Date.now();
-  let ok = false; let error = null; let usage = {};
-  let content = '';
-  const toolAcc = new Map();
-  let finishReason = 'stop';
-  try {
-    const timeout = AbortSignal.timeout(cfg['llm.timeoutMs']);
-    const res = await fetchFn(`${cfg['llm.baseUrl'].replace(/\/+$/, '')}/chat/completions`, {
-      method: 'POST',
-      headers: authHeaders(cfg['llm.apiKey']),
-      body: JSON.stringify(body),
-      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
-    });
-    if (!res.ok) {
-      const text = await res.text();
-      throw new LlmError(`gateway ${res.status}: ${text.slice(0, 300)}`, { status: res.status >= 500 ? 502 : res.status });
+  const { cfg, attempts, primary } = await prepare(opts);
+  let lastErr = null;
+  for (let i = 0; i < attempts.length; i++) {
+    const attempt = attempts[i];
+    const { model, effort } = attempt;
+    const body = buildBody({ model, effort, messages, tools, toolChoice, json, maxTokens, temperature, stream: true });
+    const releaseSlot = await acquire(model, cfg['llm.concurrency']);
+    const started = Date.now();
+    let ok = false; let error = null; let usage = {};
+    let res;
+    try {
+      res = await openAttempt({ cfg, attempt, body, signal, fetchFn });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new LlmError(`gateway ${res.status}: ${text.slice(0, 300)}`, { status: res.status >= 500 ? 502 : res.status });
+      }
+    } catch (err) {
+      error = errorText(err);
+      lastErr = err;
+      releaseSlot();
+      logCall({ userId, feature: pluginId ? 'plugin' : feature, pluginId, model, reasoning: effort, latencyMs: Date.now() - started, ok: false, error });
+      if (i < attempts.length - 1 && !signal?.aborted && retryable(err)) {
+        markDegraded(model, cfg['llm.fallbackCooldownSec']);
+        console.warn(`[hedwig] model ${model} unavailable (${error}); falling back to ${attempts[i + 1].model} for ${cfg['llm.fallbackCooldownSec']} s`);
+        continue;
+      }
+      if (err instanceof LlmError) throw err;
+      throw new LlmError(error);
     }
-    const decoder = new TextDecoder();
-    let buffer = '';
-    for await (const chunk of res.body) {
-      buffer += decoder.decode(chunk, { stream: true });
-      let idx;
-      while ((idx = buffer.indexOf('\n')) >= 0) {
-        const line = buffer.slice(0, idx).trim();
-        buffer = buffer.slice(idx + 1);
-        if (!line.startsWith('data:')) continue;
-        const data = line.slice(5).trim();
-        if (data === '[DONE]') continue;
-        let evt;
-        try { evt = JSON.parse(data); } catch { continue; }
-        if (evt.usage) usage = evt.usage;
-        const choice = evt.choices?.[0];
-        if (!choice) continue;
-        if (choice.finish_reason) finishReason = choice.finish_reason;
-        const delta = choice.delta || {};
-        if (typeof delta.content === 'string' && delta.content) {
-          content += delta.content;
-          yield { type: 'delta', text: delta.content };
-        }
-        for (const tc of delta.tool_calls || []) {
-          const i = tc.index ?? 0;
-          const acc = toolAcc.get(i) || { id: tc.id, function: { name: '', arguments: '' } };
-          if (tc.id) acc.id = tc.id;
-          if (tc.function?.name) acc.function.name += tc.function.name;
-          if (tc.function?.arguments) acc.function.arguments += tc.function.arguments;
-          toolAcc.set(i, acc);
+
+    let content = '';
+    const toolAcc = new Map();
+    let finishReason = 'stop';
+    try {
+      const decoder = new TextDecoder();
+      let buffer = '';
+      for await (const chunk of res.body) {
+        buffer += decoder.decode(chunk, { stream: true });
+        let idx;
+        while ((idx = buffer.indexOf('\n')) >= 0) {
+          const line = buffer.slice(0, idx).trim();
+          buffer = buffer.slice(idx + 1);
+          if (!line.startsWith('data:')) continue;
+          const data = line.slice(5).trim();
+          if (data === '[DONE]') continue;
+          let evt;
+          try { evt = JSON.parse(data); } catch { continue; }
+          if (evt.usage) usage = evt.usage;
+          const choice = evt.choices?.[0];
+          if (!choice) continue;
+          if (choice.finish_reason) finishReason = choice.finish_reason;
+          const delta = choice.delta || {};
+          if (typeof delta.content === 'string' && delta.content) {
+            content += delta.content;
+            yield { type: 'delta', text: delta.content };
+          }
+          for (const tc of delta.tool_calls || []) {
+            const k = tc.index ?? 0;
+            const acc = toolAcc.get(k) || { id: tc.id, function: { name: '', arguments: '' } };
+            if (tc.id) acc.id = tc.id;
+            if (tc.function?.name) acc.function.name += tc.function.name;
+            if (tc.function?.arguments) acc.function.arguments += tc.function.arguments;
+            toolAcc.set(k, acc);
+          }
         }
       }
+      ok = true;
+      yield { type: 'done', content, toolCalls: [...toolAcc.values()].map(normaliseToolCall), usage, finishReason, model, fellBack: model !== primary };
+      return;
+    } catch (err) {
+      error = errorText(err);
+      if (err instanceof LlmError) throw err;
+      throw new LlmError(error);
+    } finally {
+      releaseSlot();
+      logCall({ userId, feature: pluginId ? 'plugin' : feature, pluginId, model, reasoning: effort, promptTokens: usage.prompt_tokens, completionTokens: usage.completion_tokens, latencyMs: Date.now() - started, ok, error });
     }
-    ok = true;
-    yield { type: 'done', content, toolCalls: [...toolAcc.values()].map(normaliseToolCall), usage, finishReason, model };
-  } catch (err) {
-    error = err.name === 'TimeoutError' ? 'timeout' : err.message;
-    if (err instanceof LlmError) throw err;
-    throw new LlmError(error);
-  } finally {
-    releaseSlot();
-    logCall({ userId, feature: pluginId ? 'plugin' : feature, pluginId, model, reasoning: effort, promptTokens: usage.prompt_tokens, completionTokens: usage.completion_tokens, latencyMs: Date.now() - started, ok, error });
   }
+  throw lastErr instanceof LlmError ? lastErr : new LlmError(errorText(lastErr));
 }
 
 /** Parse the first JSON object or array out of model text (tolerates code fences and preamble). */
@@ -363,4 +468,5 @@ export async function chatJson(opts) {
 export function _resetLlmState() {
   catalogCache = { url: null, data: null, expiry: 0 };
   semaphores.clear();
+  degradedUntil.clear();
 }
