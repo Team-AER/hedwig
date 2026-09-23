@@ -5,17 +5,22 @@
 //
 // Two scans feed it:
 //   realtime — messages dated in the last few days (cheap, runs every scan interval)
-//   backfill — walks history newest-first behind a date cursor until pipeline.backfillDays
+//   history  — by absence: any message in an included folder without a hedwig_msg row, whatever
+//              its age, newest first. Folders come from the coverage ledger (indexer/coverage.js),
+//              whose states are recounted from absence, so history never "finishes" for good while
+//              mail is unseen. pipeline.backfillDays only limits which steps run (see runSteps).
 import { query } from '../services/db.js';
 import { getConfig } from './config.js';
-import { getState, setState } from './state.js';
+import { setState } from './state.js';
 import { runHedwigHook, HEDWIG_HOOKS } from './hooks.js';
+import { maybeRefreshCoverage, historyPending, resetCoverage, coverageSummary } from './indexer/coverage.js';
 
 /**
  * @typedef {object} PipelineStep
  * @property {string} name
  * @property {number} order        lower runs first
  * @property {boolean} [backfill]  also run on history older than pipeline.backfillDays (cheap steps only)
+ * @property {boolean} [spam]      also run on mail in the server spam folder (indexing only)
  * @property {(rows: object[], ctx: object) => Promise<void>} run
  */
 
@@ -25,11 +30,11 @@ const steps = [];
 export function defineStep(step) {
   if (!step?.name || typeof step.run !== 'function') throw new Error('pipeline step needs name and run');
   if (steps.some((s) => s.name === step.name)) throw new Error(`pipeline step ${step.name} already defined`);
-  steps.push({ order: 50, backfill: false, ...step });
+  steps.push({ order: 50, backfill: false, spam: false, ...step });
   steps.sort((a, b) => a.order - b.order);
 }
 
-export function definedSteps() { return steps.map((s) => ({ name: s.name, order: s.order, backfill: s.backfill })); }
+export function definedSteps() { return steps.map((s) => ({ name: s.name, order: s.order, backfill: s.backfill, spam: s.spam })); }
 
 // Columns every step can rely on. `user_id` comes from the account; `is_outgoing` is derived.
 export const MESSAGE_COLUMNS = `
@@ -100,20 +105,19 @@ async function findRealtime(cfg, limit) {
   return rows;
 }
 
-async function findBackfill(cfg, limit) {
-  const cursor = await getState('pipeline.backfill', { before: null, done: false });
-  if (cursor.done) return { rows: [], cursor };
-  const params = [limit, cursor.before || new Date(Date.now() - 3 * 86400_000).toISOString()];
+// History by absence over the folders the coverage ledger still has work in. No date cursor: a
+// cursor that reached "done" on an empty database never restarted when mail synced later.
+async function findHistory(limit) {
+  if (!(await historyPending())) return [];
   const { rows } = await query(
-    `SELECT ${MESSAGE_COLUMNS} ${FROM_JOIN}
+    `SELECT ${MESSAGE_COLUMNS}, c.spam AS coverage_spam ${FROM_JOIN}
+       JOIN hedwig_index_coverage c ON c.account_id = m.account_id AND c.folder = m.folder AND c.state IN ('pending','running')
       WHERE h.message_id IS NULL AND m.is_deleted = false AND a.enabled = true
-        AND m.date < $2
-        AND ${folderFilter(cfg, params)}
       ORDER BY m.date DESC NULLS LAST
       LIMIT $1`,
-    params,
+    [limit],
   );
-  return { rows, cursor };
+  return rows;
 }
 
 async function markSeen(rows, cutoff) {
@@ -133,10 +137,11 @@ async function markSeen(rows, cutoff) {
     const key = r.message_id ? `${r.account_id}|${r.message_id}` : null;
     let skip = null;
     if (key && seenKeys.has(key)) skip = 'duplicate';
+    else if (r.coverage_spam) skip = 'spam'; // server spam folder: indexed only, never the other steps
     else if (cutoff && r.date && new Date(r.date) < cutoff) skip = null; // history: cheap steps only
     if (key && !skip) seenKeys.add(key);
     values.push([r.id, r.user_id, r.account_id, skip]);
-    if (!skip) fresh.push(r);
+    if (!skip || skip === 'spam') fresh.push(r);
   }
   await query(
     `INSERT INTO hedwig_msg (message_id, user_id, account_id, skip_reason)
@@ -148,12 +153,13 @@ async function markSeen(rows, cutoff) {
 }
 
 /** Run every step over a batch. Exported so tests and backfill tools can drive it directly. */
-export async function runSteps(rows, { historical = false } = {}) {
+export async function runSteps(rows, { historical = false, spam = false } = {}) {
   if (!rows.length) return;
   await decorate(rows);
-  const ctx = { historical, getConfig };
+  const ctx = { historical, spam, getConfig };
   for (const step of steps) {
     if (historical && !step.backfill) continue;
+    if (spam && !step.spam) continue;
     try {
       await step.run(rows, ctx);
     } catch (err) {
@@ -164,14 +170,14 @@ export async function runSteps(rows, { historical = false } = {}) {
       ).catch(() => {});
     }
   }
-  if (!historical) {
+  if (!historical && !spam) {
     for (const r of rows) {
       runHedwigHook(HEDWIG_HOOKS.onMessageIndexed, { userId: r.user_id, messageId: r.id, accountId: r.account_id }).catch(() => {});
     }
   }
 }
 
-/** One scan tick: realtime first, then one backfill batch. Returns counts for logging. */
+/** One scan tick: realtime first, then one history batch. Returns counts for logging. */
 export async function scanOnce() {
   const cfg = await getConfig();
   if (!cfg.enabled) return { realtime: 0, backfill: 0 };
@@ -180,30 +186,32 @@ export async function scanOnce() {
   const freshRealtime = await markSeen(realtime, null);
   await runSteps(freshRealtime, { historical: false });
 
-  const { rows: back, cursor } = await findBackfill(cfg, batch);
-  if (!back.length) {
-    if (!cursor.done) await setState('pipeline.backfill', { ...cursor, done: true, finishedAt: new Date().toISOString() });
-    return { realtime: freshRealtime.length, backfill: 0 };
-  }
+  // Throttled inside; creates rows for new accounts/folders and flips folders with unseen mail back.
+  await maybeRefreshCoverage().catch((err) => console.warn('[hedwig] coverage refresh failed:', err.message));
+  const back = await findHistory(batch);
+  if (!back.length) return { realtime: freshRealtime.length, backfill: 0 };
   const cutoff = new Date(Date.now() - cfg['pipeline.backfillDays'] * 86400_000);
   const freshBack = await markSeen(back, cutoff);
-  const recent = freshBack.filter((r) => !r.date || new Date(r.date) >= cutoff);
-  const old = freshBack.filter((r) => r.date && new Date(r.date) < cutoff);
+  const spamRows = freshBack.filter((r) => r.coverage_spam);
+  const mail = freshBack.filter((r) => !r.coverage_spam);
+  const recent = mail.filter((r) => !r.date || new Date(r.date) >= cutoff);
+  const old = mail.filter((r) => r.date && new Date(r.date) < cutoff);
   await runSteps(recent, { historical: false });
   await runSteps(old, { historical: true });
-  const oldest = back.reduce((min, r) => (r.date && (!min || new Date(r.date) < new Date(min)) ? r.date : min), null);
-  await setState('pipeline.backfill', { before: oldest ? new Date(oldest).toISOString() : cursor.before, done: false });
-  return { realtime: freshRealtime.length, backfill: freshBack.length };
+  await runSteps(spamRows, { historical: true, spam: true });
+  return { realtime: freshRealtime.length, backfill: back.length };
 }
 
-/** Restart backfill from now (after changing folders or wiping derived data). */
+/** Restart history (after changing folders or wiping derived data). */
 export async function resetBackfill() {
-  await setState('pipeline.backfill', { before: null, done: false });
+  await setState('pipeline.backfill', { before: null, done: false }); // legacy key, kept but unused
+  await resetCoverage();
+  await maybeRefreshCoverage({ force: true }).catch((err) => console.warn('[hedwig] coverage refresh failed:', err.message));
 }
 
 /** Pipeline progress for the admin UI. */
 export async function pipelineStats() {
-  const [{ rows: totals }, cursor] = await Promise.all([
+  const [{ rows: totals }, coverage] = await Promise.all([
     query(`SELECT COUNT(*)::int AS seen,
                   COUNT(*) FILTER (WHERE skip_reason IS NULL)::int AS indexed,
                   COUNT(embedded_at)::int AS embedded,
@@ -211,9 +219,11 @@ export async function pipelineStats() {
                   COUNT(extracted_at)::int AS extracted,
                   COUNT(*) FILTER (WHERE error IS NOT NULL)::int AS errors
              FROM hedwig_msg`),
-    getState('pipeline.backfill', { before: null, done: false }),
+    coverageSummary().catch(() => null),
   ]);
-  return { ...totals[0], backfill: cursor };
+  // `backfill` keeps its old shape for the settings UI; it is now derived from the coverage ledger.
+  const done = coverage ? coverage.folders > 0 && coverage.done + coverage.paused === coverage.folders : false;
+  return { ...totals[0], backfill: { done, oldestSeen: coverage?.oldest_seen || null }, coverage };
 }
 
 export function _resetSteps() { steps.length = 0; }

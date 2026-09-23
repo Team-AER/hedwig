@@ -26,7 +26,7 @@ x-backend-env: &backend-env
   # Hedwig defaults — all overridable in the admin UI.
   HEDWIG_LLM_BASE_URL: ${HEDWIG_LLM_BASE_URL:-http://llm-proxy.cls/v1}
   HEDWIG_LLM_CATALOG_URL: ${HEDWIG_LLM_CATALOG_URL:-http://llm-proxy.cls/catalog.json}
-  HEDWIG_LLM_MODELS_FAST: ${HEDWIG_LLM_MODELS_FAST:-Qwen/Qwen3.8-Flash-Next}
+  HEDWIG_LLM_MODELS_FAST: ${HEDWIG_LLM_MODELS_FAST:-google/gemma-4-12B-it-qat-w4a16-ct}
   HEDWIG_LLM_MODELS_LONG: ${HEDWIG_LLM_MODELS_LONG:-Qwen/Qwen3.8-Flash-Next}
   HEDWIG_LLM_MODELS_AGENT: ${HEDWIG_LLM_MODELS_AGENT:-Qwen/Qwen3.8-Flash-Next}
   HEDWIG_LLM_FALLBACK_MODEL: ${HEDWIG_LLM_FALLBACK_MODEL:-}
@@ -35,6 +35,9 @@ x-backend-env: &backend-env
   HEDWIG_EMBEDDINGS_BASE_URL: ${HEDWIG_EMBEDDINGS_BASE_URL:-http://llm-proxy.cls/v1}
   HEDWIG_EMBEDDINGS_MODEL: ${HEDWIG_EMBEDDINGS_MODEL:-bge-m3}
   HEDWIG_EMBEDDINGS_DIMS: ${HEDWIG_EMBEDDINGS_DIMS:-1024}
+  # Attachment text for the index (Apache Tika, LXC 165). Off in tests and dev by default.
+  HEDWIG_INDEX_TIKA_ENABLED: ${HEDWIG_INDEX_TIKA_ENABLED:-true}
+  HEDWIG_INDEX_TIKA_URL: ${HEDWIG_INDEX_TIKA_URL:-http://10.0.1.69:9998}
   HEDWIG_PLUGINS_DIR: /plugins
   HEDWIG_INSIGHTS_TIMEZONE: ${HEDWIG_INSIGHTS_TIMEZONE:-UTC}
   TZ: ${TZ:-UTC}

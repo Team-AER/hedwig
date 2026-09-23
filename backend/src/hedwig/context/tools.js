@@ -4,9 +4,11 @@ import { query } from '../../services/db.js';
 import { registerTool } from '../agent/toolRegistry.js';
 import {
   findEntities, getEntityCard, getTopicCard, listCommitments, listTopics, resolveEntityByEmail,
-  searchMessages, updateCommitment,
+  updateCommitment,
 } from './service.js';
 import { clampInt, isUuid } from './util.js';
+import { searchIndexed } from './search.js';
+import { numberResults } from '../ask2/citations.js';
 
 function requireUuid(v, name) {
   if (!isUuid(v)) throw new Error(`${name} must be a message/record id (UUID)`);
@@ -47,7 +49,7 @@ function cardEssentials(card) {
 export function registerContextTools() {
   registerTool({
     name: 'search_mail',
-    description: "Search the user's email across all accounts (keyword and meaning). Returns matching messages newest-relevant first with ids to pass to read_message or get_thread.",
+    description: "Search the user's email across all accounts (keyword and meaning). Returns matching messages newest-relevant first, each with n (cite it as [n]) and the id to pass to read_message or get_thread.",
     parameters: {
       type: 'object',
       properties: {
@@ -59,20 +61,22 @@ export function registerContextTools() {
       },
       required: ['query'],
     },
-    handler: async (args, { userId }) => {
+    // Searches the chunk index (indexer/retrieve.js) and returns the best-matching passage per message.
+    handler: async (args, { userId, runId = null }) => {
       let entityId = null;
+      let people = [];
       if (args.person) {
-        const { rows } = await query(
-          'SELECT entity_id FROM hedwig_entity_addresses WHERE user_id = $1 AND email = $2',
-          [userId, String(args.person).trim().toLowerCase()],
-        );
-        if (!rows.length) return { results: [], note: `no mail found with ${args.person}` };
-        entityId = rows[0].entity_id;
+        const person = String(args.person).trim().toLowerCase();
+        people = [person];
+        const { rows } = await query('SELECT entity_id FROM hedwig_entity_addresses WHERE user_id = $1 AND email = $2', [userId, person]);
+        entityId = rows[0]?.entity_id || null;
       }
-      const { results } = await searchMessages(userId, {
-        q: String(args.query || ''), limit: clampInt(args.limit, 1, 30, 10), entityId, after: args.after, before: args.before,
+      const { results } = await searchIndexed(userId, {
+        q: String(args.query || ''), limit: clampInt(args.limit, 1, 30, 10), entityId, people, after: args.after, before: args.before,
       });
-      return { results: results.map(brief) };
+      if (!results.length && args.person) return { results: [], note: `no mail found with ${args.person}` };
+      // n: the number to cite this message by ([n]), stable for the whole agent run.
+      return { results: await numberResults(userId, runId, results.map((m) => ({ ...brief(m), ...(m.excerpt ? { excerpt: m.excerpt } : {}) }))) };
     },
   });
 
