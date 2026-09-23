@@ -6,7 +6,7 @@
 set -euo pipefail
 HOST="${1:-root@10.0.0.5}"
 CTID="${2:-164}"
-APP_URL="${APP_URL:-https://10.0.1.111}"
+APP_URL="${APP_URL:-https://hedwig.brainfc.uk}"
 cd "$(git rev-parse --show-toplevel)"
 SHA="$(git rev-parse --short HEAD)"
 TARBALL="/tmp/hedwig-${SHA}.tar.gz"
