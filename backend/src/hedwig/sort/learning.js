@@ -5,7 +5,8 @@ import { query } from '../../services/db.js';
 import { getConfig } from '../config.js';
 import { enqueue } from '../jobs.js';
 import { getState, setState } from '../state.js';
-import { trainHeads } from './classifier.js';
+import { trainHeads, loadHeads, headsStale } from './classifier.js';
+import { engineStamp } from './version.js';
 
 async function enqueueResort(userId, reason) {
   return enqueue('sort.resort', { sinceDays: 7, layers: ['classifier'], reason }, { userId, dedupeKey: `sort.resort:${userId}`, priority: 7 });
@@ -37,8 +38,15 @@ export async function retrainSortDue(now = new Date()) {
       const due = new Date(now);
       due.setHours(cfg['triage.retrainHour'], 0, 0, 0);
       if (now < due) continue;
-      if (r.trained_at && new Date(r.trained_at) >= due) continue;
-      if (r.trained_at && r.last_label && new Date(r.last_label) <= new Date(r.trained_at)) continue;
+      // Heads from an older engine retrain once that engine's re-sort has finished, so they learn
+      // from the new decisions rather than the old ones.
+      const stale = r.trained_at ? headsStale(await loadHeads(r.user_id)) : false;
+      if (stale) {
+        const resort = await getState(`sort.engineVersion:${r.user_id}`, null);
+        if (resort?.version !== engineStamp() || !resort?.doneAt) continue;
+      }
+      if (!stale && r.trained_at && new Date(r.trained_at) >= due) continue;
+      if (!stale && r.trained_at && r.last_label && new Date(r.last_label) <= new Date(r.trained_at)) continue;
       const res = await trainHeads(r.user_id);
       if (Object.values(res).some((h) => h.ok)) {
         trained++;

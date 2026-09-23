@@ -7,6 +7,9 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { randomUUID } from 'crypto';
 import { mockGateway } from '../testing/mockGateway.js';
 
+import { engineStamp } from './version.js';
+import { fnv1a } from '../triage/features.js';
+
 const GEMMA = 'google/gemma-4-12B-it-qat-w4a16-ct';
 const QWEN = 'Qwen/Qwen3.8-Flash-Next';
 
@@ -76,7 +79,7 @@ describe.skipIf(!process.env.HEDWIG_IT)('sorting the seeded demo mailbox', () =>
       if (!jobs.length) break;
       for (const job of jobs) {
         await engine.runReflexJob(job.payload, job);
-        await query('UPDATE hedwig_jobs SET done_at = NOW() WHERE id = $1', [job.id]);
+        await query("UPDATE hedwig_jobs SET done_at = NOW(), status = 'done' WHERE id = $1", [job.id]);
         n++;
       }
     }
@@ -197,9 +200,13 @@ describe.skipIf(!process.env.HEDWIG_IT)('sorting the seeded demo mailbox', () =>
     const item = ny.items.find((i) => i.subject === 'Boiler inspection Thursday?');
     expect(item).toMatchObject({ threadId: expect.any(String), accountId: expect.any(String), unread: true, reason: 'Sam asks whether someone will be in on Thursday' });
 
+    // A newsletter is settled by its list headers (Tier 0): no model, and the engine that decided it.
     const why = await service.why(userId, bySubject.get('Money Stuff: The bond market is weird again'));
-    expect(why).toMatchObject({ layer: 'reflex', promptId: 'sort.reflex', model: GEMMA, stream: 'reading', bundle: 'updates' });
+    expect(why).toMatchObject({ layer: 'rule', promptId: null, model: null, stream: 'reading', bundle: 'updates', reason: 'A newsletter or mailing list (List-Unsubscribe header)', engineVersion: engineStamp(), pending: null });
     expect(why.signals.length).toBeGreaterThan(0);
+    const { rows: [judged] } = await query("SELECT message_id FROM hedwig_sort WHERE user_id = $1 AND layer = 'reflex' LIMIT 1", [userId]);
+    const byModel = await service.why(userId, judged.message_id);
+    expect(byModel).toMatchObject({ layer: 'reflex', promptId: 'sort.reflex', promptVersion: expect.any(String), model: GEMMA, engineVersion: engineStamp() });
     const reading = await service.streamList(userId, 'reading', { limit: 50, held: true });
     expect(reading.items.some((i) => i.bundle === 'updates')).toBe(true);
   });
@@ -221,10 +228,10 @@ describe.skipIf(!process.env.HEDWIG_IT)('sorting the seeded demo mailbox', () =>
     const { rules } = await service.rules(userId);
     expect(rules.find((r) => r.id === res.ruleId)).toMatchObject({ source: 'correction', created_from_correction_id: String(res.correctionId) });
 
-    // The next Reflex prompt carries the correction as an example.
-    const other = await query("SELECT id FROM messages WHERE subject = 'The Batch: new open-weight models'");
-    await query("UPDATE hedwig_sort SET pending = 'reflex' WHERE message_id = $1", [other.rows[0].id]);
-    await engine.runReflexJob({ messageIds: [other.rows[0].id] }, { user_id: userId });
+    // The next Reflex prompt carries the correction as an example (a message the headers do not settle).
+    const other = bySubject.get('Re: Sponsorship application – reference number');
+    await query("UPDATE hedwig_sort SET pending = 'reflex' WHERE message_id = $1", [other]);
+    await engine.runReflexJob({ messageIds: [other] }, { user_id: userId });
     expect(gw.callsFor('sort.reflex').at(-1).text).toContain('the user chose records/finance (I file these)');
 
     // A rule the user made sorts new mail from that sender before any model is asked.
@@ -351,5 +358,81 @@ describe.skipIf(!process.env.HEDWIG_IT)('sorting the seeded demo mailbox', () =>
     const { rows: ver } = await query('SELECT value FROM hedwig_state WHERE key = $1', [`spam.signalsVersion:${userId}`]);
     expect(ver[0].value).toMatchObject({ doneAt: expect.any(String) });
     expect((await query('SELECT spam FROM hedwig_sort WHERE message_id = $1', [known])).rows[0].spam).toBe('rescued');
+  });
+
+  // ── v2 sort audit (2026-09-24) ────────────────────────────────────────────
+
+  it('sorts a newsletter from a sender you once wrote to into Reading by its headers, with no model call', async () => {
+    await query(
+      `INSERT INTO hedwig_senders (user_id, key, scope, decision, source, confidence, reason)
+       VALUES ($1, 'info@the-ken.example', 'address', 'people', 'import', 0.95, 'You have written to them')
+       ON CONFLICT (user_id, scope, key) WHERE undone_at IS NULL DO NOTHING`,
+      [userId],
+    );
+    const id = randomUUID();
+    inserted.push(id);
+    await query(
+      `INSERT INTO messages (id, account_id, uid, folder, message_id, subject, from_name, from_email, to_addresses, date, snippet, body_text, is_bulk, list_unsubscribe, category)
+       VALUES ($1, $2, 930001, 'INBOX', $3, 'Rakesh Biyani takes the fight to Zudio', 'The Ken', 'info@the-ken.example', $4, NOW() - INTERVAL '1 hour', 'Hi Prakhar', $5, true, '<mailto:u@the-ken.example>', 'newsletter')`,
+      [id, personalAccount, `<${id}@hedwig.test>`, JSON.stringify([{ address: 'prakhar.demo@gmail.com' }]), 'Hi Prakhar,\n\nGood morning. Rakesh Biyani is back, and this time he wants to beat Zudio at its own game.'],
+    );
+    const before = gw.callsFor('sort.reflex').length;
+    const res = await engine.sortRows(await loadRows('m.id = $2', [id]));
+    expect(res.reflex).toBe(0);
+    const { rows } = await query('SELECT * FROM hedwig_sort WHERE message_id = $1', [id]);
+    expect(rows[0]).toMatchObject({ stream: 'reading', layer: 'rule', pending: null, engine_version: engineStamp(), reason: 'A newsletter or mailing list (List-Unsubscribe header)' });
+    expect(gw.callsFor('sort.reflex').length).toBe(before);
+  });
+
+  it('rebuilds Reflex work from the data: a failed job is re-enqueued by the sweep and reconciled once it succeeds', async () => {
+    const jobs = await import('../jobs.js');
+    const id = bySubject.get('Follow-up appointment options');
+    // What production had: the row waits for Reflex and its only job failed for good on a full lane.
+    await query("UPDATE hedwig_sort SET pending = 'reflex', layer = 'classifier', prompt_id = NULL, model = NULL WHERE message_id = $1", [id]);
+    await query("DELETE FROM hedwig_jobs WHERE user_id = $1 AND kind = 'sort.reflex' AND done_at IS NULL", [userId]);
+    const key = `sort.reflex:${fnv1a(id)}`;
+    const { rows: f } = await query(
+      `INSERT INTO hedwig_jobs (kind, payload, user_id, dedupe_key, status, attempts, max_attempts, failed_at, last_error)
+       VALUES ('sort.reflex', $1, $2, $3, 'failed', 3, 3, NOW() - INTERVAL '1 hour', 'the background model lane stayed full for 240 s') RETURNING id`,
+      [JSON.stringify({ messageIds: [id] }), userId, key],
+    );
+    expect(await engine.reflexPayloads(userId, { 'sort.batchSize': 5, 'sort.reflexMaxAgeDays': 14 })).toEqual(expect.arrayContaining([{ messageIds: [id] }]));
+    const sweep = await engine.reflexSweep({ userIds: [userId] });
+    expect(sweep.enqueued).toBeGreaterThanOrEqual(1);
+    const { rows: queued } = await query("SELECT * FROM hedwig_jobs WHERE user_id = $1 AND kind = 'sort.reflex' AND done_at IS NULL AND failed_at IS NULL", [userId]);
+    expect(queued.find((j) => j.dedupe_key === key)?.payload).toEqual({ messageIds: [id] });
+    // A second sweep while that job is live adds nothing for this row.
+    await engine.reflexSweep({ userIds: [userId] });
+    const { rows: again } = await query("SELECT COUNT(*)::int AS n FROM hedwig_jobs WHERE user_id = $1 AND kind = 'sort.reflex' AND done_at IS NULL AND failed_at IS NULL AND payload->'messageIds' ? $2", [userId, id]);
+    expect(again[0].n).toBe(1);
+    await drainReflexJobs();
+    expect(await sortOf('Follow-up appointment options')).toMatchObject({ layer: 'reflex', pending: null, model: GEMMA, engine_version: engineStamp() });
+    await jobs.reconcile();
+    const { rows: old } = await query('SELECT status FROM hedwig_jobs WHERE id = $1', [f[0].id]);
+    expect(old[0].status).toBe('resolved');
+  });
+
+  it('re-sorts once per user when the engine version changes, with Reflex for recent mail', async () => {
+    await query("UPDATE hedwig_sort SET engine_version = 'old-engine' WHERE user_id = $1 AND layer <> 'user'", [userId]);
+    await query("DELETE FROM hedwig_jobs WHERE user_id = $1 AND kind = 'sort.resort'", [userId]);
+    await query('DELETE FROM hedwig_state WHERE key = $1', [`sort.engineVersion:${userId}`]);
+    const out = await engine.ensureSortEngineCurrent({ userIds: [userId] });
+    expect(out).toEqual({ version: engineStamp(), enqueued: 1 });
+    const { rows: [job] } = await query("SELECT * FROM hedwig_jobs WHERE user_id = $1 AND kind = 'sort.resort' AND done_at IS NULL", [userId]);
+    expect(job.payload).toEqual({ engine: engineStamp(), allowReflex: true, sinceDays: null });
+    let payload = job.payload;
+    for (let i = 0; i < 20 && payload; i++) {
+      const res = await engine.runResortJob(payload, { user_id: userId });
+      const { rows: next } = await query("SELECT * FROM hedwig_jobs WHERE user_id = $1 AND kind = 'sort.resort' AND done_at IS NULL AND payload->>'cursor' IS NOT NULL ORDER BY id DESC LIMIT 1", [userId]);
+      payload = res.continued ? next[0].payload : null;
+    }
+    await drainReflexJobs();
+    const { rows: left } = await query(
+      "SELECT COUNT(*)::int AS n FROM hedwig_sort WHERE user_id = $1 AND layer NOT IN ('user') AND NOT own AND engine_version IS DISTINCT FROM $2",
+      [userId, engineStamp()],
+    );
+    expect(left[0].n).toBe(0);
+    const { rows: st } = await query('SELECT value FROM hedwig_state WHERE key = $1', [`sort.engineVersion:${userId}`]);
+    expect(st[0].value).toMatchObject({ version: engineStamp(), doneAt: expect.any(String) });
   });
 });

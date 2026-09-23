@@ -282,7 +282,7 @@ export function assessSpam(row, { text = '', sender = null, auth = {}, knownDoma
 }
 
 const ORDER_RE = /\b(?:order|booking|reservation|confirmation|receipt|invoice|ticket|itinerary)\s*(?:number|no\.?|#|ref(?:erence)?)?\s*[:#]?\s*[A-Z0-9][A-Z0-9-]{4,}\b/i;
-const RECEIPT_RE = /\b(?:your (?:order|booking|tickets?|e-?tickets?|receipt|invoice|reservation|purchase)|order (?:confirmed|confirmation|shipped|dispatched|delivered)|booking (?:confirmed|confirmation)|payment (?:receipt|received|confirmation)|tax invoice|thanks for (?:your order|shopping|booking))\b/i;
+export const RECEIPT_RE = /\b(?:your (?:order|booking|tickets?|e-?tickets?|receipt|invoice|reservation|purchase)|order (?:confirmed|confirmation|shipped|dispatched|delivered)|booking (?:confirmed|confirmation)|payment (?:receipt|received|confirmation)|tax invoice|thanks for (?:your order|shopping|booking))\b/i;
 
 const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 

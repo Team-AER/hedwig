@@ -6,7 +6,7 @@ import { defineSchedule } from '../schedule.js';
 import { getConfig } from '../config.js';
 import {
   runSortStep, runReflexJob, runResortJob, pendingSweep, backfillSweep, rescueSweep, sortUsers, runRescueJob, runReevaluateSpamJob,
-  ensureSpamSignalsCurrent,
+  ensureSpamSignalsCurrent, ensureSortEngineCurrent, reflexSweep, reflexPayloads,
 } from './engine.js';
 import { releaseDueBundles } from './bundles.js';
 import { refreshProposals } from './senders.js';
@@ -16,19 +16,15 @@ import { makeSpamMoveHandler } from './spamMove.js';
 import { correct } from './service.js';
 import { query } from '../../services/db.js';
 
-/** Payloads sort.reflex should have for a user right now (for the job ledger's reconcile/retry). */
+/**
+ * Payloads sort.reflex should have for a user right now (for the job ledger's reconcile/retry):
+ * the same rows and batches the Reflex sweep would enqueue (engine.js reflexPayloads).
+ */
 async function reflexRebuild(userId) {
   if (!userId) return [];
   const cfg = await getConfig(userId);
-  const size = Math.max(1, Math.min(8, cfg['sort.batchSize'] || 5));
-  const { rows } = await query(
-    `SELECT s.message_id FROM hedwig_sort s JOIN messages m ON m.id = s.message_id
-      WHERE s.user_id = $1 AND s.pending = 'reflex' ORDER BY m.date DESC NULLS LAST, s.message_id LIMIT 500`,
-    [userId],
-  );
-  const out = [];
-  for (let i = 0; i < rows.length; i += size) out.push({ messageIds: rows.slice(i, i + size).map((r) => r.message_id) });
-  return out;
+  if (!cfg.enabled || !cfg['sort.enabled']) return [];
+  return reflexPayloads(userId, cfg);
 }
 
 async function screenerTick() {
@@ -77,11 +73,15 @@ export default {
     defineJob('sort.rescue', (payload, job) => runRescueJob(payload, job), { timeoutMs: 15 * 60_000 });
     defineJob('sort.reevaluateSpam', (payload, job) => runReevaluateSpamJob(payload, job), { timeoutMs: 15 * 60_000 });
     defineSchedule({ name: 'sort.pending', everySec: 30, run: pendingSweep });
+    // Tier 1 coverage: what Tier 0 left unsure reaches Reflex even after a job failed for good.
+    defineSchedule({ name: 'sort.reflexSweep', everySec: 120, run: () => reflexSweep() });
     defineSchedule({ name: 'sort.backfill', everySec: 60, run: backfillSweep });
     defineSchedule({ name: 'sort.bundles', everySec: 60, run: () => releaseDueBundles() });
     defineSchedule({ name: 'sort.rescue', everySec: 600, run: () => rescueSweep() });
     // Runs at start-up (short schedules are due at once) and re-checks cheaply: one state read.
     defineSchedule({ name: 'sort.spamSignals', everySec: 600, run: () => ensureSpamSignalsCurrent() });
+    // Same for the sorting engine and sort.reflex prompt: a new version re-sorts stored decisions once.
+    defineSchedule({ name: 'sort.engine', everySec: 600, run: () => ensureSortEngineCurrent() });
     defineSchedule({ name: 'sort.screener', everySec: 300, run: screenerTick });
     defineSchedule({ name: 'sort.retrain', everySec: 3600, run: () => retrainSortDue() });
   },

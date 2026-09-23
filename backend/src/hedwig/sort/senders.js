@@ -24,6 +24,17 @@ function httpError(status, message) {
 }
 
 export const streamOf = (decision) => (decision === 'block' ? 'spam' : decision);
+
+/**
+ * An automatic or imported "People" decision (you wrote to them, they are in your contacts, or
+ * auto-screen let them in) is the Screener's door, not a stream: the sender skips the Screener
+ * and counts as known, but each message is still sorted on its own merits, so a shop you once
+ * wrote to or a newsletter you replied to does not land every issue in People. Only the user's
+ * own decisions choose the stream for everything a sender sends.
+ */
+export function gateOnly(decision) {
+  return Boolean(decision && decision.source !== 'user' && decision.decision === 'people');
+}
 export const decisionKey = (scope, key) => `${scope}|${key}`;
 
 export function validKey(scope, key) {

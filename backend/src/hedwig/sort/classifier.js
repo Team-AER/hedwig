@@ -7,6 +7,7 @@ import { getConfig } from '../config.js';
 import { buildFeatures } from '../triage/features.js';
 import { predict, contributions, trainWithHoldout } from '../triage/model.js';
 import { describeFeature } from '../triage/features.js';
+import { SORT_ENGINE_VERSION, engineStamp } from './version.js';
 
 export const STREAM_HEADS = Object.freeze(['people', 'reading', 'records']);
 export const HEADS = Object.freeze([...STREAM_HEADS, 'spam']);
@@ -56,9 +57,30 @@ export function priorStream({ s1, sender = null, header = null }) {
   return { stream: 'records', confidence: 0.4, reason: 'Looks automated', signals };
 }
 
-/** Heads are active when trained on enough samples. */
+// A stream head needs this many examples on each side before it may decide anything: production's
+// first heads had 2 Reading examples out of 460 and still claimed 0.92.
+export const HEAD_MIN_CLASS = 10;
+
+/**
+ * Heads are active when trained under this engine version on enough samples, with enough
+ * positive and negative examples per stream head. Heads trained on an older engine's decisions
+ * (e.g. imported sender decisions that put newsletters in People) are ignored until they retrain.
+ */
 export function headsActive(models, minSamples) {
-  return STREAM_HEADS.every((h) => models?.[h]?.model?.weights && Number(models[h].samples) >= minSamples);
+  return STREAM_HEADS.every((h) => {
+    const m = models?.[h];
+    if (!m?.model?.weights || Number(m.samples) < minSamples) return false;
+    const metrics = m.metrics || {};
+    if (metrics.engine !== SORT_ENGINE_VERSION) return false;
+    const pos = Number(metrics.positives ?? m.model.positives ?? 0);
+    const neg = Number(metrics.negatives ?? m.model.negatives ?? 0);
+    return pos >= HEAD_MIN_CLASS && neg >= HEAD_MIN_CLASS;
+  });
+}
+
+/** Heads stored under another engine version (they need a retrain before they count). */
+export function headsStale(models) {
+  return Object.values(models || {}).some((m) => m?.metrics?.engine !== SORT_ENGINE_VERSION);
 }
 
 /**
@@ -84,6 +106,18 @@ export async function loadHeads(userId) {
 
 const LABEL_WEIGHT = { user: 3, rule: 1.5, reflex: 0.7, reasoning: 0.9 };
 
+/**
+ * The server spam folder alone is a weak label: a spam-folder row teaches the spam head only when
+ * something independent judged it (the user, a model, a phishing verdict, a rescue). Otherwise the
+ * head learns "newsletter ⇒ spam" from whatever the provider's Bulk folder happens to hold.
+ */
+export function spamLabelOf(r) {
+  if (r.spam === 'rescued') return 0;
+  const judged = ['user', 'reflex', 'reasoning'].includes(r.layer) || r.spam === 'phishing';
+  if (r.in_spam_folder && !judged) return null;
+  return r.spam === 'suspected' || r.spam === 'phishing' || r.stream === 'spam' ? 1 : 0;
+}
+
 /** Turn stored decisions into training samples per head. Exported for tests. */
 export function samplesFromDecisions(rows) {
   const out = Object.fromEntries(HEADS.map((h) => [h, []]));
@@ -96,8 +130,8 @@ export function samplesFromDecisions(rows) {
     if (STREAM_HEADS.includes(stream)) {
       for (const h of STREAM_HEADS) out[h].push({ features, label: stream === h ? 1 : 0, weight: w, t });
     }
-    const spam = r.spam === 'suspected' || r.spam === 'phishing' || r.stream === 'spam' ? 1 : 0;
-    out.spam.push({ features, label: spam, weight: r.spam === 'rescued' ? 2 : w, t });
+    const spam = spamLabelOf(r);
+    if (spam !== null) out.spam.push({ features, label: spam, weight: r.spam === 'rescued' ? 2 : w, t });
   }
   return out;
 }
@@ -106,11 +140,12 @@ export function samplesFromDecisions(rows) {
 export async function trainHeads(userId) {
   const cfg = await getConfig(userId);
   const { rows } = await query(
-    `SELECT features, stream, proposed_stream, spam, layer, confidence, decided_at FROM hedwig_sort
+    `SELECT features, stream, proposed_stream, spam, layer, confidence, decided_at, in_spam_folder FROM hedwig_sort
       WHERE user_id = $1 AND features IS NOT NULL AND NOT own
-        AND (layer IN ('user','rule') OR (layer IN ('reflex','reasoning') AND confidence >= 0.8))
+        AND (layer = 'user' OR (layer IN ('reflex','reasoning') AND confidence >= 0.8)
+             OR (layer = 'rule' AND engine_version = $2))
       ORDER BY decided_at DESC LIMIT 20000`,
-    [userId],
+    [userId, engineStamp()],
   );
   const byHead = samplesFromDecisions(rows);
   const trained = {};
@@ -119,9 +154,16 @@ export async function trainHeads(userId) {
     const pos = samples.filter((s) => s.label === 1).length;
     if (samples.length < cfg['sort.classifierMinSamples'] || !pos || pos === samples.length) {
       trained[head] = { ok: false, samples: samples.length, positives: pos };
+      // A head an older engine trained is not kept when this engine cannot train it.
+      await query(
+        `DELETE FROM hedwig_sort_models WHERE user_id = $1 AND head = $2 AND (metrics->>'engine') IS DISTINCT FROM $3`,
+        [userId, head, SORT_ENGINE_VERSION],
+      );
       continue;
     }
-    const { model, metrics } = trainWithHoldout(samples, { seed: 1 });
+    const trainedOn = trainWithHoldout(samples, { seed: 1 });
+    const model = trainedOn.model;
+    const metrics = { ...trainedOn.metrics, engine: SORT_ENGINE_VERSION };
     await query(
       `INSERT INTO hedwig_sort_models (user_id, head, version, model, metrics, samples, trained_at)
        VALUES ($1, $2, 1, $3, $4, $5, NOW())

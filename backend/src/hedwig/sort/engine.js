@@ -17,14 +17,15 @@ import { loadSenderStats, outgoingSql } from '../triage/store.js';
 import { fnv1a } from '../triage/features.js';
 import { validTimezone, describeNow } from '../insights/time.js';
 import { getState, setState } from '../state.js';
-import { headerLayer, screenerKey, inSpamFolder } from './headers.js';
+import { headerLayer, screenerKey, inSpamFolder, listRule } from './headers.js';
 import { assessSpam, rescueScore, SPAM_SIGNALS_VERSION, DEFAULT_TRUSTED_LINK_HOSTS } from './spam.js';
 import { applyRules, loadRules, bumpHits, matchDescriptions } from './rules.js';
 import { sortFeatures, priorStream, headsActive, predictHeads, loadHeads } from './classifier.js';
 import { loadBundles, guessBundle, isScheduled, lastSlot } from './bundles.js';
-import { loadDecisions, pickDecision, setSenderDecision, ensureSeeded, recordWrittenTo, streamOf, decisionKey } from './senders.js';
+import { loadDecisions, pickDecision, setSenderDecision, ensureSeeded, recordWrittenTo, streamOf, decisionKey, gateOnly } from './senders.js';
+import { engineStamp } from './version.js';
 import { reflexItem, runReflex, cleanReason } from './reflex.js';
-import { messagePartsFor, recentCorrections, runSortPrompt } from './deps.js';
+import { messagePartsFor, recentCorrections, runSortPrompt, sortEscalationUseful } from './deps.js';
 import { writeLog } from './log.js';
 
 const DAY = 86400_000;
@@ -179,6 +180,10 @@ export function decideCheap(row, ctx) {
     trustedLinkHosts: Array.isArray(cfg['spam.trustedLinkHosts']) ? cfg['spam.trustedLinkHosts'] : DEFAULT_TRUSTED_LINK_HOSTS,
   });
 
+  // List mail: Reading (final) or a Reading/Records floor, never People (see headers.js listRule).
+  const list = listRule(header, row, text);
+  const gate = gateOnly(senderDecision);
+
   const t = ctx.triage?.get(row.id) || null;
   const tNeeds = triageNeedsYou(t);
   let needsYou = tNeeds ?? Boolean(s1.needsYou);
@@ -192,7 +197,7 @@ export function decideCheap(row, ctx) {
     signals: [...header.signals, ...spam.signals.filter((s) => !header.signals.some((h) => h.name === s.name))],
     features, labels: [], notify: false, ruleId: null, final: false, needsScreen: false,
     screenKey: screenerKey(keys), own: header.own, inSpamFolder: header.spamFolder, header, s1, text, senderDecision, keys,
-    ruleMatches: [], prompt: null,
+    ruleMatches: [], prompt: null, listRule: false, listFloor: list ? list.stream : null, listReason: list ? list.reason : null,
     rowLite: { from_name: row.from_name, from_email: row.from_email, subject: row.subject },
   };
   if (facts.repliedAfter) d.signals.push({ name: 'replied', label: 'You replied', weight: 1 });
@@ -222,6 +227,16 @@ export function decideCheap(row, ctx) {
     decideWith('spam', { layer: 'rule', confidence: 1, reason: 'You blocked this sender' });
   } else if (header.hard && !header.spamFolder) {
     decideWith(header.hard.stream, { layer: 'rule', confidence: header.hard.confidence, reason: header.hard.reason });
+  } else if (senderDecision?.source !== 'user' && list?.final && !header.spamFolder) {
+    // A newsletter: the headers settle it before any automatic sender decision or model.
+    decideWith(list.stream, { layer: 'rule', confidence: list.confidence, reason: list.reason });
+    d.bundle = list.bundle;
+    d.listRule = true;
+    d.signals.unshift({ name: 'listRule', label: list.reason, weight: list.confidence });
+    if (gate) d.signals.push({ name: 'alwaysIn', label: cleanReason(senderDecision.reason || 'You have written to them'), weight: 0.5 });
+  } else if (gate) {
+    // The Screener's door only: the stream is decided per message below.
+    d.signals.unshift({ name: 'alwaysIn', label: cleanReason(senderDecision.reason || 'You have written to them'), weight: 0.5 });
   } else if (senderDecision) {
     const conf = senderDecision.source === 'user' ? 1 : Number(senderDecision.confidence ?? 0.9);
     const scopeWord = senderDecision.scope === 'address' ? 'this sender' : senderDecision.scope === 'list' ? 'this list' : senderDecision.key;
@@ -241,12 +256,21 @@ export function decideCheap(row, ctx) {
   if (headsActive(ctx.heads, minSamples)) {
     const h = predictHeads(ctx.heads, features);
     const prior = priorStream({ s1, sender, header });
-    cls = { stream: h.stream, confidence: h.confidence, reason: h.stream === prior.stream ? prior.reason : `Mail like this usually goes to ${cap(h.stream)}`, bundle: prior.bundle || null, signals: h.signals, spamP: h.spam };
+    const version = ctx.heads.people?.version;
+    cls = {
+      stream: h.stream, confidence: h.confidence, reason: h.stream === prior.stream ? prior.reason : `Mail like this usually goes to ${cap(h.stream)}`,
+      bundle: prior.bundle || null, spamP: h.spam,
+      signals: [{ name: 'classifier', label: `Your sorting classifier${version ? ` v${version}` : ''} (${ctx.heads.people?.samples || 0} examples)`, weight: round(h.confidence) }, ...h.signals],
+    };
   } else {
     cls = priorStream({ s1, sender, header });
   }
+  // List mail is never People by the classifier: a list the user replies to still sends issues.
+  if (list && cls.stream === 'people') {
+    cls = { ...cls, stream: list.stream, bundle: list.bundle || cls.bundle || null, confidence: Math.min(cls.confidence, list.confidence), reason: list.reason, forcedFloor: true };
+  }
   if (!d.stream) {
-    decideWith(cls.stream, { layer: 'classifier', confidence: cls.confidence, reason: cleanReason(cls.reason), final: cls.confidence >= cfg['sort.classifierDecideAbove'] });
+    decideWith(cls.stream, { layer: 'classifier', confidence: cls.confidence, reason: cleanReason(cls.reason), final: !cls.forcedFloor && cls.confidence >= cfg['sort.classifierDecideAbove'] });
     d.signals.push(...(cls.signals || []));
   } else if (d.stream === 'spam' && !d.proposed) {
     d.proposed = cls.stream;
@@ -271,6 +295,8 @@ export function decideCheap(row, ctx) {
   if (['reading', 'records'].includes(d.stream)) {
     d.bundle = d.bundle || guessBundle({ row, text, stream: d.stream, prior: cls.bundle ? { bundle: cls.bundle } : header.prior }, ctx.bundles || []);
   } else if (d.stream !== 'spam') d.bundle = null;
+  // A newsletter no keyword places still belongs with the other newsletters.
+  if (d.stream === 'reading' && d.listFloor && !d.bundle && (ctx.bundles || []).some((b) => b.key === 'updates' && b.enabled !== false)) d.bundle = 'updates';
   if (d.stream === 'spam') d.needsYou = false;
 
   // Screener: undecided senders' recent mail waits for a decision.
@@ -290,12 +316,20 @@ const SUSPECTED_TO_SPAM = 0.8;
 export function mergeReflex(d, r, { bundles = [] } = {}) {
   const userDecided = d.layer === 'rule' && (d.ruleId || d.senderDecision?.source === 'user');
   if (!userDecided) {
+    let stream = r.stream;
+    let reason = r.reason || d.reason;
+    // Mailing lists stay out of People whatever the model read into a personal greeting.
+    if (d.listFloor && stream === 'people') {
+      stream = d.listFloor;
+      reason = d.listReason || reason;
+      d.signals.push({ name: 'listFloor', label: 'Mailing list headers: kept out of People', weight: 0.6 });
+    }
     d.layer = r.layer;
     d.confidence = r.confidence;
-    d.reason = r.reason || d.reason;
-    d.stream = r.stream;
-    d.proposed = r.stream;
-    d.bundle = ['reading', 'records'].includes(r.stream) ? (r.bundle || guessBundle({ row: d.rowLite || {}, text: d.text, stream: r.stream }, bundles) || null) : null;
+    d.reason = reason;
+    d.stream = stream;
+    d.proposed = stream;
+    d.bundle = ['reading', 'records'].includes(stream) ? ((stream === r.stream && r.bundle) || guessBundle({ row: d.rowLite || {}, text: d.text, stream }, bundles) || null) : null;
   }
   d.final = true;
   d.needsYou = r.needsYou;
@@ -382,6 +416,12 @@ async function applyPluginVerdict(userId, row, d) {
 
 // ── Finalise and store ──────────────────────────────────────────────────────
 
+/** Every needs-you decision says why, even when neither triage nor the model gave a reason. */
+export function ensureNeedsYouReason(row, d) {
+  if (d.needsYou && !d.needsYouReason) d.needsYouReason = cleanReason(`${firstName(row)} may need something from you`);
+  return d;
+}
+
 function toSortInfo(d) {
   return { stream: d.stream, bundle: d.bundle, needsYou: d.needsYou, spam: d.spam, layer: d.layer, reason: d.reason, confidence: d.confidence };
 }
@@ -392,8 +432,8 @@ async function upsertSort(userId, row, d, { pending = null } = {}) {
     `INSERT INTO hedwig_sort (message_id, user_id, account_id, stream, proposed_stream, bundle, held, needs_you, needs_you_reason,
                               spam, spam_reason, confidence, layer, reason, signals, features, labels, notify, rule_id, rule_matches,
                               sender_key, sender_scope, own, in_spam_folder, pending, prompt_id, prompt_version, model, ai_call_id,
-                              decided_at, body_seen)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,NOW(),$30)
+                              decided_at, body_seen, engine_version)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,NOW(),$30,$31)
      ON CONFLICT (message_id) DO UPDATE SET
        stream = EXCLUDED.stream, proposed_stream = EXCLUDED.proposed_stream, bundle = EXCLUDED.bundle, held = EXCLUDED.held,
        needs_you = EXCLUDED.needs_you, needs_you_reason = EXCLUDED.needs_you_reason, spam = EXCLUDED.spam, spam_reason = EXCLUDED.spam_reason,
@@ -402,14 +442,15 @@ async function upsertSort(userId, row, d, { pending = null } = {}) {
        rule_matches = EXCLUDED.rule_matches, sender_key = EXCLUDED.sender_key, sender_scope = EXCLUDED.sender_scope,
        own = EXCLUDED.own, in_spam_folder = EXCLUDED.in_spam_folder, pending = EXCLUDED.pending,
        prompt_id = EXCLUDED.prompt_id, prompt_version = EXCLUDED.prompt_version, model = EXCLUDED.model, ai_call_id = EXCLUDED.ai_call_id,
-       decided_at = NOW(), body_seen = EXCLUDED.body_seen
+       decided_at = NOW(), body_seen = EXCLUDED.body_seen, engine_version = EXCLUDED.engine_version
      WHERE hedwig_sort.user_id = EXCLUDED.user_id AND hedwig_sort.layer <> 'user'
      RETURNING *`,
     [row.id, userId, row.account_id, d.stream, d.proposed && d.proposed !== 'spam' ? d.proposed : null, d.bundle, Boolean(d.held),
       Boolean(d.needsYou), d.needsYouReason, d.spam, d.spamReason ? cleanReason(d.spamReason, 140) : null, d.confidence, d.layer,
       d.reason, JSON.stringify(d.signals.slice(0, 16)), JSON.stringify(d.features || null), d.labels || [], Boolean(d.notify), d.ruleId,
       JSON.stringify(d.ruleMatches || []), d.screenKey?.key || null, d.screenKey?.scope || null, Boolean(d.own), Boolean(d.inSpamFolder),
-      pending, p.promptId || null, p.promptVersion || null, p.model || null, p.aiCallId ?? null, Boolean(row.body_text || row.body_html)],
+      pending, p.promptId || null, p.promptVersion || null, p.model || null, p.aiCallId ?? null, Boolean(row.body_text || row.body_html),
+      engineStamp()],
   );
   return rows[0] || null;
 }
@@ -460,6 +501,7 @@ export async function finalize(userId, row, d, ctx, { pending = null } = {}) {
     }
   }
 
+  if (d.stream !== 'spam') ensureNeedsYouReason(row, d);
   const stored = await upsertSort(userId, row, d, { pending });
   if (stored && !pending) {
     runHedwigHook(HEDWIG_HOOKS.afterSort, { userId, messageId: row.id, sort: toSortInfo(d) }).catch(() => {});
@@ -529,6 +571,11 @@ export function userAuthoritative(d) {
   return Boolean(d.own || (d.layer === 'rule' && (d.ruleId || d.senderDecision?.source === 'user' || d.signals?.some((x) => x.name?.startsWith('plugin:')))));
 }
 
+/** A newsletter the list headers settled (Tier 0): no model needed, and it replaces a model's guess. */
+export function headerSettled(d) {
+  return Boolean(d.listRule && d.layer === 'rule' && d.final);
+}
+
 /**
  * Sort decorated message rows (MESSAGE_COLUMNS, user_addresses, is_outgoing).
  * @param {object[]} rows
@@ -585,7 +632,7 @@ export async function sortRows(rows, { historical = false, allowReflex = true, o
         if (!historical && !d.own) await applyPluginVerdict(userId, row, d);
         // A model decision is only replaced by another model decision, or by the user's own rules
         // and sender decisions, which apply at once.
-        if (prev && ['reflex', 'reasoning'].includes(prev.layer) && !userAuthoritative(d)) {
+        if (prev && ['reflex', 'reasoning'].includes(prev.layer) && !userAuthoritative(d) && !headerSettled(d)) {
           if (eligible && !row.is_outgoing) {
             await query(`UPDATE hedwig_sort SET pending = 'reflex' WHERE message_id = $1 AND user_id = $2 AND layer <> 'user'`, [row.id, userId]);
             toReflex.push(row.id);
@@ -651,14 +698,18 @@ export async function runReflexJob({ messageIds }, job = {}) {
   const ctx = await loadUserContext(userId, rows, cfg);
   const todo = [];
   for (const row of rows) {
-    if (ctx.existing.get(row.id)?.layer === 'user') continue;
+    const prev = ctx.existing.get(row.id);
+    if (prev?.layer === 'user') continue;
+    // Judged by a model since this job was queued (a duplicate job, a sweep): nothing left to do.
+    if (prev && !prev.pending && ['reflex', 'reasoning'].includes(prev.layer)) continue;
     const d = decideCheap(row, ctx);
-    // The user's own rules and decisions are final; the model is not asked to second-guess them.
-    if (userAuthoritative(d)) {
+    // The user's own rules and decisions are final, and so are newsletters the list headers
+    // settled; the model is not asked to second-guess them.
+    if (userAuthoritative(d) || headerSettled(d)) {
       await finalize(userId, row, d, ctx, { pending: null });
       continue;
     }
-    todo.push({ row, d });
+    todo.push({ row, d, prev });
   }
   if (!todo.length) return { sorted: 0 };
   const items = [];
@@ -680,30 +731,53 @@ export async function runReflexJob({ messageIds }, job = {}) {
   try {
     results = await runReflex(userId, batch, cfg);
   } catch (err) {
-    if (!SOFT_ERRORS.has(err?.code)) throw err;
-    for (const { row, d } of todo) await finalize(userId, row, d, ctx, { pending: null });
-    return { skipped: err.code };
+    // No model at all: the cheap decision is the answer, and nothing waits for Reflex.
+    if (err?.code === 'llm_disabled') {
+      for (const { row, d } of todo) await finalize(userId, row, d, ctx, { pending: null });
+      return { skipped: err.code };
+    }
+    // Anything else (a full lane, the gateway down, the day's budget spent, a bad answer) leaves
+    // every row pending = 'reflex': the ledger defers or retries this job, and the Reflex sweep
+    // (sort.reflexSweep) re-enqueues what is still waiting if it fails for good.
+    throw err;
   }
   let sorted = 0;
-  for (const { row, d } of todo) {
+  let missing = 0;
+  for (const { row, d, prev } of todo) {
     const r = results.get(row.id);
-    if (r) {
-      mergeReflex(d, r, { bundles: ctx.bundles, cfg });
-      applyPostRules(d, row, ctx);
-    } else {
-      d.signals.push({ name: 'reflexMissing', label: 'The model gave no answer for this message', weight: 0 });
+    if (!r) {
+      // Still waiting for a model: keep it pending so the sweep asks again (a few times a day at
+      // most). A model decision already stored stays until a new one replaces it.
+      missing++;
+      if (prev && ['reflex', 'reasoning'].includes(prev.layer)) continue;
+      d.signals.push({ name: 'reflexMissing', label: 'The model gave no answer for this message yet', weight: 0 });
+      await finalize(userId, row, d, ctx, { pending: 'reflex' });
+      continue;
     }
+    mergeReflex(d, r, { bundles: ctx.bundles, cfg });
+    applyPostRules(d, row, ctx);
     await finalize(userId, row, d, ctx, { pending: null });
     sorted++;
   }
   await bumpHits(userId, ctx.ruleHits);
-  return { sorted, escalated: [...results.values()].filter((r) => r.layer === 'reasoning').length };
+  const out = { sorted, escalated: [...results.values()].filter((r) => r.layer === 'reasoning').length };
+  if (missing) return { ...out, missing, status: 'partial', note: `${missing} message(s) got no answer; they stay pending for the Reflex sweep` };
+  return out;
 }
 
-/** Job `sort.resort` { messageIds?, sinceDays?, layers? }. */
-export async function runResortJob({ messageIds = null, sinceDays = 7, layers = ['classifier'] }, job = {}) {
+const RESORT_BATCH = 200;
+
+/**
+ * Job `sort.resort` { messageIds?, sinceDays?, layers?, allowReflex?, engine?, cursor? }.
+ * With `engine` (the stamp from version.js) it is the re-sort after an engine or sort.reflex
+ * prompt change: every row not decided by the user and not stamped with that engine, newest
+ * first (`sinceDays` null = all history), in pages that re-enqueue themselves. Reflex is asked
+ * about mail within sort.reflexMaxAgeDays (sortRows gates by age); older mail gets the cheap layers.
+ */
+export async function runResortJob({ messageIds = null, sinceDays = 7, layers = ['classifier'], allowReflex = false, engine = null, cursor = null }, job = {}) {
   const userId = job.user_id;
   if (!userId) return { skipped: 'bad payload' };
+  if (engine) return runEngineResort(userId, { engine, cursor, sinceDays });
   let ids = messageIds;
   if (!ids) {
     const { rows } = await query(
@@ -714,14 +788,115 @@ export async function runResortJob({ messageIds = null, sinceDays = 7, layers = 
     );
     ids = rows.map((r) => r.message_id);
   }
-  return resortMessages(userId, ids, { onlyLayers: layers, allowReflex: false });
+  return resortMessages(userId, ids, { onlyLayers: layers, allowReflex: Boolean(allowReflex) });
+}
+
+async function runEngineResort(userId, { engine, cursor = null, sinceDays = null }) {
+  const cfg = await getConfig(userId);
+  if (!cfg.enabled || !cfg['sort.enabled']) return { skipped: 'sorting off' };
+  const days = sinceDays === null || sinceDays === undefined ? null : Math.max(1, Math.min(3650, Math.round(Number(sinceDays)) || 1));
+  const { rows } = await query(
+    `SELECT s.message_id, COALESCE(m.date, 'epoch'::timestamptz)::text AS d
+       FROM hedwig_sort s JOIN messages m ON m.id = s.message_id
+      WHERE s.user_id = $1 AND s.layer <> 'user' AND NOT s.own AND NOT m.is_deleted
+        AND s.engine_version IS DISTINCT FROM $2
+        AND ($3::int IS NULL OR m.date > NOW() - make_interval(days => $3::int))
+        AND ($4::timestamptz IS NULL OR (COALESCE(m.date, 'epoch'::timestamptz), s.message_id) < ($4::timestamptz, $5::uuid))
+      ORDER BY COALESCE(m.date, 'epoch'::timestamptz) DESC, s.message_id DESC
+      LIMIT $6`,
+    [userId, engine, days, cursor?.date || null, cursor?.id || null, RESORT_BATCH],
+  );
+  const ids = rows.map((r) => r.message_id);
+  const res = ids.length ? await resortMessages(userId, ids, { allowReflex: true }) : { sorted: 0, reflex: 0 };
+  const key = `sort.engineVersion:${userId}`;
+  const prev = (await getState(key, null)) || {};
+  const totals = {
+    checked: (cursor ? Number(prev.checked) || 0 : 0) + ids.length,
+    reflexJobs: (cursor ? Number(prev.reflexJobs) || 0 : 0) + (res.reflex || 0),
+  };
+  if (ids.length === RESORT_BATCH) {
+    const last = rows[rows.length - 1];
+    const next = { date: last.d, id: last.message_id };
+    await setState(key, { ...prev, version: engine, ...totals, cursor: next });
+    await enqueue('sort.resort', { engine, allowReflex: true, sinceDays: days, cursor: next }, {
+      userId, dedupeKey: `sort.resort:engine:${userId}:${engine}:${next.id}`, priority: 8, maxAttempts: 3,
+    });
+    return { checked: ids.length, sorted: res.sorted, reflex: res.reflex, continued: true };
+  }
+  await setState(key, { ...prev, version: engine, ...totals, cursor: null, doneAt: new Date().toISOString() });
+  console.log(`[hedwig] sort.resort: ${totals.checked} decision(s) re-sorted for ${userId} under engine ${engine}; ${totals.reflexJobs} Reflex job(s) queued`);
+  return { checked: ids.length, sorted: res.sorted, reflex: res.reflex, done: true };
+}
+
+/**
+ * Worker start-up (and every 10 minutes, cheaply): when the engine stamp (version.js) differs
+ * from the one in hedwig_state `sort.engineVersion`, enqueue one engine sort.resort per user.
+ * This is how production re-sorts after a deploy that changes the sorting engine or sort.reflex.
+ * @returns {Promise<{ version: string, enqueued: number }|null>} null when nothing changed
+ */
+export async function ensureSortEngineCurrent({ userIds = null } = {}) {
+  const stamp = engineStamp();
+  const current = await getState('sort.engineVersion', null);
+  if (current?.version === stamp && !userIds) return resumeEngineResorts(stamp);
+  const users = userIds || await sortUsers();
+  let enqueued = 0;
+  for (const userId of users) {
+    const mine = await getState(`sort.engineVersion:${userId}`, null);
+    if (mine?.version === stamp && !userIds) continue;
+    const jobId = await enqueue('sort.resort', { engine: stamp, allowReflex: true, sinceDays: null }, {
+      userId, dedupeKey: `sort.resort:engine:${userId}:${stamp}:start`, priority: 8, maxAttempts: 3,
+    });
+    await setState(`sort.engineVersion:${userId}`, { version: stamp, previous: mine?.version || null, enqueuedAt: new Date().toISOString(), jobId, checked: 0, reflexJobs: 0 });
+    if (jobId !== null) enqueued++;
+  }
+  if (!userIds) {
+    await setState('sort.engineVersion', { version: stamp, previous: current?.version || null, at: new Date().toISOString(), users: users.length, enqueued });
+    console.log(`[hedwig] sort: engine ${current?.version || 'none'} → ${stamp}; re-sorting stored decisions for ${enqueued} user(s)`);
+  }
+  return { version: stamp, enqueued };
+}
+
+// A user's engine re-sort that stopped short (a page failed all its attempts, or its job was lost)
+// is picked up again from its saved cursor by the 10-minute check, a few times per engine version:
+// sort.resort has no rebuild(), so the hourly retry of failed jobs does not cover it, and until it
+// finishes the classifier heads stay unused (learning.js waits for doneAt).
+const RESORT_RESUMES = 5;
+async function resumeEngineResorts(stamp) {
+  let resumed = 0;
+  for (const userId of await sortUsers()) {
+    const key = `sort.engineVersion:${userId}`;
+    const mine = await getState(key, null);
+    if (!mine || mine.version !== stamp || mine.doneAt) continue;
+    if ((Number(mine.resumes) || 0) >= RESORT_RESUMES) continue;
+    const { rows } = await query(
+      `SELECT 1 FROM hedwig_jobs WHERE kind = 'sort.resort' AND user_id = $1 AND done_at IS NULL AND failed_at IS NULL
+          AND payload->>'engine' = $2 LIMIT 1`,
+      [userId, stamp],
+    );
+    if (rows.length) continue; // still running or queued
+    const resumes = (Number(mine.resumes) || 0) + 1;
+    const cursor = mine.cursor || null;
+    await enqueue('sort.resort', { engine: stamp, allowReflex: true, sinceDays: null, ...(cursor ? { cursor } : {}) }, {
+      userId, dedupeKey: `sort.resort:engine:${userId}:${stamp}:resume:${resumes}`, priority: 8, maxAttempts: 3,
+    });
+    await setState(key, { ...mine, resumes });
+    console.warn(`[hedwig] sort: engine re-sort for ${userId} stopped before the end; resuming (${resumes}/${RESORT_RESUMES})`);
+    resumed++;
+  }
+  return resumed ? { version: stamp, enqueued: 0, resumed } : null;
 }
 
 // ── Sweeps ──────────────────────────────────────────────────────────────────
 
-/** Every 30 s: bodies that landed, body waits that expired, and stuck Reflex rows. */
+/**
+ * Every 30 s: bodies that landed and body waits that expired are re-sorted (which sends what
+ * Tier 0 cannot settle to Reflex). A row waiting for Reflex (pending = 'reflex') keeps waiting
+ * until a model decision replaces it or it is older than sort.reflexMaxAgeDays; the Reflex sweep
+ * re-enqueues it when its job is gone.
+ */
 export async function pendingSweep() {
   const cfg = await getConfig();
+  const started = (await query('SELECT NOW() AS now'))?.rows?.[0]?.now || new Date();
   const { rows } = await query(
     `SELECT s.user_id, s.message_id
        FROM hedwig_sort s JOIN messages m ON m.id = s.message_id
@@ -732,10 +907,12 @@ export async function pendingSweep() {
       LIMIT 500`,
     [cfg['sort.bodyWaitSec']],
   );
-  const { rowCount: stuck } = await query(
-    `UPDATE hedwig_sort SET pending = NULL WHERE pending = 'reflex' AND decided_at < NOW() - INTERVAL '6 hours'`,
+  const { rowCount: expired } = await query(
+    `UPDATE hedwig_sort s SET pending = NULL FROM messages m
+      WHERE m.id = s.message_id AND s.pending = 'reflex' AND (m.date IS NULL OR m.date < NOW() - make_interval(days => $1::int))`,
+    [Math.round(cfg['sort.reflexMaxAgeDays'] ?? 14)],
   );
-  if (stuck) console.warn(`[hedwig] sort: ${stuck} message(s) waited 6 h for Reflex; keeping their classifier decision (see hedwig_jobs sort.reflex)`);
+  if (expired) console.warn(`[hedwig] sort: ${expired} message(s) passed sort.reflexMaxAgeDays while waiting for Reflex; keeping their cheap decision`);
   const byUser = new Map();
   for (const r of rows) {
     if (!byUser.has(r.user_id)) byUser.set(r.user_id, []);
@@ -743,16 +920,113 @@ export async function pendingSweep() {
   }
   let n = 0;
   for (const [userId, ids] of byUser) {
-    // Mark the body as seen first so a model-less install does not pick the same rows up forever.
-    await query(
-      `UPDATE hedwig_sort s SET body_seen = (m.body_text IS NOT NULL OR m.body_html IS NOT NULL), pending = NULL
-         FROM messages m WHERE m.id = s.message_id AND s.user_id = $1 AND s.message_id = ANY($2::uuid[]) AND s.pending IS DISTINCT FROM 'reflex'`,
-      [userId, ids],
-    );
-    const res = await resortMessages(userId, ids, {});
+    let res;
+    try {
+      res = await resortMessages(userId, ids, {});
+    } finally {
+      // What the re-sort did not rewrite (a model decision kept until Reflex answers again, or a
+      // row that failed) counts as body-seen so it is not picked up every 30 s. A Reflex wait stays.
+      await query(
+        `UPDATE hedwig_sort s SET body_seen = (m.body_text IS NOT NULL OR m.body_html IS NOT NULL),
+                pending = CASE WHEN s.pending = 'body' THEN NULL ELSE s.pending END
+           FROM messages m WHERE m.id = s.message_id AND s.user_id = $1 AND s.message_id = ANY($2::uuid[]) AND s.decided_at < $3`,
+        [userId, ids, started],
+      );
+    }
     n += res.sorted;
   }
   return n;
+}
+
+/** Jobs of kind sort.reflex that carry this row's message id (SQL fragment; $1 = user id). */
+const REFLEX_JOBS_FOR_ROW = `FROM hedwig_jobs j WHERE j.kind = 'sort.reflex' AND j.user_id = $1 AND j.payload->'messageIds' ? s.message_id::text`;
+
+/**
+ * sort.reflex payloads for the rows still waiting for Reflex (pending = 'reflex', not the user's,
+ * within sort.reflexMaxAgeDays) that no live job covers. A failed job's batch is kept together (less
+ * what no longer waits), so the ledger's reconcile/retryFailed recognise it; the rest are batched
+ * newest first. `tryCap` leaves out messages already in that many jobs today.
+ * @returns {Promise<Array<{ messageIds: string[] }>>}
+ */
+export async function reflexPayloads(userId, cfg, { tryCap = null, limit = 500 } = {}) {
+  const size = Math.max(1, Math.min(8, cfg['sort.batchSize'] || 5));
+  const { rows } = await query(
+    `SELECT s.message_id,
+            (SELECT COUNT(*) ${REFLEX_JOBS_FOR_ROW} AND j.created_at > NOW() - INTERVAL '1 day')::int AS tries
+       FROM hedwig_sort s JOIN messages m ON m.id = s.message_id
+      WHERE s.user_id = $1 AND s.pending = 'reflex' AND s.layer <> 'user' AND NOT s.own AND NOT m.is_deleted
+        AND m.date > NOW() - make_interval(days => $2::int)
+        AND NOT EXISTS (SELECT 1 ${REFLEX_JOBS_FOR_ROW} AND j.done_at IS NULL AND j.failed_at IS NULL)
+      ORDER BY m.date DESC, s.message_id
+      LIMIT $3`,
+    [userId, Math.round(cfg['sort.reflexMaxAgeDays'] ?? 14), limit],
+  );
+  const waiting = rows.filter((r) => tryCap === null || Number(r.tries) < tryCap).map((r) => r.message_id);
+  if (!waiting.length) return [];
+  const need = new Set(waiting);
+  const out = [];
+  const used = new Set();
+  const { rows: failed } = await query(
+    `SELECT payload FROM hedwig_jobs WHERE kind = 'sort.reflex' AND user_id = $1 AND status = 'failed' ORDER BY id`,
+    [userId],
+  );
+  for (const f of failed) {
+    const p = typeof f.payload === 'string' ? JSON.parse(f.payload) : f.payload;
+    const ids = Array.isArray(p?.messageIds) ? p.messageIds.filter((id) => need.has(id) && !used.has(id)) : [];
+    if (!ids.length) continue;
+    out.push({ messageIds: ids });
+    for (const id of ids) used.add(id);
+  }
+  const rest = waiting.filter((id) => !used.has(id));
+  for (let i = 0; i < rest.length; i += size) out.push({ messageIds: rest.slice(i, i + size) });
+  return out;
+}
+
+/**
+ * Every 2 minutes: Tier 1 coverage, rebuilt from the data. For each user with a model:
+ *  1. recent classifier (or automatic sender-decision) decisions below sort.classifierDecideAbove
+ *     that no model has judged and nothing waits on (sorted while the model was off, by a sweep without Reflex, or a lost
+ *     pending flag) are re-sorted with Reflex allowed, which marks and enqueues them;
+ *  2. rows waiting for Reflex with no live job (the job failed for good, or was never queued)
+ *     are enqueued again, at most sort.reflexTriesPerDay jobs per message a day.
+ * @returns {Promise<{ users: number, adopted: number, enqueued: number }>}
+ */
+export async function reflexSweep({ userIds = null } = {}) {
+  const users = userIds || await sortUsers();
+  const out = { users: 0, adopted: 0, enqueued: 0 };
+  for (const userId of users) {
+    try {
+      const cfg = await getConfig(userId);
+      if (!cfg.enabled || !cfg['sort.enabled']) continue;
+      if (!await llmAvailable(userId).catch(() => false)) continue;
+      out.users++;
+      const tryCap = Math.max(1, Math.round(cfg['sort.reflexTriesPerDay'] ?? 3));
+      const { rows } = await query(
+        `SELECT s.message_id FROM hedwig_sort s JOIN messages m ON m.id = s.message_id
+          WHERE s.user_id = $1 AND s.pending IS NULL AND s.layer IN ('classifier','rule') AND COALESCE(s.confidence, 0) < $3
+            AND s.stream <> 'spam' AND NOT s.in_spam_folder AND NOT s.own AND NOT m.is_deleted
+            AND m.date > NOW() - make_interval(days => $2::int)
+            AND (SELECT COUNT(*) ${REFLEX_JOBS_FOR_ROW} AND j.created_at > NOW() - INTERVAL '1 day') < $4
+          ORDER BY m.date DESC LIMIT 200`,
+        [userId, Math.round(cfg['sort.reflexMaxAgeDays'] ?? 14), cfg['sort.classifierDecideAbove'], tryCap],
+      );
+      if (rows.length) {
+        const res = await resortMessages(userId, rows.map((r) => r.message_id), { allowReflex: true });
+        out.adopted += rows.length;
+        out.enqueued += res.reflex || 0;
+      }
+      for (const payload of await reflexPayloads(userId, cfg, { tryCap })) {
+        const id = await enqueue('sort.reflex', payload, {
+          userId, dedupeKey: `sort.reflex:${fnv1a(payload.messageIds.join(','))}`, priority: 5, maxAttempts: 3,
+        });
+        if (id !== null) out.enqueued++;
+      }
+    } catch (err) {
+      console.warn(`[hedwig] sort.reflexSweep failed for ${userId}:`, err.message);
+    }
+  }
+  if (out.adopted || out.enqueued) console.log(`[hedwig] sort.reflexSweep: ${out.adopted} unsure decision(s) re-sorted, ${out.enqueued} Reflex job(s) queued for ${out.users} user(s)`);
+  return out;
 }
 
 /** Every minute: history the pipeline indexed before sorting existed (cheap layers; Reflex for recent mail). */
@@ -835,8 +1109,10 @@ export async function rescueEvidence(userId, emails, addresses) {
   return out;
 }
 
+/** spam.reflex over rescue candidates. `failed` says a call failed and some went unjudged. */
 async function spamReflex(userId, prepared, cfg, user) {
   const out = new Map();
+  let failed = false;
   const size = Math.max(1, Math.min(8, cfg['sort.batchSize'] || 5));
   for (let i = 0; i < prepared.length; i += size) {
     const chunk = prepared.slice(i, i + size);
@@ -857,7 +1133,8 @@ async function spamReflex(userId, prepared, cfg, user) {
         if (!target || !subset.some((s) => s.id === e.id)) continue;
         let conf = Number(e.confidence);
         if (conf > 1 && conf <= 100) conf /= 100;
-        out.set(target.row.id, { verdict: e.verdict, confidence: Math.max(0, Math.min(1, conf || 0)), reason: cleanReason(e.reason), layer: escalate ? 'reasoning' : 'reflex', provenance });
+        const served = provenance?.servedTier || provenance?.tier || (escalate ? 'reasoning' : 'reflex');
+        out.set(target.row.id, { verdict: e.verdict, confidence: Math.max(0, Math.min(1, conf || 0)), reason: cleanReason(e.reason), layer: served === 'reasoning' ? 'reasoning' : 'reflex', provenance });
       }
     };
     try {
@@ -866,13 +1143,30 @@ async function spamReflex(userId, prepared, cfg, user) {
         const r = out.get(chunk[j].row.id);
         return r && r.verdict === 'phishing' && r.confidence < cfg['spam.phishingEscalateBelow'];
       });
-      if (unsure.length) await run(unsure, true);
+      // Not while Tier 2 is degraded: the fallback is the model that just answered.
+      if (unsure.length && await sortEscalationUseful(userId)) await run(unsure, true);
     } catch (err) {
       if (!SOFT_ERRORS.has(err?.code)) console.warn(`[hedwig] sort: spam.reflex failed for ${userId}:`, err.message);
+      failed = true;
       break;
     }
   }
-  return out;
+  return { verdicts: out, failed };
+}
+
+/**
+ * A spam-folder message worth a Reflex read: some sign the user knows the sender or that it is
+ * personal (rescue score at least spam.rescueAbove - 0.45, the least a confident "legit" can lift
+ * over the line), not phishing, not rescued already on its own, and recent (spam.suspectedDays).
+ * The server folder alone never keeps it from the model; the model alone never rescues mail with
+ * no evidence (see the score blend in rescueRows).
+ */
+export function rescueReflexCandidate(row, d, cfg, now = new Date()) {
+  const above = cfg['spam.rescueAbove'];
+  const score = d.rescue?.score ?? 0;
+  if (d.spam === 'phishing' || score >= above || score < Math.max(0.2, above - 0.45)) return false;
+  const days = cfg['spam.suspectedDays'] ?? 30;
+  return !row.date || now.getTime() - new Date(row.date).getTime() <= days * DAY;
 }
 
 /**
@@ -911,8 +1205,9 @@ export async function rescueRows(userId, rows, cfg, { allowReflex = true, onlyLa
   }
   const above = cfg['spam.rescueAbove'];
   const llmOn = allowReflex && await llmAvailable(userId).catch(() => false);
-  const borderline = prepared.filter(({ d }) => d.rescue.score >= above - 0.35 && d.rescue.score < above && d.spam !== 'phishing');
-  const verdicts = llmOn && borderline.length ? await spamReflex(userId, borderline, cfg, ctx.user) : new Map();
+  const candidates = prepared.filter(({ row, d }) => rescueReflexCandidate(row, d, cfg, ctx.now));
+  const { verdicts } = llmOn && candidates.length ? await spamReflex(userId, candidates, cfg, ctx.user) : { verdicts: new Map() };
+  const candidateIds = new Set(candidates.map(({ row }) => row.id));
   let rescued = 0;
   for (const { row, d, prev } of prepared) {
     const v = verdicts.get(row.id);
@@ -925,8 +1220,11 @@ export async function rescueRows(userId, rows, cfg, { allowReflex = true, onlyLa
     }
     const userDecided = d.layer === 'rule' && (d.ruleId || d.senderDecision?.source === 'user');
     // First, so upsertSort's cap on stored signals never drops it.
+    // reflex: which model judged it, or 'pending' when it is a candidate no model has read yet
+    // (no model, a full lane, history sorted without models); the rescue sweep picks those up.
     d.signals.unshift({
       name: 'rescue', v: SPAM_SIGNALS_VERSION, weight: d.rescue.score,
+      ...(v ? { reflex: v.layer } : candidateIds.has(row.id) ? { reflex: 'pending' } : {}),
       label: d.rescue.reasons.length ? `Rescue ${d.rescue.score}: ${d.rescue.reasons.slice(0, 3).join('; ')}` : `Rescue ${d.rescue.score}: no sign you know this sender`,
     });
     if (d.rescue.score >= above && d.spam !== 'phishing') {
@@ -966,9 +1264,10 @@ async function sortUsers() {
 /**
  * Spam-folder messages to judge for one user: never sorted, sorted before the rescue signal (or
  * under an older signals version), or whose sender has new evidence since (a reply, a decision).
- * `all` re-judges everything in the window (the on-demand run).
+ * `all` re-judges everything in the window (the on-demand run). `withPending` adds candidates no
+ * model has read yet (rescue signal reflex: 'pending'), when a model is available.
  */
-async function rescueCandidates(userId, cfg, { limit = 100, all = false } = {}) {
+async function rescueCandidates(userId, cfg, { limit = 100, all = false, withPending = false } = {}) {
   const { rows } = await query(
     `SELECT ${MESSAGE_COLUMNS}, ${EXTRA_COLUMNS}
        FROM messages m
@@ -980,13 +1279,14 @@ async function rescueCandidates(userId, cfg, { limit = 100, all = false } = {}) 
         AND (s.message_id IS NULL OR (s.layer <> 'user' AND (
               $4::boolean
            OR NOT (COALESCE(s.signals, '[]'::jsonb) @> $5::jsonb)
+           OR ($6::boolean AND COALESCE(s.signals, '[]'::jsonb) @> '[{"name":"rescue","reflex":"pending"}]'::jsonb)
            OR (s.spam <> 'rescued' AND (
                 EXISTS (SELECT 1 FROM hedwig_sender_stats st WHERE st.user_id = $1 AND st.sender_email = lower(m.from_email) AND st.last_replied > s.decided_at)
              OR EXISTS (SELECT 1 FROM hedwig_senders hs WHERE hs.user_id = $1 AND hs.undone_at IS NULL AND hs.decision <> 'block'
                           AND hs.scope = 'address' AND hs.key = lower(m.from_email) AND hs.decided_at > s.decided_at))))))
       ORDER BY (s.message_id IS NULL) DESC, m.date DESC NULLS LAST
       LIMIT $3`,
-    [userId, cfg['spam.suspectedDays'], limit, Boolean(all), JSON.stringify([{ name: 'rescue', v: SPAM_SIGNALS_VERSION }])],
+    [userId, cfg['spam.suspectedDays'], limit, Boolean(all), JSON.stringify([{ name: 'rescue', v: SPAM_SIGNALS_VERSION }]), Boolean(withPending)],
   );
   return decorate(rows);
 }
@@ -1005,7 +1305,8 @@ export async function rescueSweep({ userIds = null, limit = 100, all = false, re
     if (!cfg.enabled || !cfg['sort.enabled']) continue;
     out.users++;
     try {
-      const rows = await rescueCandidates(userId, cfg, { limit, all });
+      const withPending = await llmAvailable(userId).catch(() => false);
+      const rows = await rescueCandidates(userId, cfg, { limit, all, withPending });
       const res = await rescueRows(userId, rows, cfg);
       out.scanned += res.checked;
       out.rescued += res.rescued;

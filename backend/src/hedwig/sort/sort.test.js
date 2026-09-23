@@ -29,7 +29,7 @@ const { SCHEMA } = await import('../config.js');
 const DEFAULTS = Object.fromEntries(SCHEMA.map((f) => [f.key, f.default]));
 function resetConfig(over = {}) {
   cfg = {
-    ...DEFAULTS, 'llm.baseUrl': gw.baseUrl, 'llm.catalogUrl': gw.catalogUrl, 'llm.models.fast': GEMMA, 'llm.models.long': QWEN,
+    ...DEFAULTS, 'llm.baseUrl': gw.baseUrl, 'llm.catalogUrl': gw.catalogUrl, 'llm.probe.enabled': false, 'llm.models.fast': GEMMA, 'llm.models.long': QWEN,
     'llm.fallbackModel': '', 'llm.timeoutMs': 5000, ...over,
   };
 }
@@ -43,6 +43,7 @@ const bundles = await import('./bundles.js');
 const classifier = await import('./classifier.js');
 const engine = await import('./engine.js');
 const senders = await import('./senders.js');
+const { SORT_ENGINE_VERSION, engineStamp } = await import('./version.js');
 const { train } = await import('../triage/model.js');
 const { _resetPrompts } = await import('../prompts/index.js');
 const { _resetLlmState } = await import('../llm.js');
@@ -399,6 +400,18 @@ describe('Reflex through the prompt registry (mock gateway)', () => {
     expect(out.get('A')).toMatchObject({ stream: 'records', layer: 'reflex' });
     expect(out.get('A').provenance).toMatchObject({ tier: 'reflex', model: GEMMA });
   });
+
+  it('does not escalate while Tier 2 is degraded: the fallback would be the same Reflex model again', async () => {
+    resetConfig({ 'llm.fallbackModel': GEMMA, 'llm.probe.enabled': true, 'llm.probe.timeoutMs': 100 });
+    gw.health(QWEN, 'hang');
+    const { probeModels } = await import('../llm.js');
+    await probeModels();
+    gw.on('sort.reflex', { items: [{ id: 'm1', stream: 'reading', bundle: '', needs_you: false, needs_you_reason: '', spam: 'clean', confidence: 0.4, reason: 'Not sure', matches: [] }] });
+    const items = [reflex.reflexItem(msg(), { newText: 'Statement ready' }, { index: 0, userAddresses: ME, cfg })];
+    const out = await reflex.runReflex(USER, { items, messageIds: ['A'], user: { name: 'Me', addresses: ME }, bundles: [], rules: [], corrections: [] }, cfg);
+    expect(gw.callsFor('sort.reflex').map((c) => c.model)).toEqual([GEMMA]);
+    expect(out.get('A')).toMatchObject({ stream: 'reading', layer: 'reflex', confidence: 0.4 });
+  });
 });
 
 // ── Body wait (timed from when Hedwig first saw the message) ────────────────
@@ -459,9 +472,10 @@ function ctxFor(over = {}) {
 describe('screener proposals', () => {
   it('holds recent mail from an undecided sender with a proposal and a reason', () => {
     const d = engine.decideCheap(msg({ from_email: 'news@letters.example', is_bulk: true, list_unsubscribe: '<mailto:u@letters.example>', body_text: 'This week: open models.' }), ctxFor());
-    expect(d).toMatchObject({ stream: 'reading', proposed: 'reading', needsScreen: true, layer: 'classifier', final: false });
+    // The list headers settle a newsletter (Tier 0, final); the sender still waits to be screened.
+    expect(d).toMatchObject({ stream: 'reading', proposed: 'reading', bundle: 'updates', needsScreen: true, layer: 'rule', final: true, listRule: true });
     expect(d.screenKey).toEqual({ key: 'news@letters.example', scope: 'address' });
-    expect(d.reason).toBe('A newsletter or mailing list');
+    expect(d.reason).toBe('A newsletter or mailing list (List-Unsubscribe header)');
   });
 
   it('does not hold decided senders, replies to own threads, or old mail', () => {
@@ -593,7 +607,9 @@ describe('classifier heads', () => {
     const mk = (tag) => ({ [`s:${tag}`]: 1 });
     const data = [...Array(20)].flatMap(() => [{ f: mk('friend'), y: 'people' }, { f: mk('news'), y: 'reading' }, { f: mk('shop'), y: 'records' }]);
     const heads = {};
-    for (const h of classifier.STREAM_HEADS) heads[h] = { model: train(data.map((d) => ({ features: d.f, label: d.y === h ? 1 : 0 }))), samples: data.length };
+    for (const h of classifier.STREAM_HEADS) {
+      heads[h] = { model: train(data.map((d) => ({ features: d.f, label: d.y === h ? 1 : 0 }))), samples: data.length, metrics: { engine: SORT_ENGINE_VERSION, positives: 20, negatives: 40 } };
+    }
     expect(classifier.headsActive(heads, 40)).toBe(true);
     const p = classifier.predictHeads(heads, mk('news'));
     expect(p.stream).toBe('reading');
@@ -642,6 +658,366 @@ describe('why', () => {
       expect(out).toMatchObject({ senderKey: 'weekly.example.org', senderScope: 'list', senderDecision: { scope: 'list', decision: 'reading' } });
       db.handler = (sql) => (/FROM hedwig_sort s LEFT JOIN hedwig_rules/.test(sql) ? { rows: [{ message_id: MID, layer: 'reflex', signals: [], sender_key: null, sender_scope: null }] } : null);
       expect(await service.why(USER, MID)).toMatchObject({ senderKey: null, senderScope: null, senderDecision: null });
+    } finally {
+      db.handler = null;
+    }
+  });
+});
+
+// ── v2 sort audit (2026-09-24): production findings as tests ────────────────
+
+/** A small stateful fake of the tables the engine touches, for whole-path tests. */
+function auditDb({ rows = [], sorts = {}, decisions = [], jobs = [], state = {} } = {}) {
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const sort = new Map(Object.entries(sorts));
+  const st = new Map(Object.entries(state));
+  const enqueued = [];
+  const upserts = [];
+  db.handler = (sql, params) => {
+    if (/SELECT NOW\(\) AS now/.test(sql)) return { rows: [{ now: new Date() }] };
+    if (/SELECT value FROM hedwig_state WHERE key/.test(sql)) return { rows: st.has(params[0]) ? [{ value: st.get(params[0]) }] : [] };
+    if (/INSERT INTO hedwig_state/.test(sql)) { st.set(params[0], JSON.parse(params[1])); return { rows: [], rowCount: 1 }; }
+    if (/lower\(a\.email_address\) AS email/.test(sql)) return { rows: [{ user_id: USER, email: 'me@example.com' }] };
+    if (/WHERE m\.id = ANY\(\$1::uuid\[\]\) AND a\.user_id = \$2 AND NOT m\.is_deleted/.test(sql)) return { rows: params[0].map((id) => byId.get(id)).filter(Boolean).map((r) => ({ ...r })) };
+    if (/SELECT message_id, layer, stream, spam, pending FROM hedwig_sort/.test(sql)) return { rows: params[1].filter((id) => sort.has(id)).map((id) => ({ message_id: id, ...sort.get(id) })) };
+    if (/JOIN UNNEST\(\$2::text\[\], \$3::text\[\]\)/.test(sql)) return { rows: decisions };
+    if (/COUNT\(\*\)::int AS n FROM hedwig_bundles/.test(sql)) return { rows: [{ n: 99 }] };
+    if (/FROM hedwig_bundles WHERE user_id/.test(sql) && /ORDER BY/.test(sql)) return { rows: bundles.DEFAULT_BUNDLES.map((b, i) => ({ ...b, id: i + 1, enabled: true, builtin: true, position: i })) };
+    if (/SELECT DISTINCT user_id FROM email_accounts WHERE enabled/.test(sql)) return { rows: [{ user_id: USER }] };
+    if (/INSERT INTO hedwig_senders/.test(sql)) return { rows: [{ id: 1, key: params[1], scope: params[2], decision: params[3], source: params[4], confidence: params[5], reason: params[6] }] };
+    if (/INSERT INTO hedwig_sort_log/.test(sql)) return { rows: [{ id: 1 }] };
+    if (/INSERT INTO hedwig_jobs/.test(sql)) { enqueued.push({ kind: params[0], payload: JSON.parse(params[1]), userId: params[2], dedupeKey: params[3], priority: params[5] }); return { rows: [{ id: enqueued.length }] }; }
+    if (/INSERT INTO hedwig_sort\b/.test(sql)) {
+      const row = { layer: params[12], stream: params[3], bundle: params[5], needs_you: params[7], needs_you_reason: params[8], spam: params[9], reason: params[13], signals: JSON.parse(params[14]), pending: params[24], prompt_id: params[25], prompt_version: params[26], model: params[27], engine_version: params[30] };
+      sort.set(params[0], row);
+      upserts.push({ id: params[0], ...row });
+      return { rows: [{ message_id: params[0], stream: params[3] }] };
+    }
+    if (/SELECT payload FROM hedwig_jobs WHERE kind = 'sort.reflex'/.test(sql)) return { rows: jobs.filter((j) => j.status === 'failed').map((j) => ({ payload: j.payload })) };
+    if (/SELECT 1 FROM hedwig_jobs WHERE kind = 'sort.resort'/.test(sql)) return { rows: enqueued.some((j) => j.kind === 'sort.resort' && !j.finished) ? [{ one: 1 }] : [] };
+    return null;
+  };
+  return { sort, state: st, enqueued, upserts };
+}
+
+const THE_KEN = '00000000-0000-4000-8000-00000000a001';
+function theKen(over = {}) {
+  // Production, 2026-09-23 02:47 UTC: The Ken's daily newsletter in INBOX, with List-Unsubscribe,
+  // from an address the user once wrote to (an imported "You have written to them" decision).
+  return msg({
+    id: THE_KEN, from_name: 'The Ken', from_email: 'info@the-ken.com', subject: 'Rakesh Biyani takes the fight to Zudio years after Future Group',
+    is_bulk: true, category: 'newsletter', list_unsubscribe: '<https://the-ken.com/unsubscribe?u=1>, <mailto:unsubscribe@the-ken.com>',
+    body_text: 'Hi Prakhar,\n\nGood morning. Rakesh Biyani is back, and this time he wants to beat Zudio at its own game. Here is why…',
+    ...over,
+  });
+}
+const IMPORTED = { key: 'info@the-ken.com', scope: 'address', decision: 'people', source: 'import', confidence: 0.95, reason: 'You have written to them' };
+
+describe('v2 sort audit: newsletters and lists', () => {
+  it('sorts The Ken to Reading by the headers layer, although you once wrote to them and it greets you by name', () => {
+    const d = engine.decideCheap(theKen(), ctxFor({ decisions: new Map([['address|info@the-ken.com', IMPORTED]]) }));
+    expect(d).toMatchObject({ stream: 'reading', layer: 'rule', final: true, listRule: true, needsScreen: false, bundle: 'updates' });
+    expect(d.reason).toBe('A newsletter or mailing list (List-Unsubscribe header)');
+    expect(d.signals.map((s) => s.name)).toEqual(expect.arrayContaining(['listRule', 'alwaysIn']));
+    expect(engine.headerSettled(d)).toBe(true);
+  });
+
+  it('lets the user put a list in People, and keeps replies in your own thread in People', () => {
+    const mine = { ...IMPORTED, source: 'user', confidence: 1 };
+    expect(engine.decideCheap(theKen(), ctxFor({ decisions: new Map([['address|info@the-ken.com', mine]]) }))).toMatchObject({ stream: 'people', layer: 'rule', reason: 'You put this sender in People' });
+    const reply = engine.decideCheap(theKen(), ctxFor({ threads: new Map([[THE_KEN, { replyToOwn: true }]]) }));
+    expect(reply).toMatchObject({ stream: 'people', reason: 'A reply in a thread you wrote in' });
+  });
+
+  it('gives transactional list mail a Reading/Records floor and lets Reflex choose, never People', () => {
+    // You reply to this sender a lot (the prior would say People), but it is a list notice.
+    const row = msg({ from_email: 'orders@shop.example', subject: 'Your order has shipped', is_bulk: true, list_unsubscribe: '<mailto:u@shop.example>' });
+    const ctx = ctxFor({ stats: new Map([['orders@shop.example', { received: 10, replied: 6 }]]) });
+    const d = engine.decideCheap(row, ctx);
+    expect(d).toMatchObject({ stream: 'records', final: false, listRule: false, listFloor: 'records' });
+    engine.mergeReflex(d, { stream: 'people', bundle: null, needsYou: false, spam: 'clean', confidence: 0.8, reason: 'Hi Me, a note from your shop', layer: 'reflex', matches: [] }, { bundles: ctx.bundles });
+    expect(d).toMatchObject({ stream: 'records', layer: 'reflex', bundle: 'deliveries' });
+    expect(d.reason).toMatch(/Sent to a list/);
+    expect(d.signals.map((s) => s.name)).toContain('listFloor');
+  });
+
+  it('an imported "People" decision opens the Screener door but does not choose the stream', () => {
+    const row = msg({ from_name: 'Amazon.in', from_email: 'shipment-tracking@amazon.in', subject: 'Shipped: your parcel', body_text: 'Your package is on its way.' });
+    const contact = { key: 'shipment-tracking@amazon.in', scope: 'address', decision: 'people', source: 'import', confidence: 0.95, reason: 'In your contacts' };
+    const d = engine.decideCheap(row, ctxFor({ decisions: new Map([['address|shipment-tracking@amazon.in', contact]]) }));
+    // Production put all 19 of these in People (layer rule, final). Now Tier 0 is unsure and Reflex reads it.
+    expect(d).toMatchObject({ layer: 'classifier', final: false, needsScreen: false });
+    expect(d.reason).not.toBe('In your contacts');
+    expect(d.signals[0]).toMatchObject({ name: 'alwaysIn', label: 'In your contacts' });
+    expect(senders.gateOnly(contact)).toBe(true);
+    expect(senders.gateOnly({ ...contact, source: 'user' })).toBe(false);
+    expect(senders.gateOnly({ ...contact, decision: 'records', source: 'auto' })).toBe(false);
+  });
+
+  it('the Reflex prompt says a personal greeting on list mail is a mail-merge', () => {
+    expect(reflexPrompt.system).toMatch(/personal greeting is a mail-merge/);
+    expect(reflexPrompt.version).toBe('2026-09-24.1');
+  });
+});
+
+describe('v2 sort audit: Tier 1 coverage', () => {
+  beforeEach(() => {
+    gw.reset().install();
+    _resetPrompts();
+    _resetLlmState();
+  });
+  const PERSON = '00000000-0000-4000-8000-00000000b001';
+  const person = () => msg({ id: PERSON, from_email: 'new.person@elsewhere.example', subject: 'Contract', body_text: 'Attached is the contract.', date: new Date(Date.now() - 86400_000) });
+
+  it('a full lane leaves the row waiting for Reflex and the ledger defers the job without spending an attempt', async () => {
+    const { acquireLane, _resetLanes } = await import('../prompts/lanes.js');
+    const jobs = await import('../jobs.js');
+    _resetLanes();
+    resetConfig({ 'llm.lanes.background.concurrency': 1, 'llm.lanes.background.waitMs': 30 });
+    gw.on('sort.reflex', { items: [] });
+    const fake = auditDb({ rows: [person()], sorts: { [PERSON]: { layer: 'classifier', stream: 'people', spam: 'clean', pending: 'reflex' } } });
+    const release = await acquireLane('background', { limit: 1, leaseMs: 60_000, maxWaitMs: 1000 });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await expect(engine.runReflexJob({ messageIds: [PERSON] }, { user_id: USER })).rejects.toMatchObject({ code: 'lane_busy' });
+      expect(fake.upserts).toHaveLength(0); // nothing overwrote pending = 'reflex'
+      jobs._resetJobs();
+      jobs.defineJob('sort.reflex', (p, j) => engine.runReflexJob(p, j), { timeoutMs: 60_000, needsGateway: true });
+      db.calls.length = 0;
+      await jobs.runJob({ id: 7, kind: 'sort.reflex', payload: { messageIds: [PERSON] }, user_id: USER, attempts: 1, max_attempts: 3 });
+      const deferred = db.calls.find((c) => /attempts = GREATEST\(attempts - 1, 0\)/.test(c.sql));
+      expect(deferred.params[1]).toMatch(/^deferred: the background model lane stayed full/);
+      expect(db.calls.some((c) => /failed_at = NOW\(\)/.test(c.sql))).toBe(false);
+    } finally {
+      release();
+      warn.mockRestore();
+      jobs._resetJobs();
+      _resetLanes();
+    }
+  });
+
+  it('keeps a message the model did not answer pending for the sweep, and reports the job partial', async () => {
+    gw.on('sort.reflex', { items: [] });
+    const fake = auditDb({ rows: [person()], sorts: { [PERSON]: { layer: 'classifier', stream: 'people', spam: 'clean', pending: 'reflex' } } });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const res = await engine.runReflexJob({ messageIds: [PERSON] }, { user_id: USER });
+      expect(res).toMatchObject({ status: 'partial', missing: 1, sorted: 0 });
+      expect(fake.sort.get(PERSON)).toMatchObject({ pending: 'reflex', layer: 'classifier' });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('stores the Reflex answer with its provenance, the engine stamp and a needs-you reason', async () => {
+    gw.on('sort.reflex', { items: [{ id: 'm1', stream: 'people', bundle: '', needs_you: true, needs_you_reason: '', spam: 'clean', confidence: 0.9, reason: 'A person writing to you', matches: [] }] });
+    const fake = auditDb({ rows: [person()], sorts: { [PERSON]: { layer: 'classifier', stream: 'people', spam: 'clean', pending: 'reflex' } } });
+    await engine.runReflexJob({ messageIds: [PERSON] }, { user_id: USER });
+    expect(fake.sort.get(PERSON)).toMatchObject({
+      layer: 'reflex', stream: 'people', pending: null, prompt_id: 'sort.reflex', prompt_version: reflexPrompt.version, model: GEMMA,
+      engine_version: engineStamp(), needs_you: true, reason: 'A person writing to you',
+    });
+    expect(fake.sort.get(PERSON).needs_you_reason).toBe('Alex may need something from you');
+  });
+
+  it('does not ask the model about a newsletter the headers settled, even when a job lists it', async () => {
+    gw.on('sort.reflex', { items: [] });
+    const fake = auditDb({ rows: [theKen()], sorts: { [THE_KEN]: { layer: 'rule', stream: 'people', spam: 'clean', pending: 'reflex' } }, decisions: [IMPORTED] });
+    await engine.runReflexJob({ messageIds: [THE_KEN] }, { user_id: USER });
+    expect(gw.callsFor('sort.reflex')).toHaveLength(0);
+    expect(fake.sort.get(THE_KEN)).toMatchObject({ stream: 'reading', layer: 'rule', pending: null, engine_version: engineStamp() });
+  });
+
+  it('reflexPayloads: waiting rows with no live job, failed batches kept together, and a daily try cap', async () => {
+    const [A, B, C, D] = ['a1', 'b1', 'c1', 'd1'].map((x) => `00000000-0000-4000-8000-0000000${x.padStart(5, '0')}`);
+    db.handler = (sql) => {
+      if (/s\.pending = 'reflex'/.test(sql) && /NOT EXISTS/.test(sql)) return { rows: [{ message_id: A, tries: 0 }, { message_id: B, tries: 1 }, { message_id: C, tries: 0 }, { message_id: D, tries: 5 }] };
+      if (/SELECT payload FROM hedwig_jobs WHERE kind = 'sort.reflex'/.test(sql)) return { rows: [{ payload: { messageIds: [B, 'gone', C] } }] };
+      return null;
+    };
+    resetConfig({ 'sort.batchSize': 5 });
+    expect(await engine.reflexPayloads(USER, cfg)).toEqual([{ messageIds: [B, C] }, { messageIds: [A, D] }]);
+    expect(await engine.reflexPayloads(USER, cfg, { tryCap: 3 })).toEqual([{ messageIds: [B, C] }, { messageIds: [A] }]);
+    const sql = db.calls.find((c) => /s\.pending = 'reflex'/.test(c.sql)).sql;
+    expect(sql).toMatch(/j\.done_at IS NULL AND j\.failed_at IS NULL/); // live jobs cover their rows
+    expect(sql).toMatch(/make_interval\(days => \$2::int\)/); // within sort.reflexMaxAgeDays
+    expect(sql).toMatch(/s\.layer <> 'user'/);
+  });
+
+  it('the Reflex sweep re-sorts unsure classifier rows with Reflex allowed and re-enqueues orphaned waits', async () => {
+    const ORPHAN = '00000000-0000-4000-8000-00000000c001';
+    const fake = auditDb({ rows: [person()], sorts: { [PERSON]: { layer: 'classifier', stream: 'people', spam: 'clean', pending: null } } });
+    const base = db.handler;
+    db.handler = (sql, params) => {
+      if (/s\.pending IS NULL AND s\.layer IN \('classifier','rule'\)/.test(sql)) return { rows: [{ message_id: PERSON }] };
+      if (/s\.pending = 'reflex'/.test(sql) && /NOT EXISTS/.test(sql)) return { rows: [{ message_id: ORPHAN, tries: 0 }] };
+      return base(sql, params);
+    };
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const res = await engine.reflexSweep({ userIds: [USER] });
+      expect(res).toMatchObject({ users: 1, adopted: 1 });
+      expect(fake.sort.get(PERSON)).toMatchObject({ pending: 'reflex' });
+      const kinds = fake.enqueued.filter((j) => j.kind === 'sort.reflex').map((j) => j.payload.messageIds);
+      expect(kinds).toEqual(expect.arrayContaining([[PERSON], [ORPHAN]]));
+    } finally {
+      log.mockRestore();
+    }
+    // No model: nothing is adopted or enqueued.
+    resetConfig({ 'llm.baseUrl': '' });
+    fake.enqueued.length = 0;
+    expect(await engine.reflexSweep({ userIds: [USER] })).toMatchObject({ users: 0, enqueued: 0 });
+  });
+
+  it('pendingSweep no longer drops Reflex waits after 6 h: only mail past sort.reflexMaxAgeDays stops waiting', async () => {
+    auditDb();
+    await engine.pendingSweep();
+    const sqls = db.calls.map((c) => c.sql);
+    expect(sqls.some((s) => /INTERVAL '6 hours'/.test(s))).toBe(false);
+    const expire = db.calls.find((c) => /SET pending = NULL FROM messages m/.test(c.sql));
+    expect(expire.sql).toMatch(/s\.pending = 'reflex' AND \(m\.date IS NULL OR m\.date < NOW\(\) - make_interval\(days => \$1::int\)\)/);
+    expect(expire.params).toEqual([14]);
+  });
+
+  it('registers the Reflex and engine schedules, and the ledger rebuild matches the sweep', async () => {
+    const { definedSchedules, _resetSchedules } = await import('../schedule.js');
+    const { jobKinds, _resetJobs } = await import('../jobs.js');
+    _resetSchedules();
+    _resetJobs();
+    const sortModule = (await import('./index.js')).default;
+    sortModule.worker();
+    expect(definedSchedules().map((s) => s.name)).toEqual(expect.arrayContaining(['sort.reflexSweep', 'sort.engine', 'sort.pending']));
+    expect(jobKinds().find((j) => j.kind === 'sort.reflex')).toMatchObject({ rebuild: true, needsGateway: true });
+    _resetSchedules();
+    _resetJobs();
+  });
+});
+
+describe('v2 sort audit: engine version', () => {
+  it('enqueues one engine re-sort per user when the stamp changes, and not again', async () => {
+    const fake = auditDb({ state: { 'sort.engineVersion': { version: 'old' } } });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      expect(await engine.ensureSortEngineCurrent()).toEqual({ version: engineStamp(), enqueued: 1 });
+      expect(fake.enqueued).toEqual([expect.objectContaining({ kind: 'sort.resort', userId: USER, payload: { engine: engineStamp(), allowReflex: true, sinceDays: null } })]);
+      expect(fake.state.get('sort.engineVersion')).toMatchObject({ version: engineStamp(), previous: 'old' });
+      expect(await engine.ensureSortEngineCurrent()).toBeNull();
+      expect(fake.enqueued).toHaveLength(1);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('resumes a re-sort that stopped short (its page failed for good) from the saved cursor, a few times at most', async () => {
+    const cursor = { date: '2026-01-01 00:00:00+00', id: THE_KEN };
+    const fake = auditDb({ state: {
+      'sort.engineVersion': { version: engineStamp() },
+      [`sort.engineVersion:${USER}`]: { version: engineStamp(), checked: 400, cursor },
+    } });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(await engine.ensureSortEngineCurrent()).toEqual({ version: engineStamp(), enqueued: 0, resumed: 1 });
+      expect(fake.enqueued).toEqual([expect.objectContaining({ kind: 'sort.resort', payload: { engine: engineStamp(), allowReflex: true, sinceDays: null, cursor } })]);
+      // While that job is pending nothing more is queued.
+      expect(await engine.ensureSortEngineCurrent()).toBeNull();
+      // It fails too; after RESORT_RESUMES tries it gives up.
+      for (let i = 0; i < 10; i++) {
+        fake.enqueued.forEach((j) => { j.finished = true; });
+        await engine.ensureSortEngineCurrent();
+      }
+      expect(fake.enqueued).toHaveLength(5);
+      // A finished re-sort is left alone.
+      fake.state.set(`sort.engineVersion:${USER}`, { version: engineStamp(), doneAt: new Date().toISOString() });
+      expect(await engine.ensureSortEngineCurrent()).toBeNull();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('the engine re-sort pages through rows stamped with another engine, newest first, with Reflex allowed', async () => {
+    const fake = auditDb({ rows: [theKen()], sorts: { [THE_KEN]: { layer: 'rule', stream: 'people', spam: 'clean', pending: null } }, decisions: [IMPORTED] });
+    const base = db.handler;
+    db.handler = (sql, params) => {
+      if (/s\.engine_version IS DISTINCT FROM \$2/.test(sql)) return { rows: [{ message_id: THE_KEN, d: '2026-09-23 02:47:46+00' }] };
+      return base(sql, params);
+    };
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const res = await engine.runResortJob({ engine: engineStamp(), allowReflex: true, sinceDays: null }, { user_id: USER });
+      expect(res).toMatchObject({ checked: 1, done: true });
+      expect(fake.sort.get(THE_KEN)).toMatchObject({ stream: 'reading', layer: 'rule', engine_version: engineStamp() });
+      expect(fake.state.get(`sort.engineVersion:${USER}`)).toMatchObject({ version: engineStamp(), checked: 1, doneAt: expect.any(String) });
+      const q = db.calls.find((c) => /s\.engine_version IS DISTINCT FROM \$2/.test(c.sql));
+      expect(q.params.slice(1, 3)).toEqual([engineStamp(), null]);
+      expect(q.sql).toMatch(/s\.layer <> 'user'/);
+    } finally {
+      log.mockRestore();
+    }
+  });
+});
+
+describe('v2 sort audit: classifier heads and the spam folder', () => {
+  it('does not learn spam from the provider folder alone', () => {
+    expect(classifier.spamLabelOf({ in_spam_folder: true, layer: 'classifier', stream: 'spam', spam: 'suspected' })).toBeNull();
+    expect(classifier.spamLabelOf({ in_spam_folder: true, layer: 'reflex', stream: 'spam', spam: 'suspected' })).toBe(1);
+    expect(classifier.spamLabelOf({ in_spam_folder: true, layer: 'classifier', stream: 'spam', spam: 'phishing' })).toBe(1);
+    expect(classifier.spamLabelOf({ in_spam_folder: true, layer: 'classifier', stream: 'people', spam: 'rescued' })).toBe(0);
+    const samples = classifier.samplesFromDecisions([
+      { features: { 'sx:list': 1 }, stream: 'spam', layer: 'classifier', spam: 'suspected', in_spam_folder: true },
+      { features: { 'sx:list': 1 }, stream: 'reading', layer: 'rule', spam: 'clean', in_spam_folder: false },
+    ]);
+    expect(samples.spam.map((s) => s.label)).toEqual([0]);
+  });
+
+  it('ignores heads from another engine or with too few examples of a stream', () => {
+    const model = train([{ features: { a: 1 }, label: 1 }, { features: { b: 1 }, label: 0 }]);
+    const ok = { model, samples: 460, metrics: { engine: SORT_ENGINE_VERSION, positives: 40, negatives: 420 } };
+    const heads = { people: ok, reading: ok, records: ok };
+    expect(classifier.headsActive(heads, 40)).toBe(true);
+    // Production's heads: trained before this engine, Reading on 2 examples out of 460.
+    expect(classifier.headsActive({ ...heads, reading: { ...ok, metrics: { positives: 2, negatives: 458 } } }, 40)).toBe(false);
+    expect(classifier.headsActive({ ...heads, reading: { ...ok, metrics: { ...ok.metrics, positives: 2 } } }, 40)).toBe(false);
+    expect(classifier.headsStale({ people: { metrics: { engine: 'old' } } })).toBe(true);
+  });
+
+  it('trains on user and model labels, and on rule rows only from this engine', async () => {
+    db.handler = () => ({ rows: [] });
+    await classifier.trainHeads(USER);
+    const q = db.calls.find((c) => /FROM hedwig_sort\s+WHERE user_id = \$1 AND features IS NOT NULL/.test(c.sql));
+    expect(q.sql).toMatch(/layer = 'rule' AND engine_version = \$2/);
+    expect(q.sql).toMatch(/in_spam_folder/);
+    expect(q.params).toEqual([USER, engineStamp()]);
+  });
+});
+
+describe('streamList: work Needs You (seam with work/)', () => {
+  it('needsYou=1 also lists threads with an open work reason (reply overdue, deadline) and marks them', async () => {
+    const service = await import('./service.js');
+    const A = '00000000-0000-4000-8000-00000000e001';
+    const B = '00000000-0000-4000-8000-00000000e002';
+    const base = { from_name: 'Priya', from_email: 'priya@example.org', subject: 'Hi', snippet: '', date: new Date(), is_read: false, reason: 'A person writing to you', bundle: null, spam: 'clean', layer: 'reflex', confidence: 0.9, held: false, labels: [] };
+    db.handler = (sql) => {
+      if (/WITH latest AS/.test(sql)) {
+        return { rows: [
+          { ...base, id: A, account_id: 'acc', thread_key: 'tA', needs_you: true, needs_you_reason: 'Priya asks you to sign' },
+          { ...base, id: B, account_id: 'acc', thread_key: 'tB', needs_you: false, needs_you_reason: null },
+        ] };
+      }
+      if (/FROM hedwig_work_needs\s+WHERE user_id = \$1 AND resolved_at IS NULL/.test(sql)) return { rows: [{ thread_key: 'tB', kind: 'reply_overdue', reason: 'Waiting 3 days for your reply', due_at: null }] };
+      return null;
+    };
+    try {
+      const out = await service.streamList(USER, 'people', { needsYou: true, limit: 10 });
+      const list = db.calls.find((c) => /WITH latest AS/.test(c.sql)).sql;
+      expect(list).toContain('(s.needs_you OR EXISTS (SELECT 1 FROM hedwig_work_needs wn WHERE wn.user_id = s.user_id AND wn.thread_key = m.thread_key AND wn.resolved_at IS NULL))');
+      expect(out.items.find((i) => i.messageId === A)).toMatchObject({ needsYou: true, reason: 'Priya asks you to sign' });
+      expect(out.items.find((i) => i.messageId === B)).toMatchObject({ needsYou: true, reason: 'Waiting 3 days for your reply', workNeeds: { kind: 'reply_overdue' } });
+
+      // Without needsYou=1 the filter is not applied and the sort decision is shown as stored.
+      db.calls.length = 0;
+      const all = await service.streamList(USER, 'people', { limit: 10 });
+      expect(db.calls.find((c) => /WITH latest AS/.test(c.sql)).sql).not.toContain('s.needs_you OR');
+      expect(all.items.find((i) => i.messageId === B)).toMatchObject({ needsYou: false, workNeeds: { kind: 'reply_overdue' } });
     } finally {
       db.handler = null;
     }

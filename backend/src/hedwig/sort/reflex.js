@@ -2,7 +2,7 @@
 // confidence or suspected phishing. Input assembly and output normalisation are pure and exported
 // for tests; runReflex() makes the calls through sort/deps.js.
 import { addressesOf } from '../text.js';
-import { runSortPrompt } from './deps.js';
+import { runSortPrompt, sortEscalationUseful } from './deps.js';
 import { profileLines } from '../profile/lines.js';
 
 const STREAM_SYNONYMS = {
@@ -191,8 +191,9 @@ export async function runReflex(userId, batch, cfg) {
     const vars = buildReflexVars({ ...batch, profile, items: subset });
     const { data, provenance } = await runSortPrompt('sort.reflex', vars, { userId, lane: 'background', escalate });
     // The tier that actually answered: runPrompt's last retry runs on the other tier, so an
-    // escalated call can end on Reflex and a Reflex call on the reasoning model.
-    const tier = provenance?.tier || (escalate ? 'reasoning' : 'reflex');
+    // escalated call can end on Reflex and a Reflex call on the reasoning model; and a Tier 2 call
+    // answered by the fallback (Tier 2 degraded) is the Reflex model's answer (servedTier).
+    const tier = provenance?.servedTier || provenance?.tier || (escalate ? 'reasoning' : 'reflex');
     const layer = tier === 'reasoning' ? 'reasoning' : 'reflex';
     const norm = normaliseReflex(data, subset.map((s) => s.id), batch.bundles || [], ruleIds);
     for (const [id, r] of norm.results) out.set(idToMessage.get(id), { ...r, layer, provenance: provenance || null });
@@ -203,6 +204,9 @@ export async function runReflex(userId, batch, cfg) {
     const r = out.get(idToMessage.get(it.id));
     return first.missing.includes(it.id) || (r && r.layer === 'reflex' && needsEscalation(r, cfg));
   });
+  // While Tier 2 is degraded its calls go to the fallback, the Reflex model that just answered:
+  // escalating would ask it the same question again. Keep the Reflex answers.
+  if (unsure.length && !await sortEscalationUseful(userId)) return out;
   if (unsure.length) {
     try {
       await call(unsure, true);

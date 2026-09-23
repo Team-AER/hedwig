@@ -17,7 +17,7 @@ import { getState } from '../state.js';
 import { SPAM_SIGNALS_VERSION } from './spam.js';
 import { listBundles, createBundle, updateBundle, loadBundles } from './bundles.js';
 import { cleanReason } from './reflex.js';
-import { peopleFilterSql, withWorkRows } from '../work/lists.js';
+import { peopleFilterSql, withWorkRows, workNeedsYouSql } from '../work/index.js';
 
 export const STREAMS = Object.freeze(['people', 'reading', 'records', 'screener', 'spam']);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -68,7 +68,8 @@ export async function streamList(userId, stream, { cursor = null, needsYou = fal
     if (!held) where.push('NOT s.held');
     if (stream === 'people') where.push(peopleFilterSql('m', 's')); // work: Done and snoozed threads leave People
   }
-  if (needsYou) where.push('s.needs_you');
+  // work: a reply overdue or a deadline near (hedwig_work_needs) puts a thread in Needs You too.
+  if (needsYou) where.push(`(s.needs_you OR ${workNeedsYouSql('m', 's')})`);
   if (bundle) { params.push(String(bundle)); where.push(`s.bundle = $${params.length}`); }
   let curSql = '';
   if (cur) {
@@ -115,7 +116,7 @@ export async function streamList(userId, stream, { cursor = null, needsYou = fal
     next: rows.length > n && last ? encodeCursor(last.date, last.id) : null,
   };
   // work: due reminders as rows on the first page, "Back from snooze" reasons.
-  if (stream === 'people') out.items = await withWorkRows(userId, out.items, { first: !cur });
+  if (stream === 'people') out.items = await withWorkRows(userId, out.items, { first: !cur, derivedNeedsYou: Boolean(needsYou) });
   return out;
 }
 
@@ -483,6 +484,10 @@ export async function why(userId, messageId) {
     senderDecision: sd[0] || null,
     decidedAt: s.decided_at,
     bodySeen: s.body_seen,
+    // Provenance for decisions no model made: which engine (rules, headers, classifier) decided,
+    // and whether the message still waits for its body or for Reflex.
+    engineVersion: s.engine_version || null,
+    pending: s.pending || null,
   };
 }
 

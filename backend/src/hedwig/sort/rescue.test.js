@@ -31,7 +31,7 @@ const { SCHEMA } = await import('../config.js');
 const DEFAULTS = Object.fromEntries(SCHEMA.map((f) => [f.key, f.default]));
 function resetConfig(over = {}) {
   cfg = {
-    ...DEFAULTS, 'llm.baseUrl': gw.baseUrl, 'llm.catalogUrl': gw.catalogUrl, 'llm.models.fast': GEMMA, 'llm.models.long': QWEN,
+    ...DEFAULTS, 'llm.baseUrl': gw.baseUrl, 'llm.catalogUrl': gw.catalogUrl, 'llm.probe.enabled': false, 'llm.models.fast': GEMMA, 'llm.models.long': QWEN,
     'llm.fallbackModel': '', 'llm.timeoutMs': 5000, ...over,
   };
 }
@@ -199,6 +199,7 @@ function fakeDb({ rows = [], stats = {}, sorts = {}, sentTo = {}, threads = {}, 
   const sort = new Map(Object.entries(sorts));
   const jobs = [];
   const logs = [];
+  const screened = [];
   const byId = new Map(rows.map((r) => [r.id, r]));
   db.handler = (sql, params) => {
     if (/SELECT value FROM hedwig_state WHERE key/.test(sql)) return { rows: state.has(params[0]) ? [{ value: state.get(params[0]) }] : [] };
@@ -221,9 +222,11 @@ function fakeDb({ rows = [], stats = {}, sorts = {}, sentTo = {}, threads = {}, 
     }
     if (/INSERT INTO hedwig_jobs/.test(sql)) { jobs.push({ kind: params[0], payload: JSON.parse(params[1]), userId: params[2], dedupeKey: params[3] }); return { rows: [{ id: jobs.length }] }; }
     if (/SELECT DISTINCT user_id FROM email_accounts WHERE enabled/.test(sql)) return { rows: [{ user_id: USER }] };
+    // Auto-screen (a newsletter the list headers settled is screened into Reading).
+    if (/INSERT INTO hedwig_senders/.test(sql)) { screened.push(params); return { rows: [{ id: screened.length, key: params[1], scope: params[2], decision: params[3], source: params[4], confidence: params[5], reason: params[6] }] }; }
     return null;
   };
-  return { state, sort, jobs, logs };
+  return { state, sort, jobs, logs, screened };
 }
 
 describe('rescue sweep', () => {
@@ -301,6 +304,56 @@ describe('rescue sweep', () => {
     await engine.rescueSweep({ userIds: [USER] });
     expect(gw.callsFor('spam.reflex')).toHaveLength(1);
     expect(fake.sort.get(BORDER)).toMatchObject({ spam: 'rescued', layer: 'reflex' });
+  });
+
+  // v2 sort audit: the provider's folder alone must not keep candidates from the model, and the
+  // model alone must not rescue mail with no evidence.
+  it('asks spam.reflex about weaker candidates too, and needs a very sure "legit" to rescue them', async () => {
+    const WEAK = '00000000-0000-4000-8000-0000000000c6';
+    const NEWS = '00000000-0000-4000-8000-0000000000c7';
+    let conf = 0.9;
+    gw.on('spam.reflex', (req) => ({ items: [...req.text.matchAll(/### (m\d+)/g)].map((m) => ({ id: m[1], verdict: 'legit', confidence: conf, reason: 'A person asking you something' })) }));
+    const rows = [
+      junk({ id: WEAK, from_email: 'sam@b-and-b.example', from_name: 'Sam', subject: 'Arrival', body_text: 'Hi, what time will you arrive on Friday?' }),
+      junk({ id: NEWS, from_email: 'news@deals.example', from_name: 'Deals', subject: 'This week only', is_bulk: true, list_unsubscribe: '<mailto:u@deals.example>', body_text: 'Big savings on everything.', to_addresses: [], spam_details: { authTrusted: true, rulesFired: [] } }),
+    ];
+    let fake = fakeDb({ rows });
+    await engine.rescueSweep({ userIds: [USER] });
+    const calls = gw.callsFor('spam.reflex');
+    expect(calls).toHaveLength(1);
+    expect(calls[0].text).toContain('sam@b-and-b.example');
+    expect(calls[0].text).not.toContain('news@deals.example'); // no sign you know it: the model is not asked
+    expect(fake.sort.get(WEAK)).toMatchObject({ layer: 'reflex', stream: 'spam' }); // 0.9 is not sure enough on 0.25 of evidence
+    expect(fake.sort.get(WEAK).signals[0]).toMatchObject({ name: 'rescue', reflex: 'reflex' });
+    expect(fake.sort.get(NEWS)).toMatchObject({ stream: 'spam', spam: 'suspected' });
+    expect(fake.sort.get(NEWS).signals[0].reflex).toBeUndefined();
+    conf = 0.97;
+    fake = fakeDb({ rows });
+    await engine.rescueSweep({ userIds: [USER] });
+    expect(fake.sort.get(WEAK)).toMatchObject({ spam: 'rescued', layer: 'reflex' });
+  });
+
+  it('marks a candidate no model could read as pending, and the sweep picks it up once a model is there', async () => {
+    const WEAK = '00000000-0000-4000-8000-0000000000c8';
+    const rows = [junk({ id: WEAK, from_email: 'sam@b-and-b.example', from_name: 'Sam', subject: 'Arrival', body_text: 'Hi, what time will you arrive on Friday?' })];
+    resetConfig({ 'llm.baseUrl': '' });
+    let fake = fakeDb({ rows });
+    await engine.rescueSweep({ userIds: [USER] });
+    expect(fake.sort.get(WEAK).signals[0]).toMatchObject({ name: 'rescue', v: spam.SPAM_SIGNALS_VERSION, reflex: 'pending' });
+    const offline = db.calls.find((c) => /make_interval\(days => \$2\)/.test(c.sql) && /hedwig_sort s ON/.test(c.sql));
+    expect(offline.params[5]).toBe(false);
+    expect(offline.sql).toMatch(/"reflex":"pending"/);
+
+    // The model fails (a full lane, a timeout): still pending, not judged.
+    resetConfig();
+    gw.on('spam.reflex', gw.error(500, 'upstream down'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    fake = fakeDb({ rows });
+    db.calls.length = 0;
+    await engine.rescueSweep({ userIds: [USER] });
+    warn.mockRestore();
+    expect(db.calls.find((c) => /make_interval\(days => \$2\)/.test(c.sql) && /hedwig_sort s ON/.test(c.sql)).params[5]).toBe(true);
+    expect(fake.sort.get(WEAK).signals[0]).toMatchObject({ reflex: 'pending' });
   });
 
   it('a spam-folder message re-sorted on another path (body landed, retrain) is judged by rescue, not overwritten', async () => {

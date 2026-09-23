@@ -9,6 +9,7 @@
 // array of "Name: value" lines, e.g. from a future ingest column), those are read first.
 import { addressesOf, domainOf } from '../text.js';
 import { senderKind } from '../triage/signals.js';
+import { RECEIPT_RE } from './spam.js';
 
 const round = (n, p = 3) => Math.round(n * 10 ** p) / 10 ** p;
 
@@ -163,4 +164,31 @@ export function headerLayer(row, { userAddresses = new Set(), replyToOwn = false
     else if (kind === 'person' && direct) prior = { stream: 'people', confidence: 0.6, reason: 'A person writing to you directly' };
   }
   return { keys, headers, auth, own, replyToOwn, list, auto, calendar, spamFolder, kind, hard, prior, signals };
+}
+
+// Subject words that make list mail a record (a receipt, a shipment, a statement, a code) rather
+// than something to read. Only the subject: newsletter bodies talk about orders and banks.
+const TRANSACTIONAL_SUBJECT = /\b(?:receipts?|invoices?|orders?|shipped|dispatched|delivered|out for delivery|tracking|statements?|payments?|refund|booking|reservation|itinerary|boarding pass|e-?tickets?|tickets?|password|verification code|security (?:alert|code)|sign-?in|log-?in|otp|one-time)\b/i;
+
+/**
+ * The header layer's decision for list mail (List-Id, List-Unsubscribe, List-Post, Precedence:
+ * bulk/list): never People unless the user decides otherwise or it answers the user's own thread.
+ * A plain newsletter goes to Reading and is final (no model needed; a personal greeting does not
+ * make it People). List mail that looks transactional or automated (a receipt, a notification, a
+ * calendar or social update) gets a Reading/Records floor, and Reflex picks between the two.
+ * @returns {null|{ stream: 'reading'|'records', bundle: string|null, confidence: number, final: boolean, reason: string }}
+ */
+export function listRule(header, row, text = '') {
+  if (!header?.list || header.own || header.replyToOwn) return null;
+  const category = row?.category || null;
+  const opening = String(text || '').slice(0, 600);
+  const transactional = header.auto || header.calendar || header.kind === 'notification' || category === 'social'
+    || TRANSACTIONAL_SUBJECT.test(String(row?.subject || '')) || RECEIPT_RE.test(opening);
+  const h = header.headers || {};
+  const which = h['list-id'] ? 'List-Id header' : h['list-unsubscribe'] ? 'List-Unsubscribe header' : 'bulk mail headers';
+  if (transactional) {
+    const stream = header.prior?.stream === 'reading' ? 'reading' : 'records';
+    return { stream, bundle: header.prior?.bundle || null, confidence: 0.7, final: false, reason: `Sent to a list, and looks like a notice (${which})` };
+  }
+  return { stream: 'reading', bundle: category === 'promotion' ? 'promotions' : null, confidence: 0.9, final: true, reason: `A newsletter or mailing list (${which})` };
 }
