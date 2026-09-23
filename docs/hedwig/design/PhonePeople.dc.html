@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Hedwig phone, People stream</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&amp;family=Instrument+Sans:wght@400;500;600&amp;family=DM+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0;font-family:'Instrument Sans',system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums}
+a{color:var(--ink);text-decoration:none}a:hover{color:var(--accent-ink)}
+button{font:inherit;cursor:pointer;color:inherit;background:none;border:0;padding:0}
+.sheet{background:var(--glass);backdrop-filter:blur(var(--blur)) saturate(1.4);-webkit-backdrop-filter:blur(var(--blur)) saturate(1.4);border:1px solid var(--edge);box-shadow:0 20px 50px -30px var(--shadow)}
+.serif{font-family:'Instrument Serif',Georgia,serif;font-weight:400}
+.mono{font-family:'DM Mono',monospace}
+.why{font-family:'Instrument Serif',Georgia,serif;font-style:italic;font-size:16px;line-height:1.25}
+.hair{height:1px;background:var(--line);flex-shrink:0}
+.link{font-size:13px;font-weight:500;text-decoration:underline;text-underline-offset:3px;text-decoration-color:var(--line2)}
+.row{display:grid;grid-template-columns:12px minmax(0,1fr) auto;column-gap:10px;padding:14px 4px;align-items:baseline}
+.seg{height:44px;flex:1 1 0;font-size:14px;font-weight:500;color:var(--muted);border-bottom:2px solid transparent}
+.seg.on{color:var(--ink);border-bottom-color:var(--ink)}
+.tab{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;flex:1 1 0;height:52px;font-size:13px;font-weight:500;color:var(--muted)}
+.tab.on{color:var(--ink)}
+.svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0}
+</style>
+</helmet>
+<div style="--blur:{{blurPx}};--accent:{{accent}};--paper:#F4F2EC;--ink:#17181A;--muted:#66696D;--accent-ink:#B24512;--accent-tint:rgba(224,86,26,0.12);--glass:rgba(255,255,255,0.56);--edge:rgba(255,255,255,0.72);--line:rgba(23,24,26,0.09);--line2:rgba(23,24,26,0.18);--tint:rgba(23,24,26,0.045);--shadow:rgba(23,24,26,0.5); width: 390px; height: 844px; box-sizing: border-box; display: flex; flex-direction: column; color: var(--ink); background: var(--paper); position: relative; overflow: hidden;">
+  <div aria-hidden="true" style="position: absolute; width: 420px; height: 320px; right: -160px; top: -120px; border-radius: 50%; background: var(--accent); opacity: 0.24; filter: blur(70px); pointer-events: none;"></div>
+  <div aria-hidden="true" style="position: absolute; width: 420px; height: 420px; left: -180px; bottom: -160px; border-radius: 50%; background: #3B5A8A; opacity: 0.18; filter: blur(80px); pointer-events: none;"></div>
+
+  <header class="sheet" style="position: absolute; top: 0; left: 0; right: 0; padding: 60px 20px 0; border-radius: 0 0 28px 28px; border-top: 0; display: flex; flex-direction: column; gap: 10px; z-index: 2;">
+    <div style="display: flex; align-items: baseline; gap: 10px;">
+      <h1 class="serif" style="margin: 0; font-size: 40px; line-height: 1; letter-spacing: -0.015em;">People</h1>
+      <span style="font-size: 13px; color: var(--muted);">4 need you</span>
+      <span style="flex-grow: 1;"></span>
+      <button aria-label="Search or ask" style="width: 44px; height: 44px; display: flex; align-items: center; justify-content: center;"><svg class="svg" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg></button>
+    </div>
+    <div style="display: flex;" role="tablist">
+      <button class="seg on" role="tab" aria-selected="true">Needs you</button>
+      <button class="seg" role="tab">All</button>
+      <button class="seg" role="tab">Reply Later</button>
+    </div>
+  </header>
+
+  <main style="flex-grow: 1; padding: 186px 16px 96px; display: flex; flex-direction: column; overflow: hidden;">
+    <article class="row" style="border-radius: 14px; background: var(--tint); padding-left: 12px; padding-right: 12px;">
+      <span style="width: 7px; height: 7px; border-radius: 50%; background: var(--accent); align-self: center;"></span>
+      <span style="font-size: 16px; font-weight: 600;">Anna Berg</span>
+      <span class="mono" style="font-size: 11px; color: var(--muted);">09:40</span>
+      <span></span>
+      <span style="font-size: 15px; grid-column: 2 / 4; padding-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Q3 report: can you send the final numbers?</span>
+      <span></span>
+      <span class="why" style="grid-column: 2 / 4; color: var(--accent-ink); padding-top: 4px;">Asked for the report by Friday</span>
+    </article>
+    <article class="row">
+      <span style="width: 7px; height: 7px; border-radius: 50%; background: var(--accent); align-self: center;"></span>
+      <span style="font-size: 16px; font-weight: 600;">Marcus Oduya</span>
+      <span class="mono" style="font-size: 11px; color: var(--muted);">Yest.</span>
+      <span></span>
+      <span style="font-size: 15px; grid-column: 2 / 4; padding-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Lease renewal, two options</span>
+      <span></span>
+      <span class="why" style="grid-column: 2 / 4; color: var(--accent-ink); padding-top: 4px;">Waiting four days · your landlord</span>
+    </article>
+    <div class="hair"></div>
+    <article class="row">
+      <span style="width: 7px; height: 7px; border-radius: 50%; background: var(--accent); align-self: center;"></span>
+      <span style="font-size: 16px; font-weight: 600;">Dr. S. Kaur</span>
+      <span class="mono" style="font-size: 11px; color: var(--muted);">Mon</span>
+      <span></span>
+      <span style="font-size: 15px; grid-column: 2 / 4; padding-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Confirm your appointment on 30 Sep</span>
+      <span></span>
+      <span class="why" style="grid-column: 2 / 4; color: var(--accent-ink); padding-top: 4px;">A yes or no is all they need</span>
+    </article>
+    <div class="hair"></div>
+    <article class="row">
+      <span style="width: 7px; height: 7px; border-radius: 50%; background: var(--accent); align-self: center;"></span>
+      <span style="font-size: 16px; font-weight: 600;">Lena Park</span>
+      <span class="mono" style="font-size: 11px; color: var(--muted);">Mon</span>
+      <span></span>
+      <span style="font-size: 15px; grid-column: 2 / 4; padding-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Photos from Saturday, and one question</span>
+      <span></span>
+      <span class="why" style="grid-column: 2 / 4; color: var(--accent-ink); padding-top: 4px;">Back from snooze</span>
+    </article>
+
+    <span class="why" style="color: var(--muted); padding: 22px 4px 4px;">Today</span>
+    <article class="row">
+      <span></span>
+      <span style="font-size: 16px; font-weight: 500;">Jonas Weber</span>
+      <span class="mono" style="font-size: 11px; color: var(--muted);">11:02</span>
+      <span></span>
+      <span style="font-size: 15px; color: var(--muted); grid-column: 2 / 4; padding-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Re: Weekend plans — sounds good, see you there</span>
+    </article>
+    <div class="hair"></div>
+    <article class="row">
+      <span></span>
+      <span style="font-size: 16px; font-weight: 500;">Priya Raman</span>
+      <span class="mono" style="font-size: 11px; color: var(--muted);">08:15</span>
+      <span></span>
+      <span style="font-size: 15px; color: var(--muted); grid-column: 2 / 4; padding-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Thanks for the intro, I've reached out to Tom</span>
+    </article>
+  </main>
+
+  <nav class="sheet" aria-label="Streams" style="position: absolute; left: 14px; right: 14px; bottom: 18px; padding: 6px 8px; border-radius: 22px; display: flex; z-index: 2;">
+    <button class="tab"><span>Screener</span><span class="mono" style="font-size: 11px; color: var(--accent-ink);">7</span></button>
+    <button class="tab on" aria-current="page"><span style="font-weight: 600;">People</span><span style="width: 5px; height: 5px; border-radius: 50%; background: var(--accent);"></span></button>
+    <button class="tab"><span>Reading</span><span class="mono" style="font-size: 11px;">12</span></button>
+    <button class="tab"><span>Records</span><span class="mono" style="font-size: 11px;">31</span></button>
+    <button class="tab"><span>Brief</span><span class="mono" style="font-size: 11px;">07:00</span></button>
+  </nav>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#E0561A","options":["#E0561A","#2F6F5E","#3B5A8A","#B8336A"]},"blur":{"editor":"range","default":24,"min":0,"max":48,"step":2,"unit":"px"},"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {
+      accent: this.props.accent ?? '#E0561A',
+      blurPx: (this.props.blur ?? 24) + 'px'
+    };
+  }
+}
+</script>
+</body>
+</html>

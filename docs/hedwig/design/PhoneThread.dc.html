@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Hedwig phone, thread with a card</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&amp;family=Instrument+Sans:wght@400;500;600&amp;family=DM+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0;font-family:'Instrument Sans',system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums}
+a{color:var(--ink);text-decoration:none}a:hover{color:var(--accent-ink)}
+button{font:inherit;cursor:pointer;color:inherit;background:none;border:0;padding:0}
+.sheet{background:var(--glass);backdrop-filter:blur(var(--blur)) saturate(1.4);-webkit-backdrop-filter:blur(var(--blur)) saturate(1.4);border:1px solid var(--edge);box-shadow:0 20px 50px -30px var(--shadow)}
+.serif{font-family:'Instrument Serif',Georgia,serif;font-weight:400}
+.mono{font-family:'DM Mono',monospace}
+.why{font-family:'Instrument Serif',Georgia,serif;font-style:italic;font-size:16px;line-height:1.25}
+.hair{height:1px;background:var(--line);flex-shrink:0}
+.btn{display:inline-flex;align-items:center;gap:8px;height:40px;padding:0 14px;border-radius:9px;border:1px solid var(--line2);font-size:13px;font-weight:500;white-space:nowrap}
+.btn.solid{background:var(--ink);color:var(--paper);border-color:transparent}
+.link{font-size:13px;font-weight:500;text-decoration:underline;text-underline-offset:3px;text-decoration-color:var(--line2)}
+.ic{width:44px;height:44px;display:flex;align-items:center;justify-content:center;border-radius:12px}
+.svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0}
+</style>
+</helmet>
+<div style="--blur:{{blurPx}};--accent:{{accent}};--paper:#F4F2EC;--ink:#17181A;--muted:#66696D;--accent-ink:#B24512;--accent-tint:rgba(224,86,26,0.12);--glass:rgba(255,255,255,0.56);--edge:rgba(255,255,255,0.72);--line:rgba(23,24,26,0.09);--line2:rgba(23,24,26,0.18);--tint:rgba(23,24,26,0.045);--shadow:rgba(23,24,26,0.5); width: 390px; height: 844px; box-sizing: border-box; display: flex; flex-direction: column; color: var(--ink); background: var(--paper); position: relative; overflow: hidden;">
+  <div aria-hidden="true" style="position: absolute; width: 420px; height: 320px; right: -160px; top: 80px; border-radius: 50%; background: var(--accent); opacity: 0.2; filter: blur(70px); pointer-events: none;"></div>
+  <div aria-hidden="true" style="position: absolute; width: 420px; height: 420px; left: -180px; bottom: -100px; border-radius: 50%; background: #3B5A8A; opacity: 0.18; filter: blur(80px); pointer-events: none;"></div>
+
+  <header class="sheet" style="position: absolute; top: 0; left: 0; right: 0; padding: 54px 12px 10px; border-radius: 0 0 28px 28px; border-top: 0; display: flex; align-items: center; gap: 6px; z-index: 2;">
+    <a href="PhonePeople.dc.html" class="ic" aria-label="Back to People"><svg class="svg" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"></path></svg></a>
+    <div style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px;">
+      <span class="serif" style="font-size: 20px; line-height: 1.1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Q3 report: final numbers</span>
+      <span style="font-size: 12px; color: var(--muted);">Anna Berg and you · 5 messages</span>
+    </div>
+    <button class="ic" aria-label="Done" style="background: var(--ink); color: var(--paper);"><svg class="svg" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"></path></svg></button>
+    <button class="ic" aria-label="More"><svg class="svg" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.2"></circle><circle cx="12" cy="12" r="1.2"></circle><circle cx="19" cy="12" r="1.2"></circle></svg></button>
+  </header>
+
+  <main style="flex-grow: 1; padding: 130px 20px 140px; display: flex; flex-direction: column; gap: 16px; overflow: hidden;">
+    <section style="display: flex; flex-direction: column; gap: 6px; padding-bottom: 14px; border-bottom: 1px solid var(--line);">
+      <span class="why" style="color: var(--muted);">The story so far</span>
+      <p style="margin: 0; font-size: 15px; line-height: 1.5; text-wrap: pretty;">Anna sent a draft on 16 Sep and you flagged two revenue lines<a href="#m2" class="mono" style="font-size: 11px; vertical-align: super; margin-left: 2px; color: var(--accent-ink);">2</a>. She corrected them Monday<a href="#m3" class="mono" style="font-size: 11px; vertical-align: super; margin-left: 2px; color: var(--accent-ink);">3</a> and now needs your final numbers before Friday<a href="#m5" class="mono" style="font-size: 11px; vertical-align: super; margin-left: 2px; color: var(--accent-ink);">5</a>.</p>
+    </section>
+
+    <section style="display: flex; align-items: center; gap: 16px; padding: 16px 18px; border-radius: 16px; background: var(--accent-tint);">
+      <span class="serif" style="font-size: 36px; line-height: 1; flex-shrink: 0;">Fri 26</span>
+      <div style="display: flex; flex-direction: column; gap: 2px; min-width: 0; flex-grow: 1;">
+        <span style="font-size: 14px; font-weight: 500;">Final Q3 numbers</span>
+        <span style="font-size: 12px; color: var(--muted);">Deadline, asked by Anna</span>
+      </div>
+      <button class="link">Remind me</button>
+    </section>
+
+    <button style="display: flex; align-items: baseline; gap: 10px; font-size: 13px; color: var(--muted); text-align: left; padding: 2px 0;">
+      <span class="mono" style="font-size: 11px;">1–4</span> Four earlier messages <span style="flex-grow: 1;"></span><span class="link">Show</span>
+    </button>
+
+    <article style="display: flex; flex-direction: column; gap: 12px; padding-top: 14px; border-top: 1px solid var(--line2);">
+      <div style="display: flex; align-items: baseline; gap: 10px;">
+        <span style="font-weight: 600; font-size: 16px;">Anna Berg</span>
+        <span style="font-size: 12px; color: var(--muted);">today 09:40</span>
+        <span style="flex-grow: 1;"></span>
+        <span class="mono" style="font-size: 11px; color: var(--muted);">5</span>
+      </div>
+      <p style="margin: 0; font-size: 16px; line-height: 1.55; text-wrap: pretty;">Hi, the board pack goes to print Friday morning. Could you send the final Q3 numbers by Thursday evening? The corrected revenue lines are already in.</p>
+      <span class="why" style="color: var(--muted);">In People because you reply to Anna within an hour. <button class="link" style="font-family: 'Instrument Sans', system-ui, sans-serif; font-style: normal;">Change</button></span>
+      <span style="font-size: 12px; color: var(--muted);">1 tracker blocked</span>
+    </article>
+  </main>
+
+  <footer class="sheet" style="position: absolute; left: 0; right: 0; bottom: 0; padding: 14px 16px 34px; border-radius: 28px 28px 0 0; border-bottom: 0; display: flex; flex-direction: column; gap: 12px; z-index: 2;">
+    <div style="display: flex; gap: 8px; overflow: hidden;">
+      <button class="btn">Yes, by Thursday evening.</button>
+      <button class="btn">Sending them now.</button>
+      <button class="btn">Friday 9am?</button>
+    </div>
+    <div style="display: flex; align-items: center; gap: 10px;">
+      <input type="text" placeholder="Reply to Anna…" aria-label="Reply to Anna" style="flex-grow: 1; min-width: 0; height: 40px; border: 0; border-bottom: 1px solid var(--line2); background: transparent; font: inherit; font-size: 15px; color: var(--ink); outline: none;">
+      <button class="link" style="flex-shrink: 0;">My voice</button>
+      <button class="ic" aria-label="Send" style="background: var(--accent); color: #FFFFFF;"><svg class="svg" viewBox="0 0 24 24"><path d="M12 19V5"></path><path d="m5 12 7-7 7 7"></path></svg></button>
+    </div>
+  </footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#E0561A","options":["#E0561A","#2F6F5E","#3B5A8A","#B8336A"]},"blur":{"editor":"range","default":24,"min":0,"max":48,"step":2,"unit":"px"},"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {
+      accent: this.props.accent ?? '#E0561A',
+      blurPx: (this.props.blur ?? 24) + 'px'
+    };
+  }
+}
+</script>
+</body>
+</html>

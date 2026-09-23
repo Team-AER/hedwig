@@ -80,8 +80,11 @@ object per `data:` line, blank line between events, a final `{"type":"done"}` ev
 | 15 | `senderStats` | triage | yes |
 | 20 | `embed` | context | no |
 | 30 | `triage` | triage | no |
+| 32 | `sort` (v2: streams, bundles, needs-you, spam) | sort | yes |
+| 34 | `work` (v2: closes Done / Reply Later items and watches when the thread moves on) | work | no |
 | 40 | `topics` | context | no |
 | 50 | `extract` (enqueues LLM jobs) | context | no |
+| 60 | `index` (v2: bodies, Tika, chunks, vectors; runs on the spam folder too) | indexer | yes |
 
 Rows passed to steps carry `MESSAGE_COLUMNS` plus `user_id`, `user_addresses` (Set of the user's
 own addresses) and `is_outgoing`. Steps set their `hedwig_msg.*_at` column when done.
@@ -122,24 +125,33 @@ Views register with `registerView` from `hedwig/views/index.js` (imported once b
 Commands register with `registerCommand`. Cross-pane state lives in `useHedwig`; upstream state
 (accounts, selected message, compose) stays in `store/index.js`.
 
-### Design language (from the canvas)
+### Design language (v2 "editorial glass", from `docs/hedwig/design/*.dc.html`)
 
-| Token | Light "Hedwig" | Dark "Hedwig Night" |
+| Token (`--hw-*`) | Light | Dark |
 | --- | --- | --- |
-| ground | `#F3EEE4` | `#16140F` |
-| surface | `#FFFDF9` | `#1F1C16` |
-| raised/nav | `#EFE8DB` | `#26221B` |
-| border | `#E2DACB` | `#3A342A` |
-| ink | `#1B1A17` | `#EFE8DB` |
-| muted | `#6B665C` | `#A39B8C` |
-| teal (they owe, settled, plugin) | `#1F6B66` / tint `#D7E8E5` | `#5FB3AB` / tint `#1E3432` |
-| amber (you owe, needs you) | `#B56E1A` / tint `#F5E3C8`, text `#7A4A0E` | `#E0A054` / tint `#3A2A14` |
-| red (spam) | `#A8432E` | `#E07A62` |
+| paper (ground) | `#F4F2EC` | `#111214` |
+| ink | `#17181A` | `#F2F0EA` |
+| muted | `#66696D` | `#A3A6AA` |
+| accent (tweakable, `ui.accent`) | `#E0561A` | `#FF7A40` |
+| accent-ink (accent as text; 5.3:1 / 7.1:1 on the tint) | `#9E3B0E` | `#FF9A66` |
+| accent-tint (slips: deadline, the day's question) | `rgba(224,86,26,.12)` | `rgba(255,122,64,.16)` |
+| on-accent (icons on a solid accent fill) | `#FFFFFF` (3.8:1) | `#111214` (7.2:1; white was 2.6:1) |
+| glass (sheets) | `rgba(255,255,255,.52)` | `rgba(32,33,37,.55)` |
+| edge (sheet border) | `rgba(255,255,255,.72)` | `rgba(255,255,255,.10)` |
+| line / line2 (hairlines) | `rgba(23,24,26,.09)` / `.18` | `rgba(255,255,255,.09)` / `.18` |
+| tint (selected row) | `rgba(23,24,26,.045)` | `rgba(255,255,255,.05)` |
 
-Type: Fraunces for display, IBM Plex Sans for body, IBM Plex Mono for ids and counts. Reason chips
-are rounded pills in amber (needs you) or teal (they owe / informational). Inline styles with CSS
-variables, matching upstream convention. Every interactive element is a real `<button>`/`<a>`/
-`<input>` with a label; keyboard first.
+Small secondary text on an accent-tinted slip uses the ink at 80% (`V.inkSoft`, 8.0:1 light), not
+muted (4.3:1 there). A custom `ui.accent` gets `accent-ink` mixed 70% with black and whichever
+on-accent (white or the dark paper) contrasts more.
+
+Sheets: `backdrop-filter: blur(var(--hw-blur, 24px)) saturate(1.4)`, 1px edge, radius 26 on desktop
+and 28 on phone, over a ground with two blurred light fields (accent top-right, `#3B5A8A` bottom-left).
+Type: Instrument Serif for titles and for every reason Hedwig gives (italic), Instrument Sans for
+body, DM Mono for times and counts. No pills, no uppercase eyebrow labels, no left-border cards, no
+avatars: hairlines, size and one accent do the work; cards are figures (a date, an amount, a time)
+with a caption. Inline styles with CSS variables, matching upstream convention. Every interactive
+element is a real `<button>`/`<a>`/`<input>` with a label; 44 px targets on phone; keyboard first.
 
 ## Testing
 

@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Hedwig desktop, Daily Brief</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&amp;family=Instrument+Sans:wght@400;500;600&amp;family=DM+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0;font-family:'Instrument Sans',system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums}
+a{color:var(--ink);text-decoration:none}a:hover{color:var(--accent-ink)}
+button{font:inherit;cursor:pointer;color:inherit;background:none;border:0;padding:0}
+.sheet{background:var(--glass);backdrop-filter:blur(var(--blur)) saturate(1.4);-webkit-backdrop-filter:blur(var(--blur)) saturate(1.4);border:1px solid var(--edge);box-shadow:0 30px 70px -40px var(--shadow)}
+.serif{font-family:'Instrument Serif',Georgia,serif;font-weight:400}
+.mono{font-family:'DM Mono',monospace}
+.why{font-family:'Instrument Serif',Georgia,serif;font-style:italic;font-size:16px;line-height:1.25}
+.hair{height:1px;background:var(--line);flex-shrink:0}
+.btn{display:inline-flex;align-items:center;gap:8px;height:36px;padding:0 14px;border-radius:9px;border:1px solid var(--line2);font-size:13px;font-weight:500;white-space:nowrap}
+.btn.solid{background:var(--ink);color:var(--paper);border-color:transparent}
+.link{font-size:13px;font-weight:500;text-decoration:underline;text-underline-offset:3px;text-decoration-color:var(--line2)}
+.nav{display:flex;align-items:center;gap:10px;height:38px;padding:0 12px;border-radius:8px;font-size:15px;color:var(--ink);width:100%;text-align:left;box-sizing:border-box}
+.nav.on{background:var(--tint)}
+.item{display:grid;grid-template-columns:52px minmax(0,1fr) auto;column-gap:12px;align-items:baseline;padding:12px 0;border-top:1px solid var(--line)}
+.cell{display:flex;flex-direction:column;gap:6px;padding:0 20px;border-left:1px solid var(--line2);min-width:0}
+.svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0}
+</style>
+</helmet>
+<div style="--blur:{{blurPx}};--accent:{{accent}};--paper:#F4F2EC;--ink:#17181A;--muted:#66696D;--accent-ink:#B24512;--accent-tint:rgba(224,86,26,0.12);--glass:rgba(255,255,255,0.52);--edge:rgba(255,255,255,0.72);--line:rgba(23,24,26,0.09);--line2:rgba(23,24,26,0.18);--tint:rgba(23,24,26,0.045);--shadow:rgba(23,24,26,0.5); width: 1440px; height: 960px; box-sizing: border-box; padding: 24px; display: flex; gap: 20px; color: var(--ink); background: var(--paper); position: relative; overflow: hidden;">
+  <div aria-hidden="true" style="position: absolute; width: 760px; height: 520px; right: -140px; top: -180px; border-radius: 50%; background: var(--accent); opacity: 0.22; filter: blur(90px); pointer-events: none;"></div>
+  <div aria-hidden="true" style="position: absolute; width: 640px; height: 640px; left: 120px; bottom: -320px; border-radius: 50%; background: #3B5A8A; opacity: 0.16; filter: blur(110px); pointer-events: none;"></div>
+  <div aria-hidden="true" style="position: absolute; width: 380px; height: 380px; left: 640px; top: 120px; border-radius: 50%; background: #FFFFFF; opacity: 0.6; filter: blur(80px); pointer-events: none;"></div>
+
+  <nav class="sheet" aria-label="Streams" style="position: relative; width: 224px; flex-shrink: 0; box-sizing: border-box; padding: 26px 14px 20px; border-radius: 26px; display: flex; flex-direction: column; gap: 4px;">
+    <div class="serif" style="font-size: 30px; line-height: 1; padding: 0 12px 22px; letter-spacing: -0.01em;">Hedwig</div>
+    <button class="nav on" aria-current="page"><span style="flex-grow: 1; font-weight: 600;">Daily Brief</span></button>
+    <button class="nav"><span style="flex-grow: 1;">Screener</span><span class="mono" style="font-size: 12px; color: var(--accent-ink);">7</span></button>
+    <button class="nav"><span style="flex-grow: 1;">People</span><span class="mono" style="font-size: 12px; color: var(--muted);">4</span></button>
+    <button class="nav"><span style="flex-grow: 1;">Reading</span><span class="mono" style="font-size: 12px; color: var(--muted);">12</span></button>
+    <button class="nav"><span style="flex-grow: 1;">Records</span><span class="mono" style="font-size: 12px; color: var(--muted);">31</span></button>
+    <div class="hair" style="margin: 12px 12px;"></div>
+    <button class="nav"><span style="flex-grow: 1;">Reply Later</span><span class="mono" style="font-size: 12px; color: var(--muted);">3</span></button>
+    <button class="nav"><span style="flex-grow: 1;">Set Aside</span><span class="mono" style="font-size: 12px; color: var(--muted);">2</span></button>
+    <button class="nav"><span style="flex-grow: 1;">Snoozed</span><span class="mono" style="font-size: 12px; color: var(--muted);">5</span></button>
+    <div style="flex-grow: 1;"></div>
+    <div style="display: flex; align-items: center; gap: 8px; padding: 18px 12px 0;">
+      <span style="width: 8px; height: 8px; border-radius: 50%; background: var(--ink);"></span>
+      <span style="width: 8px; height: 8px; border-radius: 50%; background: var(--accent);"></span>
+      <span style="font-size: 12px; color: var(--muted); flex-grow: 1;">2 accounts</span>
+      <button class="link" style="color: var(--muted);">Power</button>
+    </div>
+  </nav>
+
+  <main class="sheet" style="position: relative; flex-grow: 1; min-width: 0; box-sizing: border-box; padding: 34px 44px 26px; border-radius: 26px; display: flex; flex-direction: column; gap: 22px; overflow: hidden;">
+    <div style="display: flex; align-items: flex-end; gap: 32px;">
+      <div style="display: flex; flex-direction: column; gap: 10px; flex-grow: 1; min-width: 0;">
+        <span class="mono" style="font-size: 12px; color: var(--muted);">Wednesday 23 September · 07:00</span>
+        <h1 class="serif" style="margin: 0; font-size: 52px; line-height: 0.98; letter-spacing: -0.02em; max-width: 14ch; text-wrap: balance;">Three things need you. Two parcels land today.</h1>
+      </div>
+      <label style="display: flex; align-items: center; gap: 12px; width: 400px; height: 44px; padding: 0 4px; border-bottom: 1px solid var(--line2); color: var(--muted); font-size: 15px; flex-shrink: 0;">
+        <span class="serif" style="font-style: italic; font-size: 18px; color: var(--ink);">Ask</span>
+        <input type="text" placeholder="what did the landlord say about the deposit?" aria-label="Ask your mail" style="flex-grow: 1; min-width: 0; border: 0; background: transparent; font: inherit; color: var(--ink); outline: none;">
+        <span class="mono" style="font-size: 11px;">↵</span>
+      </label>
+    </div>
+
+    <div style="display: grid; grid-template-columns: 5fr 6fr; gap: 44px; flex-grow: 1; min-height: 0; align-items: start;">
+      <section style="display: flex; flex-direction: column;">
+        <span class="why" style="color: var(--accent-ink); padding-bottom: 6px;">Needs you today</span>
+        <div class="item">
+          <span class="mono" style="font-size: 12px; color: var(--muted);">09:40</span>
+          <div style="display: flex; flex-direction: column; gap: 3px; min-width: 0;"><a href="#t1" style="font-size: 16px; font-weight: 500;">Anna Berg · final Q3 numbers</a><span class="why" style="color: var(--accent-ink);">Due Friday, the board pack prints that morning</span></div>
+          <span></span>
+        </div>
+        <div class="item">
+          <span class="mono" style="font-size: 12px; color: var(--muted);">Mon</span>
+          <div style="display: flex; flex-direction: column; gap: 3px; min-width: 0;"><a href="#t2" style="font-size: 16px; font-weight: 500;">Dr. S. Kaur · appointment 30 Sep</a><span class="why" style="color: var(--accent-ink);">A yes or no is all they need</span></div>
+          <span></span>
+        </div>
+        <div class="item">
+          <span class="mono" style="font-size: 12px; color: var(--muted);">4 days</span>
+          <div style="display: flex; flex-direction: column; gap: 3px; min-width: 0;"><a href="#t3" style="font-size: 16px; font-weight: 500;">Marcus Oduya · lease renewal</a><span class="why" style="color: var(--accent-ink);">Two options on the table, waiting on you</span></div>
+          <span></span>
+        </div>
+
+        <span class="why" style="color: var(--muted); padding: 26px 0 6px;">Waiting on others</span>
+        <div class="item">
+          <span class="mono" style="font-size: 12px; color: var(--muted);">6 days</span>
+          <div style="display: flex; flex-direction: column; gap: 3px; min-width: 0;"><span style="font-size: 16px;">Tom Ellis · the signed contract</span><span style="font-size: 13px; color: var(--muted);">You asked on 17 Sep. Nothing back yet.</span></div>
+          <button class="link">Nudge</button>
+        </div>
+        <div class="item">
+          <span class="mono" style="font-size: 12px; color: var(--muted);">2 days</span>
+          <div style="display: flex; flex-direction: column; gap: 3px; min-width: 0;"><span style="font-size: 16px;">Nordlys Travel · Bergen invoice</span><span style="font-size: 13px; color: var(--muted);">They promised it within 48 hours.</span></div>
+          <button class="link">Nudge</button>
+        </div>
+      </section>
+
+      <div style="display: flex; flex-direction: column; gap: 26px; min-width: 0;">
+        <section style="display: flex; flex-direction: column; gap: 10px;">
+          <span class="why" style="color: var(--muted);">Today, from your Records</span>
+          <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); padding: 6px 0;">
+            <div class="cell" style="border-left: 0; padding-left: 0;"><span class="serif" style="font-size: 36px; line-height: 1;">Today</span><span style="font-size: 13px; line-height: 1.35;">Running shoes<br>DHL, out for delivery</span></div>
+            <div class="cell"><span class="serif" style="font-size: 36px; line-height: 1;">Today</span><span style="font-size: 13px; line-height: 1.35;">Two books<br>Posten, by 16:00</span></div>
+            <div class="cell"><span class="serif" style="font-size: 36px; line-height: 1; color: var(--accent-ink);">1,240</span><span style="font-size: 13px; line-height: 1.35;">NOK, electricity<br>Fjordkraft, due Friday</span></div>
+            <div class="cell"><span class="serif" style="font-size: 36px; line-height: 1;">18:30</span><span style="font-size: 13px; line-height: 1.35;">Parents' evening, Thu<br>Not answered yet</span></div>
+          </div>
+        </section>
+
+        <section style="display: flex; flex-direction: column;">
+          <span class="why" style="color: var(--muted); padding-bottom: 6px;">Reading, three worth a look</span>
+          <div style="display: flex; align-items: baseline; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line);"><a href="#r1" style="font-size: 15px; font-weight: 500; flex-shrink: 0;">Benedict's Newsletter</a><span style="font-size: 14px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">why on-device models change the browser</span></div>
+          <div style="display: flex; align-items: baseline; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line);"><a href="#r2" style="font-size: 15px; font-weight: 500; flex-shrink: 0;">Bergen Kommune</a><span style="font-size: 14px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">road closures this weekend near Møhlenpris</span></div>
+          <div style="display: flex; align-items: baseline; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line);"><a href="#r3" style="font-size: 15px; font-weight: 500; flex-shrink: 0;">Hacker Newsletter</a><span style="font-size: 14px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">four stories you usually open</span></div>
+        </section>
+
+        <section style="display: flex; flex-direction: column; gap: 14px; padding: 22px 24px; border-radius: 18px; background: var(--accent-tint);">
+          <span class="serif" style="font-size: 24px; line-height: 1.2; text-wrap: pretty;">You've replied to Anna Berg 14 times, usually within the hour. Keep her mail in People?</span>
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <button class="btn solid">Yes, always</button>
+            <button class="btn">No</button>
+            <span style="font-size: 12px; color: var(--muted); margin-left: 6px;">One of two questions today. Answers teach Hedwig.</span>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <div style="display: flex; align-items: baseline; gap: 16px; padding-top: 14px; border-top: 1px solid var(--line2); font-size: 13px; color: var(--muted);">
+      <span>Hedwig screened 12 senders, bundled 40, rescued 2 from spam, blocked 9 trackers.</span>
+      <a href="#undo" class="link">Review or undo</a>
+      <span style="flex-grow: 1;"></span>
+      <span class="why" style="font-size: 15px;">Compiled from your mail, no model call.</span>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#E0561A","options":["#E0561A","#2F6F5E","#3B5A8A","#B8336A"]},"blur":{"editor":"range","default":24,"min":0,"max":48,"step":2,"unit":"px"},"$preview":{"width":1440,"height":960}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {
+      accent: this.props.accent ?? '#E0561A',
+      blurPx: (this.props.blur ?? 24) + 'px'
+    };
+  }
+}
+</script>
+</body>
+</html>
