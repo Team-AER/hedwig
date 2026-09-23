@@ -234,7 +234,8 @@ export async function judgeForUser(userId, { day = new Date().toISOString().slic
     }
     let reflex = null;
     try {
-      reflex = await runReflex(items, { owner, user, bundles, now: new Date().toISOString().slice(0, 16) }, { userId, feature: 'labels', lane: 'background' });
+      // Pin the tier so an admin routing `labels` to the reasoning tier cannot make both opinions Qwen's.
+      reflex = await runReflex(items, { owner, user, bundles, now: new Date().toISOString().slice(0, 16) }, { userId, feature: 'labels', lane: 'background', tier: 'reflex' });
       stats.reflexPrompt = reflex.promptId;
     } catch (err) {
       if (err.code === 'budget_exceeded') stats.partial = true;

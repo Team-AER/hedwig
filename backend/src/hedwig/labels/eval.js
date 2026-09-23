@@ -213,13 +213,17 @@ async function sourceTexts(userId, ids) {
 
 async function askOnce(userId, question) {
   const { answerQuestion } = await import('../context/ask.js');
-  const started = new Date();
+  // Allow a minute of skew between this clock and the database's; the log id is exact when we have it.
+  const started = new Date(Date.now() - 60_000);
+  let askLogId = null;
   try {
     const res = await answerQuestion(userId, question, {});
+    askLogId = res.askLogId || null;
     const cited = (res.citations || []).map((n) => res.sources?.[n - 1]?.message?.id).filter(Boolean);
     return { answer: res.answer, cited, sources: (res.sources || []).map((s) => s.message?.id).filter(Boolean) };
   } finally {
     // Eval questions are not the user's history.
+    if (askLogId) await query('DELETE FROM hedwig_ask_log WHERE user_id = $1 AND id = $2', [userId, askLogId]).catch(() => {});
     await query('DELETE FROM hedwig_ask_log WHERE user_id = $1 AND question = $2 AND created_at >= $3', [userId, question, started]).catch(() => {});
   }
 }

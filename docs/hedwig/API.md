@@ -189,3 +189,87 @@ Model-call provenance: every row of `hedwig_ai_calls` now records `prompt_id`, `
 provenance as `{ aiCallId, promptId, promptVersion, promptHash, model, tier, fellBack, tokensIn,
 tokensOut, attempts, escalated, repaired, dropped }`; store `aiCallId` next to anything derived
 from a model call.
+
+## Profile — `backend/src/hedwig/profile/`
+
+A short, versioned, second-person memory profile (at most `profile.maxLines`, default 40 lines):
+who matters, what the user leaves unread, what they read, how they write, standing preferences.
+Rebuilt weekly (`profile.weekday` / `profile.hour`, server time; a first build as soon as there is
+evidence) by the `profile.rebuild` prompt on the reasoning tier, budget `llm.tokenBudget.profile`.
+The rebuild reads facts computed by SQL over `profile.windowDays` (behaviour labels, sender stats,
+bundle read rates, the user's own sent mail, the latest `profile.corrections` corrections, rules,
+blocks) plus the previous profile. Each model line cites fact ids; a line whose numbers are not in
+the facts it cites is dropped (listed in `provenance.droppedLines`). **Pinned lines** (anything the
+user wrote or changed) are kept verbatim at the top of every rebuild; lines the user deleted are
+`dismissed` and never generated again. Drafting (`work/voice.js`) and Reflex sorting
+(`sort/reflex.js`, the `profile` var of `sort.reflex`) read it through `profileLines(userId)` unless
+`profile.inPrompts` is off.
+
+| Method | Path | Body / query | Returns |
+| --- | --- | --- | --- |
+| GET | `/profile` | | `Profile` (`version: 0`, empty text when none yet) |
+| PUT | `/profile` | `{ text }` (one line per fact, ≤ `profile.maxLines`) | `Profile` (new version, `source: 'user'`; `unchanged: true` when nothing changed) |
+| POST | `/profile/rebuild` | | 202 `{ ok, jobId, deduplicated }` (job `profile.rebuild`) |
+| GET | `/profile/history` | `limit?` (≤ 100, default 20) | `{ versions: [{ version, source, diff, createdAt, lines, pinned, model, promptVersion }] }`, newest first |
+
+```ts
+Profile = { version, text, lines: [{ text, kind: 'people'|'ignore'|'reading'|'writing'|'preference', pinned, evidence: [factId] }],
+            pinned: string[], dismissed: string[], diff /* unified, from the previous version */,
+            source: 'rebuild'|'user'|null, updatedAt,
+            provenance: { aiCallId, promptId, promptVersion, promptHash, model, tier, routed, droppedLines: [{ text, reason }] } | null }
+```
+
+## Onboarding ("Sort the past") — `backend/src/hedwig/onboarding/`
+
+| Method | Path | Body | Returns |
+| --- | --- | --- | --- |
+| GET | `/onboarding/status` | | `OnboardingStatus` |
+| POST | `/onboarding/accept` | `{ all: true }` or `{ senders: [{ key, scope, decision }] }` | `{ decided, moved, logIds }` (through `/sort/screener/decide`'s service; every decision is in "Hedwig today" and undoable) |
+| POST | `/onboarding/dismiss` | `{}` (or `{ done: false }` to reopen) | `{ ok, done }` (per-user `onboarding.done`) |
+
+```ts
+OnboardingStatus = {
+  accounts: [{ accountId, name, email, enabled, indexed, total, sorted, bodies, done }],   // A's coverage ledger + hedwig_sort
+  summary: { people, reading, records, spam, rescueCandidates, senders },               // senders = held in the Screener
+  topSenders: [{ key, scope, display, count, proposed, reason, confidence, inSpam }],     // ≤ onboarding.topSenders, most mail first
+  ready: boolean,   // every enabled account has coverage rows and ≥ onboarding.readyShare indexed and sorted
+  done: boolean,    // the user finished or dismissed it
+}
+```
+
+A new account gets coverage rows from the indexer's coverage refresh (every `index.coverageEverySec`)
+and its sender decisions seeded from sent mail and contacts on its first sort (`sort/senders.js`
+`ensureSeeded`); onboarding only reads both.
+
+## Routing and model bounds — `backend/src/hedwig/onboarding/routing.js`
+
+The per-feature routing table, assembled from the registered prompts and config. A feature is the
+budget a prompt call is charged to (`spam.reflex` runs under `sort`). `routing.<feature>.tier`
+(`auto` | `reflex` | `reasoning`) replaces the prompt's own tier for every call charged to that
+feature (`runPrompt` honours it; provenance says `routed: true`); `escalate: true` still means the
+reasoning tier.
+
+| Method | Path | Body | Returns |
+| --- | --- | --- | --- |
+| GET | `/routing` | | `RoutingTable` + `readOnly: true`, `myModels: { fast, long, agent }` (with the user's overrides), `modelChoices` (`llm.models.enabled`), each feature with `usedToday` (this user's tokens) |
+| GET | `/admin/routing` | | `RoutingTable` |
+| PUT | `/admin/routing` | `{ <feature>: { tier?, escalateBelow?, budget? } }` (`null` clears an override) | `RoutingTable` + `changed: [configKey]`; 400 for an unknown feature, a feature without that setting, or a bad value |
+| GET | `/admin/models/enabled` | | `{ models: string[], defaults: { fast, long, agent }, catalog: [{ id, displayName, status, maxOutputTokens }] }` |
+| PUT | `/admin/models/enabled` | `{ models: string[] }` (must be in the catalog when it lists any) | same as GET |
+| GET | `/admin/users/summary` | | `{ users: [{ userId, username, displayName, isAdmin, accounts, indexed, total, indexedPct, sorted, questionsAnswered, tokensToday }] }` (counts only) |
+
+```ts
+RoutingTable = { models: { reflex, reasoning },
+  features: [{ feature, tier /* effective: reflex|reasoning|mixed */, override: 'auto'|'reflex'|'reasoning', defaultTier,
+               tierKey, escalateBelow, escalateKey, escalate: [{ key, label, value }], cadence, budget, budgetKey,
+               prompts: [{ id, version, tier, effectiveTier, maxTokens }] }] }
+```
+
+PUT maps onto existing keys: `tier` → `routing.<feature>.tier`, `escalateBelow` → `sort.escalateBelow`
+(only `sort` has an escalation rule; `spam.phishingEscalateBelow` is shown but edited in config),
+`budget` → `llm.tokenBudget.<feature>` (tokens per user per day; budgets are charged per user).
+
+Model bounds: `llm.models.enabled` (admin) lists the models people may pick. A user may then set
+`llm.models.fast|long|agent` through `PATCH /settings`, only to a model in that list (400 otherwise),
+and an override stops applying as soon as its model leaves the list. Everything under `/admin/*`
+requires an admin (403 otherwise).

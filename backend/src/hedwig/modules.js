@@ -21,5 +21,7 @@ import indexer from './indexer/index.js';
 import work from './work/index.js';
 import ask2 from './ask2/index.js';
 import cards from './cards/index.js';
+import profile from './profile/index.js';
+import onboarding from './onboarding/index.js';
 
-export const MODULES = [core, context, triage, insights, agent, pluginsV2, sort, labels, indexer, work, ask2, cards];
+export const MODULES = [core, context, triage, insights, agent, pluginsV2, sort, labels, indexer, work, ask2, cards, profile, onboarding];

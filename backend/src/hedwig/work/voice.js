@@ -1,5 +1,5 @@
 // The owner's voice with one person, read from their own sent mail: typical length, greeting,
-// sign-off and a few recent samples. Plus a hook for hedwig_profile (not built yet).
+// sign-off and a few recent samples. Plus the owner's memory profile lines (profile/lines.js).
 import { query } from '../../services/db.js';
 import { splitBody } from '../indexer/parse.js';
 
@@ -66,17 +66,6 @@ export async function voiceWith(userId, email, { n = 5, addresses = [] } = {}) {
   return summarizeVoice(samples);
 }
 
-/**
- * Lines about the owner from hedwig_profile, once that table exists (a later stream builds it).
- * Until then: []. Kept tolerant of the table's absence so drafting never depends on it.
- */
-export async function profileLines(userId) {
-  try {
-    const { rows: [t] } = await query("SELECT to_regclass('public.hedwig_profile') AS t");
-    if (!t?.t) return [];
-    const { rows } = await query('SELECT * FROM hedwig_profile WHERE user_id = $1 LIMIT 20', [userId]);
-    return rows.map((r) => r.line || r.text || r.value).filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim().slice(0, 200));
-  } catch {
-    return [];
-  }
-}
+// Lines about the owner from their memory profile (hedwig_profile, stream I). [] when there is none
+// or on any error, so drafting never depends on it.
+export { profileLines } from '../profile/lines.js';

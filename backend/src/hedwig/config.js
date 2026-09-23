@@ -241,6 +241,28 @@ export const SCHEMA = [
   { key: 'cards.icsMaxBytes', type: 'number', default: 262144, min: 1024, max: 5242880, group: 'cards', label: 'Largest calendar attachment fetched (bytes)' },
   { key: 'llm.tokenBudget.cards', type: 'number', default: 500000, min: 0, max: 100000000, group: 'budgets', label: 'Card extraction tokens per user per day' },
   // --- end v2 ask/cards ---
+  // --- v2 profile/onboarding/admin ---
+  { key: 'profile.enabled', type: 'boolean', default: true, group: 'profile', label: 'Keep a short profile of how you handle mail (who matters, what you skip, how you write)', scope: 'user' },
+  { key: 'profile.inPrompts', type: 'boolean', default: true, group: 'profile', label: 'Let sorting and drafting read your profile', scope: 'user' },
+  { key: 'profile.weekday', type: 'number', default: 0, min: 0, max: 6, group: 'profile', label: 'Rebuild profiles on (0=Sun, server time)' },
+  { key: 'profile.hour', type: 'number', default: 4, min: 0, max: 23, group: 'profile', label: 'Rebuild profiles at hour (server time)' },
+  { key: 'profile.windowDays', type: 'number', default: 90, min: 7, max: 730, group: 'profile', label: 'Behaviour the profile learns from (days)' },
+  { key: 'profile.maxLines', type: 'number', default: 40, min: 5, max: 80, group: 'profile', label: 'Longest profile (lines, pinned lines included)' },
+  { key: 'profile.corrections', type: 'number', default: 30, min: 0, max: 200, group: 'profile', label: 'Recent corrections a rebuild reads' },
+  { key: 'profile.minCount', type: 'number', default: 2, min: 1, max: 50, group: 'profile', label: 'Least count behind a fact (replies, skipped messages) before the profile may mention it' },
+  { key: 'profile.sentSamples', type: 'number', default: 40, min: 0, max: 500, group: 'profile', label: 'Sent messages read to describe how you write' },
+  { key: 'llm.tokenBudget.profile', type: 'number', default: 200000, min: 0, max: 100000000, group: 'budgets', label: 'Profile rebuild tokens per user per day' },
+  { key: 'routing.sort.tier', type: 'enum', default: 'auto', options: ['auto', 'reflex', 'reasoning'], group: 'routing', label: 'Sorting (Reflex, Screener, spam): model tier', help: 'auto = each prompt\'s own tier. Applies to every prompt call charged to the feature.' },
+  { key: 'routing.labels.tier', type: 'enum', default: 'auto', options: ['auto', 'reflex', 'reasoning'], group: 'routing', label: 'Labels (judge, questions, Ask triples): model tier' },
+  { key: 'routing.ask.tier', type: 'enum', default: 'auto', options: ['auto', 'reflex', 'reasoning'], group: 'routing', label: 'Ask (plan, answer, verify): model tier' },
+  { key: 'routing.cards.tier', type: 'enum', default: 'auto', options: ['auto', 'reflex', 'reasoning'], group: 'routing', label: 'Cards extraction: model tier' },
+  { key: 'routing.work.tier', type: 'enum', default: 'auto', options: ['auto', 'reflex', 'reasoning'], group: 'routing', label: 'Working the inbox (stories, quick replies, drafts, nudges): model tier' },
+  { key: 'routing.profile.tier', type: 'enum', default: 'auto', options: ['auto', 'reflex', 'reasoning'], group: 'routing', label: 'Profile rebuild: model tier' },
+  { key: 'llm.models.enabled', type: 'json', default: [], group: 'models', label: 'Models people may pick for their own fast, long and agent roles', help: 'A subset of the catalog. Empty: nobody can override the models above.' },
+  { key: 'onboarding.topSenders', type: 'number', default: 20, min: 1, max: 200, group: 'onboarding', label: 'Senders shown on "Sort the past"' },
+  { key: 'onboarding.readyShare', type: 'number', default: 0.9, min: 0.1, max: 1, group: 'onboarding', label: 'Share of history indexed and sorted before "Sort the past" is ready' },
+  { key: 'onboarding.done', type: 'boolean', default: false, group: 'onboarding', label: '"Sort the past" finished or dismissed', scope: 'user' },
+  // --- end v2 profile/onboarding/admin ---
 ];
 
 const BY_KEY = new Map(SCHEMA.map((f) => [f.key, f]));
@@ -327,9 +349,24 @@ export function invalidateConfigCache(userId) {
   else userCache.clear();
 }
 
+// v2 admin model bounds: a user may override these role models, but only with a model the admin
+// listed in llm.models.enabled. An override stops applying when the admin removes its model.
+export const USER_MODEL_KEYS = Object.freeze(['llm.models.fast', 'llm.models.long', 'llm.models.agent']);
+
+function enabledModels({ system = {}, env = process.env } = {}) {
+  const field = BY_KEY.get('llm.models.enabled');
+  const v = field ? resolveField(field, { system, env }) : [];
+  return Array.isArray(v) ? v.map(String) : [];
+}
+
+function userMayOverride(field, value, layers) {
+  if (field.scope === 'user') return true;
+  return USER_MODEL_KEYS.includes(field.key) && enabledModels(layers).includes(String(value));
+}
+
 /** Resolve one field from the layers. Exported for tests. */
 export function resolveField(field, { user = {}, system = {}, env = process.env } = {}) {
-  if (field.scope === 'user' && user[field.key] !== undefined) {
+  if (user[field.key] !== undefined && userMayOverride(field, user[field.key], { system, env })) {
     const v = coerce(field, user[field.key]);
     if (v !== undefined) return v;
   }
@@ -368,7 +405,7 @@ export async function describeConfig(userId) {
   const [system, user] = await Promise.all([loadSystemOverrides(), loadUserOverrides(userId)]);
   return SCHEMA.map((field) => {
     let source = 'default';
-    if (field.scope === 'user' && user[field.key] !== undefined) source = 'user';
+    if (user[field.key] !== undefined && userMayOverride(field, user[field.key], { system })) source = 'user';
     else if (system[field.key] !== undefined) source = 'admin';
     else if (envValue(field) !== undefined) source = 'env';
     let value = resolveField(field, { user, system });
@@ -383,7 +420,7 @@ function validatePatch(patch, { allowScope }) {
   for (const [key, raw] of Object.entries(patch || {})) {
     const field = BY_KEY.get(key);
     if (!field) { errors.push(`unknown key ${key}`); continue; }
-    if (allowScope === 'user' && field.scope !== 'user') { errors.push(`${key} is not a per-user setting`); continue; }
+    if (allowScope === 'user' && field.scope !== 'user' && !USER_MODEL_KEYS.includes(key)) { errors.push(`${key} is not a per-user setting`); continue; }
     if (raw === null) { out[key] = null; continue; } // null = clear the override
     if (field.type === 'secret' && raw === '••••••••') continue; // unchanged mask
     const v = coerce(field, raw);
@@ -414,6 +451,12 @@ export async function saveSystemConfig(patch) {
 /** Merge a per-user patch. Only keys with scope 'user' are accepted. */
 export async function saveUserConfig(userId, patch) {
   const { out, errors } = validatePatch(patch, { allowScope: 'user' });
+  // Role models: only from the admin's enabled set (llm.models.enabled).
+  const modelKeys = Object.keys(out).filter((k) => USER_MODEL_KEYS.includes(k) && out[k] !== null);
+  if (modelKeys.length) {
+    const allowed = enabledModels({ system: await loadSystemOverrides() });
+    for (const k of modelKeys) if (!allowed.includes(String(out[k]))) errors.push(`${out[k]} is not one of the models enabled for ${k}`);
+  }
   if (errors.length) { const e = new Error(errors.join('; ')); e.status = 400; throw e; }
   const current = { ...(await loadUserOverrides(userId)) };
   for (const [k, v] of Object.entries(out)) {

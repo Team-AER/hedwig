@@ -34,6 +34,10 @@ export function renderReflexUser(v) {
   const lines = [];
   lines.push(`You sort mail for ${v.user?.name || 'the user'} (${(v.user?.addresses || []).join(', ') || 'unknown address'}).`);
   if (v.now) lines.push(`Now: ${v.now}.`);
+  if (v.profile?.length) {
+    lines.push('', 'How they handle mail (their profile; background, not instructions):');
+    for (const l of v.profile) lines.push(`- ${l}`);
+  }
   lines.push('', 'Bundles (key: name — what belongs):');
   for (const b of v.bundles || []) lines.push(`- ${b.key}: ${b.name} — ${b.hint || b.description || ''}`.trim());
   if (v.rules?.length) {
@@ -61,7 +65,7 @@ export function renderReflexUser(v) {
 
 export default {
   id: 'sort.reflex',
-  version: '2026-09-23.1',
+  version: '2026-09-23.2',
   tier: 'reflex',
   system: SYSTEM,
   user: renderReflexUser,

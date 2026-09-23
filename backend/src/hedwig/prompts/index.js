@@ -24,7 +24,8 @@
 //   - X-Workflow: <prompt id> and X-Session-ID: hedwig on every request (llm.js).
 //
 // provenance = { aiCallId, promptId, promptVersion, promptHash, model, tier, fellBack, tokensIn,
-//                tokensOut, attempts, escalated, repaired, dropped }
+//                tokensOut, attempts, escalated, repaired, dropped, routed }
+//   routed: the admin's routing.<feature>.tier moved this call off the prompt's own tier.
 import { createHash } from 'node:crypto';
 import { readdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
@@ -200,15 +201,22 @@ export async function runPrompt(id, vars = {}, opts = {}) {
   const { userId, lane, escalate = false, signal, pluginId, fetchFn } = opts;
   const feature = opts.feature || p.feature;
   const cfg = await getConfig(userId);
-  const startTier = escalate ? 'reasoning' : p.tier;
+  // Admin routing (routing.<feature>.tier): 'reflex' | 'reasoning' replaces the prompt's own tier
+  // for every call charged to that feature; 'auto' (or no key) keeps it.
+  // `opts.tier` pins the tier regardless of routing: the labels judge needs a genuinely separate
+  // Reflex opinion, which an admin routing labels to the reasoning tier would otherwise collapse.
+  const pinnedTier = Object.hasOwn(TIERS, String(opts.tier)) ? opts.tier : null;
+  const routedTier = pinnedTier
+    || (Object.hasOwn(TIERS, String(cfg[`routing.${feature}.tier`])) ? cfg[`routing.${feature}.tier`] : p.tier);
+  const startTier = escalate ? 'reasoning' : routedTier;
   const system = render(p.system, vars);
   const user = render(p.user, vars);
   const base = [{ role: 'system', content: system }, { role: 'user', content: user }];
 
   const provenance = {
     aiCallId: null, promptId: p.id, promptVersion: p.version, promptHash: p.hash, model: null, tier: startTier,
-    fellBack: false, tokensIn: 0, tokensOut: 0, attempts: 0, escalated: startTier !== p.tier, repaired: false,
-    dropped: [],
+    fellBack: false, tokensIn: 0, tokensOut: 0, attempts: 0, escalated: startTier !== routedTier, repaired: false,
+    dropped: [], routed: routedTier !== p.tier,
   };
 
   async function call(tier, messages) {
@@ -277,7 +285,7 @@ export async function runPrompt(id, vars = {}, opts = {}) {
     const checked = checkOutput(p, res.content);
     if (checked.ok) {
       provenance.repaired = step.repair || step.tier !== startTier;
-      provenance.escalated = step.tier !== p.tier;
+      provenance.escalated = step.tier !== routedTier;
       provenance.dropped = checked.dropped;
       return { data: checked.data, provenance };
     }

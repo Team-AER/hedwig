@@ -3,6 +3,7 @@
 // for tests; runReflex() makes the calls through sort/deps.js.
 import { addressesOf } from '../text.js';
 import { runSortPrompt } from './deps.js';
+import { profileLines } from '../profile/lines.js';
 
 const STREAM_SYNONYMS = {
   people: 'people', person: 'people', personal: 'people', human: 'people', direct: 'people',
@@ -106,9 +107,10 @@ export function reflexItem(row, parts, { index, userAddresses = new Set(), sende
 }
 
 /** Variables for the sort.reflex prompt. */
-export function buildReflexVars({ user, items, corrections = [], bundles = [], rules = [], now = null }) {
+export function buildReflexVars({ user, items, corrections = [], bundles = [], rules = [], now = null, profile = [] }) {
   return {
     user: { name: user?.name || null, addresses: [...(user?.addresses || [])].slice(0, 10) },
+    profile: (profile || []).slice(0, 40),
     now,
     bundles: bundles.filter((b) => b.enabled !== false).map((b) => ({ key: b.key, name: b.name, hint: b.hint || b.description || '' })),
     rules,
@@ -183,8 +185,10 @@ export async function runReflex(userId, batch, cfg) {
   const idToMessage = new Map(items.map((it, i) => [it.id, messageIds[i]]));
   const ruleIds = (batch.rules || []).map((r) => r.id);
   const out = new Map();
+  // v2 profile (stream I): the user's memory profile, unless the caller passed one.
+  const profile = batch.profile ?? await profileLines(userId);
   const call = async (subset, escalate) => {
-    const vars = buildReflexVars({ ...batch, items: subset });
+    const vars = buildReflexVars({ ...batch, profile, items: subset });
     const { data, provenance } = await runSortPrompt('sort.reflex', vars, { userId, lane: 'background', escalate });
     // The tier that actually answered: runPrompt's last retry runs on the other tier, so an
     // escalated call can end on Reflex and a Reflex call on the reasoning model.
