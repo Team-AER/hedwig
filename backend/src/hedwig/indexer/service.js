@@ -2,13 +2,15 @@
 import { query } from '../../services/db.js';
 import { getConfig, saveSystemConfig } from '../config.js';
 import { getState } from '../state.js';
-import { indexMessages, embedPending, drain, chunkPending } from './store.js';
+import { indexMessages, embedPending, drain, chunkPending, repairEmptyBodies } from './store.js';
+import { bodyCoverage } from './truth.js';
 import { coverageSummary, refreshCoverage, resetCoverage } from './coverage.js';
 import { applyRecipeChange, currentRecipe } from './recipe.js';
 import { reconcileBodies, requestAttachments, requestBodies } from './acquire.js';
 import { fetchBackoffs } from '../core/mailYield.js';
 
 export { retrieve, indexStatus, messageParts, attachmentCards } from './retrieve.js';
+export { bodyCoverage, coverageShare } from './truth.js';
 export { splitBody } from './parse.js';
 
 /** Pipeline step: chunk every row now; embed live mail right away, history via the sweep. */
@@ -24,7 +26,10 @@ export async function indexStep(rows, ctx = {}) {
 
 /** Worker sweeps, each bounded by a time budget. */
 export const sweeps = {
-  chunk: () => drain(() => chunkPending({ limit: 100 })),
+  chunk: async () => {
+    await repairEmptyBodies().catch((err) => console.warn('[hedwig] index: empty-body repair failed:', err.message));
+    return drain(() => chunkPending({ limit: 100 }));
+  },
   embed: async () => {
     const cfg = await getConfig();
     return drain(() => embedPending({ maxChunks: cfg['index.embedBatch'] * 4 }), { budgetMs: 10_000 });
@@ -67,7 +72,7 @@ export async function rebuild({ userId = null, recipe = null } = {}) {
 /** Totals for /admin/health. */
 export async function indexHealth() {
   const cfg = await getConfig();
-  const [coverage, recipe, embedError, backlog, backoffs] = await Promise.all([
+  const [coverage, recipe, embedError, backlog, backoffs, bodies] = await Promise.all([
     coverageSummary(),
     currentRecipe(),
     getState('index.embedError', null),
@@ -79,9 +84,12 @@ export async function indexHealth() {
                   COUNT(*) FILTER (WHERE error IS NOT NULL)::int AS errors
              FROM hedwig_index_msg`),
     fetchBackoffs().catch(() => new Map()),
+    bodyCoverage().catch((err) => ({ error: err.message })),
   ]);
   return {
     coverage,
+    // One number for "messages with a real body" (truth.js), per folder, with a reason for the rest.
+    bodies,
     backlog: backlog.rows[0],
     recipe: { current: recipe.full, vectors: recipe.vectors, note: recipe.reason },
     tika: { enabled: cfg['index.tikaEnabled'], url: cfg['index.tikaUrl'] },

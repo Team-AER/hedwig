@@ -31,7 +31,7 @@ const cfg = {
   'llm.tokenBudget.labels': 1_000_000,
   'labels.questionsPerDay': 3, 'labels.judgeSample': 100, 'labels.judgeHour': 3, 'labels.judgeBatch': 5, 'labels.judgeMinConfidence': 0.7,
   'labels.windowDays': 30, 'labels.replyWithinHours': 24, 'labels.archiveUnreadMin': 3, 'labels.readEngagedSec': 30,
-  'labels.bulkArchiveMin': 5, 'labels.askTriplesPerNight': 10, 'eval.gatePoints': 2,
+  'labels.bulkArchiveMin': 5, 'labels.askTriplesPerNight': 10, 'eval.gatePoints': 2, 'llm.probe.enabled': false,
 };
 vi.mock('../config.js', () => ({ getConfig: vi.fn(async () => ({ ...cfg, get: (k) => cfg[k] })) }));
 
@@ -39,7 +39,8 @@ const behaviour = await import('./behaviour.js');
 const { stratifiedSample, stratumOf } = await import('./sample.js');
 const questions = await import('./questions.js');
 const metrics = await import('./metrics.js');
-const { reconcileItem, judgeForUser, independentTiers } = await import('./judge.js');
+const judgeModule = await import('./judge.js');
+const { reconcileItem, judgeForUser, independentTiers } = judgeModule;
 const { resolveTargetLabels } = await import('./store.js');
 const { quoteInSources, mapSourceIds } = await import('./askTriples.js');
 const runtime = await import('./runtime.js');
@@ -578,5 +579,123 @@ describe('judgeForUser', () => {
     expect(stats).toMatchObject({ judged: 1, silver: 0, candidates: 3 });
     expect(labelInserts.flatMap((p) => p[1] || [])).toEqual([]);
     gw.restore();
+  });
+});
+
+// ── v2 index audit: single judge, Tier 2 lost, the question queue ───────────
+
+describe('single-judge mode and Tier 2 loss', () => {
+  const { reconcileSingle } = judgeModule;
+
+  it('single mode: confident Tier 1 verdicts become silver marked singleJudge; behaviour conflicts become questions; low confidence makes nothing', () => {
+    const base = { targetId: 't1', mid: '<1>' };
+    const agree = reconcileSingle({ ...base, reflex: { stream: 'people', needs_you: true, spam: 'clean', confidence: 0.9, reason: 'Priya writes' } });
+    expect(agree.labels.map((l) => l.suite).sort()).toEqual(['needs_you', 'sort', 'spam']);
+    expect(agree.labels.every((l) => l.grade === 'silver' && l.evidence.singleJudge === true && l.evidence.judges === 1)).toBe(true);
+    const conflict = reconcileSingle({ ...base, reflex: { stream: 'reading', needs_you: false, spam: 'clean', confidence: 0.9 }, behaviour: { stream: { value: 'people', rule: 'reply' } } });
+    expect(conflict.candidates).toEqual([expect.objectContaining({ kind: 'stream', why: 'behaviour_conflict' })]);
+    expect(conflict.labels.map((l) => l.suite).sort()).toEqual(['needs_you', 'spam']);
+    expect(reconcileSingle({ ...base, reflex: { stream: 'people', needs_you: true, spam: 'clean', confidence: 0.4 } })).toEqual({ labels: [], candidates: [] });
+  });
+
+  it('judgeForUser stops at tier_degraded (the judge never runs on the lighter model) and labels nothing from that batch', async () => {
+    runtime._resetRuntime();
+    const realRegistry = await import('../prompts/index.js');
+    runtime._setLoader('../prompts/index.js', async () => ({
+      ...realRegistry,
+      runPrompt: async (id, vars, opts) => {
+        if (id === 'labels.judge') {
+          expect(opts).toMatchObject({ tier: 'reasoning', allowLighter: false });
+          throw Object.assign(new Error('Tier 2 model Qwen is degraded (timeout)'), { code: 'tier_degraded', status: 503 });
+        }
+        return realRegistry.runPrompt(id, vars, opts);
+      },
+    }));
+    const id = 'aaaaaaaa-0000-4000-8000-000000000009';
+    const labelInserts = [];
+    db.routes = [
+      [/FROM account_aliases/, () => ({ rows: [{ user_id: USER, email: 'me@x.com' }] })],
+      [/WITH mine AS .* vol AS/, () => ({ rows: [{ id, mid: '<9>', folder: 'INBOX', special_use: null, sender: 'priya@corp.com', date: at(0), sender_volume: 4 }] })],
+      [/INSERT INTO hedwig_labels/, (p) => { labelInserts.push(p); return { rows: [], rowCount: p[1].length }; }],
+    ];
+    const stats = await judgeForUser(USER, { day: '2026-09-24', useModelForQuestions: false });
+    expect(stats).toMatchObject({ tier2Lost: true, partial: true, judged: 0, silver: 0 });
+    expect(labelInserts.flatMap((p) => p[1] || [])).toEqual([]);
+    runtime._resetRuntime();
+  });
+
+  it('judgeForUser in single mode asks only Tier 1 and writes single-judge silver', async () => {
+    gw.install();
+    gw.reset();
+    _resetLlmState();
+    runtime._resetRuntime();
+    const id = 'aaaaaaaa-0000-4000-8000-00000000000a';
+    const labelInserts = [];
+    db.routes = [
+      [/FROM account_aliases/, () => ({ rows: [{ user_id: USER, email: 'me@x.com' }] })],
+      [/WITH mine AS .* vol AS/, () => ({ rows: [{ id, mid: '<10>', folder: 'INBOX', special_use: null, sender: 'priya@corp.com', date: at(0), sender_volume: 4 }] })],
+      [/m\.attachments FROM messages m JOIN email_accounts/, () => ({ rows: [{ id, from_name: 'Priya', from_email: 'priya@corp.com', subject: 'Sign the visa form', to_addresses: [{ address: 'me@x.com' }], body_text: 'Please sign by Friday.' }] })],
+      [/INSERT INTO hedwig_labels/, (p) => { labelInserts.push(p); return { rows: [], rowCount: p[1].length }; }],
+    ];
+    gw.on('sort.reflex', { items: [{ id: 'm1', stream: 'people', bundle: '', needs_you: true, needs_you_reason: 'Sign', spam: 'clean', confidence: 0.9, reason: 'Priya writes to you', matches: [] }] });
+    const stats = await judgeForUser(USER, { day: '2026-09-24', mode: 'single', useModelForQuestions: false });
+    expect(gw.callsFor('labels.judge')).toHaveLength(0);
+    expect(gw.callsFor('sort.reflex')[0].model).toBe(GEMMA);
+    expect(stats).toMatchObject({ mode: 'single', judged: 1, silver: 3 });
+    expect(labelInserts[0][6].map((e) => JSON.parse(e).singleJudge)).toEqual([true, true, true]);
+    gw.restore();
+  });
+});
+
+describe('question queue', () => {
+  it('a full queue keeps its most useful questions: better candidates replace the least useful never-asked ones', () => {
+    const existing = [
+      { id: 'q1', target_id: 'a', priority: 1, open: true, unasked: true },
+      { id: 'q2', target_id: 'b', priority: 2.5, open: true, unasked: true },
+      { id: 'q3', target_id: 'c', priority: 0.5, open: true, unasked: false },
+      { id: 'q4', target_id: 'old', priority: 3, open: false, unasked: false },
+    ];
+    const cands = [
+      { targetId: 'x', priority: 3 }, { targetId: 'y', priority: 2 }, { targetId: 'old', priority: 9 }, { targetId: 'a', priority: 9 },
+    ];
+    const { take, replace } = questions.planQueue(cands, existing, { cap: 3 });
+    // Room for none; x (3) replaces q1 (1); y (2) is not better than q2 (2.5); asked or answered targets never return.
+    expect(take.map((c) => c.targetId)).toEqual(['x']);
+    expect(replace).toEqual(['q1']);
+    expect(questions.planQueue(cands, [], { cap: 3 }).take.map((c) => c.targetId)).toEqual(['old', 'a', 'x']);
+  });
+
+  it('model wording must be one question without the options spelled out and not the generic "how should I sort"', () => {
+    expect(questions.questionIsUsable('Deals landed in spam. Junk, or real mail?')).toBe(true);
+    expect(questions.questionIsUsable('How should I sort this email from GitHub?')).toBe(false);
+    expect(questions.questionIsUsable('Did it need you? (Yes / No)')).toBe(false);
+    expect(questions.questionIsUsable('Did this need your attention')).toBe(false);
+  });
+
+  it('templates for behaviour questions say what you did and what Hedwig did', () => {
+    const ev = { from: 'Anna', senderReplied: 14, senderFirst: '2025-03-02', subject: 'Lunch', why: 'behaviour_conflict', models: { sorted: 'reading' } };
+    expect(questions.templateQuestion('stream', ev)).toBe("You've replied to Anna 14 times since March 2025, but Hedwig put their latest mail in Reading. Keep their mail in People?");
+    expect(questions.templateQuestion('spam', { from: 'Shop', subject: 'Your order', why: 'rescue_candidate' }))
+      .toBe('“Your order” from Shop was in your spam folder, but it looks like real mail to me. Rescue it?');
+  });
+
+  it('behaviour candidates: people sorted away, and rescue candidates', () => {
+    const out = behaviour.candidatesFromRows({ people: [{ id: 'm1', stream: 'reading', rule: 'reply' }], rescue: [{ id: 'm2', reason: 'You ordered from them' }] });
+    expect(out).toEqual([
+      expect.objectContaining({ kind: 'stream', targetId: 'm1', why: 'behaviour_conflict', values: expect.objectContaining({ sorted: 'reading' }) }),
+      expect.objectContaining({ kind: 'spam', targetId: 'm2', why: 'rescue_candidate' }),
+    ]);
+    expect(out[0].priority).toBeGreaterThan(out[1].priority);
+  });
+
+  it('replies and sent mail are read over labels.historyDays, the rest over labels.windowDays', async () => {
+    db.routes = [];
+    await behaviour.behaviourForUser(USER, new Set(['me@x.com']), { ...cfg, 'labels.historyDays': 3650, 'labels.behaviourQuestions': 0 });
+    const replies = db.calls.find((c) => /JOIN LATERAL/.test(c.sql));
+    const sentTo = db.calls.find((c) => /WITH sent AS/.test(c.sql));
+    const archived = db.calls.find((c) => /WITH arch AS/.test(c.sql));
+    expect(replies.params[2]).toBe(3650);
+    expect(sentTo.params[2]).toBe(3650);
+    expect(archived.params[2]).toBe(30);
   });
 });

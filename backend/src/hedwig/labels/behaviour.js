@@ -18,11 +18,20 @@
 //   sent to            the user has written to the sender → stream=people (silver from 2 sends)
 //   unsubscribe        messages.unsubscribed_at on any message from the sender → not people (silver)
 // Gmail archives into All Mail, which is not synced, so Gmail archives are invisible here.
+//
+// Windows: replies and sent mail are facts whatever their age, so they are read over
+// labels.historyDays (a newly connected account has years of history and little recent
+// behaviour); reads, archives, spam marks and unsubscribes over labels.windowDays.
+//
+// Behaviour also feeds the question queue (behaviourCandidates): a sender you have replied to or
+// written to whose latest mail Hedwig sorted into Reading or Records, and mail in the server spam
+// folder that sorting thinks is real (a rescue candidate).
 import { query } from '../../services/db.js';
 import { getConfig } from '../config.js';
 import { getState, setState } from '../state.js';
 import { outgoingSql, userAddresses } from '../triage/store.js';
 import { upsertLabels } from './store.js';
+import { proposeQuestions, WHY_PRIORITY } from './questions.js';
 
 const HOUR = 3600_000;
 const ENGAGED_MAX_SEC = 15 * 60;
@@ -262,7 +271,7 @@ async function fetchSentTo(userId, addrs, days) {
          JOIN email_accounts a ON a.id = m.account_id AND a.user_id = $1
          LEFT JOIN folders f ON f.account_id = m.account_id AND f.path = m.folder
          CROSS JOIN LATERAL jsonb_array_elements(COALESCE(m.to_addresses, '[]'::jsonb) || COALESCE(m.cc_addresses, '[]'::jsonb)) t
-        WHERE ${outgoingSql('m', 'f', '$2')} AND NOT m.is_deleted AND m.date > NOW() - INTERVAL '365 days'
+        WHERE ${outgoingSql('m', 'f', '$2')} AND NOT m.is_deleted AND m.date > NOW() - make_interval(days => $3::int)
         GROUP BY 1)
      SELECT m.id, m.message_id AS mid, lower(m.from_email) AS sender, m.date, s.n AS sent_count, s.last_sent
        FROM messages m
@@ -298,12 +307,13 @@ async function fetchUnsubscribed(userId, days) {
 export async function behaviourForUser(userId, addresses, cfg) {
   const addrs = [...(addresses || [])];
   const days = cfg['labels.windowDays'];
+  const history = Math.max(days, cfg['labels.historyDays'] ?? 3650);
   const [replies, archived, reads, spamMarks, sentTo, unsubscribed] = await Promise.all([
-    fetchReplies(userId, addrs, days, cfg['labels.replyWithinHours']),
+    fetchReplies(userId, addrs, history, cfg['labels.replyWithinHours']),
     fetchArchived(userId, addrs, days),
     fetchReads(userId, addrs, days),
     fetchSpamMarks(userId, days),
-    fetchSentTo(userId, addrs, days),
+    fetchSentTo(userId, addrs, history),
     fetchUnsubscribed(userId, days),
   ]);
   // A bulk-archived message was skipped, not read: it never counts as engaged.
@@ -318,7 +328,73 @@ export async function behaviourForUser(userId, addresses, cfg) {
     },
   );
   await upsertLabels(userId, labels);
+  const perSweep = cfg['labels.behaviourQuestions'] ?? 5;
+  if (perSweep > 0 && cfg['labels.questionsPerDay'] > 0) {
+    try {
+      const candidates = await behaviourCandidates(userId, { limit: perSweep });
+      if (candidates.length) await proposeQuestions(userId, candidates);
+    } catch (err) {
+      console.warn(`[hedwig] behaviour questions failed for ${userId}:`, err.message);
+    }
+  }
   return labels.length;
+}
+
+/** Candidate questions from behaviour rows (see behaviourCandidates). Pure. */
+export function candidatesFromRows({ people = [], rescue = [] } = {}) {
+  const out = [];
+  for (const r of people) {
+    out.push({
+      kind: 'stream', targetId: String(r.id), why: 'behaviour_conflict',
+      values: { behaviour: 'people', sorted: r.stream, rule: r.rule, reflex: null, judge: null },
+      priority: WHY_PRIORITY.behaviour_conflict,
+    });
+  }
+  for (const r of rescue) {
+    out.push({
+      kind: 'spam', targetId: String(r.id), why: 'rescue_candidate',
+      values: { sorted: 'rescued', server: 'spam', reason: r.reason || null, reflex: null, judge: null },
+      priority: WHY_PRIORITY.rescue_candidate,
+    });
+  }
+  return out;
+}
+
+/**
+ * Where what the user did disagrees with how Hedwig sorted, one message per sender:
+ *  - people: a silver behaviour label says "people" (you replied, or wrote to them twice or more)
+ *    but sorting (not the user) put the sender's latest mail in Reading or Records;
+ *  - rescue: mail in the server spam folder that sorting marked as a rescue candidate.
+ * Targets ever asked are skipped by proposeQuestions.
+ */
+export async function behaviourCandidates(userId, { limit = 5 } = {}) {
+  const [{ rows: people }, { rows: rescue }] = await Promise.all([
+    query(
+      `SELECT * FROM (
+         SELECT DISTINCT ON (lower(m.from_email)) m.id, s.stream, l.evidence->>'rule' AS rule, m.date
+           FROM hedwig_labels l
+           JOIN messages mm ON mm.id::text = l.target_id
+           JOIN messages m ON lower(m.from_email) = lower(mm.from_email) AND m.account_id = mm.account_id AND NOT m.is_deleted
+           JOIN hedwig_sort s ON s.message_id = m.id AND s.user_id = $1
+          WHERE l.user_id = $1 AND l.suite = 'sort' AND l.source = 'behaviour' AND l.grade = 'silver'
+            AND l.label->>'stream' = 'people' AND s.stream IN ('reading', 'records') AND s.layer <> 'user' AND s.rule_id IS NULL AND NOT s.own
+            AND NOT EXISTS (SELECT 1 FROM hedwig_questions q WHERE q.user_id = $1 AND q.target_id = m.id::text)
+          ORDER BY lower(m.from_email), m.date DESC NULLS LAST) x
+        ORDER BY date DESC NULLS LAST LIMIT $2`,
+      [userId, limit],
+    ),
+    query(
+      `SELECT * FROM (
+         SELECT DISTINCT ON (lower(m.from_email)) m.id, COALESCE(s.spam_reason, s.reason) AS reason, m.date
+           FROM hedwig_sort s JOIN messages m ON m.id = s.message_id AND NOT m.is_deleted
+          WHERE s.user_id = $1 AND s.spam = 'rescued' AND s.in_spam_folder AND s.layer <> 'user'
+            AND NOT EXISTS (SELECT 1 FROM hedwig_questions q WHERE q.user_id = $1 AND q.target_id = m.id::text)
+          ORDER BY lower(m.from_email), m.date DESC NULLS LAST) x
+        ORDER BY date DESC NULLS LAST LIMIT $2`,
+      [userId, limit],
+    ),
+  ]);
+  return candidatesFromRows({ people, rescue }).slice(0, limit);
 }
 
 /** Record an exact dwell time a client measured. Engaged only above labels.readEngagedSec. */

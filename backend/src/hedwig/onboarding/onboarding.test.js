@@ -77,16 +77,26 @@ describe('onboarding status', () => {
         { account_id: ACC2, name: null, email_address: 'work@x.example', indexed: 100, total: 1000, bodies: 0, folders: 2 },
       ],
       sorted: new Map([[ACC1, 900], [ACC2, 10]]),
-      summary: { people: 40, reading: 300, records: 500, spam: 12, rescue_candidates: 2 },
+      summary: { sorted: 852, people_senders: 11, reading_senders: 30, records_senders: 25, people: 40, reading: 300, records: 500, spam: 12, rescue_candidates: 2 },
       senders: [sender('a@x.example', 3), sender('b@x.example', 9, { inSpam: true, proposed: 'records' }), sender('c@x.example', 9), sender('d@x.example', 1)],
       readyShare: 0.9,
       topSenders: 3,
     });
     expect(out.accounts).toEqual([
-      { accountId: ACC1, name: 'Personal', email: 'me@x.example', enabled: true, indexed: 950, total: 1000, sorted: 900, bodies: 400, done: true },
-      { accountId: ACC2, name: 'work@x.example', email: 'work@x.example', enabled: true, indexed: 100, total: 1000, sorted: 10, bodies: 0, done: false },
+      { accountId: ACC1, name: 'Personal', email: 'me@x.example', enabled: true, indexed: 950, total: 1000, sorted: 900, bodies: 400, bodyShare: null, bodyReasons: null, done: true },
+      { accountId: ACC2, name: 'work@x.example', email: 'work@x.example', enabled: true, indexed: 100, total: 1000, sorted: 10, bodies: 0, bodyShare: null, bodyReasons: null, done: false },
     ]);
-    expect(out.summary).toEqual({ people: 40, reading: 300, records: 500, spam: 12, rescueCandidates: 2, senders: 4 });
+    expect(out.summary).toEqual({
+      sorted: 852, peopleSenders: 11, readingSenders: 30, recordsSenders: 25, people: 40, reading: 300, records: 500, spam: 12, rescueCandidates: 2, senders: 4,
+    });
+    expect(out.bodies).toBeNull();
+    // With the index's real-body numbers, each account reports those, not the ledger's fetched count.
+    const withBodies = status.assembleStatus({
+      accounts: [{ account_id: ACC1, indexed: 10, total: 10, bodies: 10, folders: 1 }], sorted: { [ACC1]: 10 }, summary: {}, senders: [],
+      bodies: { real: 8, indexable: 10, share: 0.8, reasons: { no_text: 2 }, byAccount: [{ accountId: ACC1, real: 8, indexable: 10, share: 0.8, reasons: { no_text: 2 } }] },
+    });
+    expect(withBodies.accounts[0]).toMatchObject({ bodies: 8, bodyShare: 0.8, bodyReasons: { no_text: 2 } });
+    expect(withBodies.bodies).toEqual({ real: 8, indexable: 10, share: 0.8, reasons: { no_text: 2 } });
     expect(out.topSenders.map((s) => [s.key, s.count, s.proposed, s.inSpam])).toEqual([
       ['b@x.example', 9, 'records', true], ['c@x.example', 9, 'reading', false], ['a@x.example', 3, 'reading', false],
     ]);

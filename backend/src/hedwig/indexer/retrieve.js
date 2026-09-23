@@ -20,6 +20,7 @@ import { embedQuery, toVectorLiteral } from '../embeddings.js';
 import { getState } from '../state.js';
 import { recipesFor, VECTOR_DIMS } from './recipe.js';
 import { tsConfig } from './store.js';
+import { bodyCoverage, shareOf } from './truth.js';
 
 export const RRF_K = 60;
 
@@ -446,8 +447,21 @@ export async function indexStatus(userId) {
   const chunked = sum('chunked');
   const embedded = sum('embedded');
   const embedError = await getState('index.embedError', null).catch(() => null);
+  const bodies = await bodyCoverage({ userId }).catch(() => null);
+  const bodyOf = new Map((bodies?.byFolder || []).map((b) => [`${b.accountId}\n${b.folder}`, b]));
+  for (const r of coverage) {
+    const b = bodyOf.get(`${r.accountId}\n${r.folder}`);
+    r.realBodies = b ? b.real : null;
+    r.bodyReasons = b ? b.reasons : null;
+    r.pct.realBodies = b ? pct(b.real, b.indexable) : null;
+  }
+  const share = shareOf(rows, { vectors: cur.vectors });
   return {
     coverage,
+    // Real bodies (truth.js): the number admin health and "Sort the past" also show.
+    bodies: bodies ? { real: bodies.real, indexable: bodies.indexable, share: bodies.share, reasons: bodies.reasons } : null,
+    // Share of searchable mail (spam folder aside) chunked and embedded: what Ask/search/cards report.
+    share,
     total,
     chunked,
     embedded,

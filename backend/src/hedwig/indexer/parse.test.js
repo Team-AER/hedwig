@@ -2,7 +2,8 @@ import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('../../services/db.js', () => ({ query: vi.fn(async () => ({ rows: [] })), pool: {} }));
 
-const { splitBody, splitQuotes, splitSignature, splitDisclaimer, splitHtml } = await import('./parse.js');
+const await_parse = await import('./parse.js');
+const { splitBody, splitQuotes, splitSignature, splitDisclaimer, splitHtml } = await_parse;
 
 describe('splitQuotes (text)', () => {
   it('cuts top-posted replies at "On … wrote:" and keeps the history', () => {
@@ -120,5 +121,33 @@ describe('splitHtml / splitBody (HTML)', () => {
   it('uses the snippet when no body has arrived and accepts a plain string', () => {
     expect(splitBody({ snippet: 'Invoice 2041 attached' }).newText).toBe('Invoice 2041 attached');
     expect(splitBody('Plain text\n\nSent from my iPhone')).toMatchObject({ newText: 'Plain text', signature: 'Sent from my iPhone' });
+  });
+});
+
+describe('bodies that used to give no text (prod, 2026-09-24)', () => {
+  const { looksLikeHtml, textChars } = await_parse;
+  it('a text part that is only a line break does not hide the HTML part', () => {
+    const r = splitBody({ body_text: '\r\n', body_html: '<style>body{width:100%}</style><table><tr><td><p>Delhi Metro stations are getting new lifts.</p></td></tr></table>' });
+    expect(r.newText).toContain('Delhi Metro stations are getting new lifts.');
+    expect(r.newText).not.toContain('width');
+  });
+  it('HTML sent in the text part is converted, not indexed as markup', () => {
+    const html = '\r\n\r\n<!DOCTYPE html><html><body><div><p>Your refund of Rs.295 has been processed.</p></div></body></html>';
+    expect(looksLikeHtml(html)).toBe(true);
+    const r = splitBody({ body_text: html, body_html: null });
+    expect(r.newText).toContain('Your refund of Rs.295 has been processed.');
+    expect(r.newText).not.toMatch(/<[a-z!]/i);
+    expect(looksLikeHtml('Use <b> for bold, I said.')).toBe(false);
+  });
+  it('a one-paragraph body that mentions "confidential" is the message, not a footer', () => {
+    const t = '--- REPLY ABOVE THIS LINE TO POST A COMMENT --- Poor confidentiality maintained at the clinic: my records were shared without consent and I want this escalated.';
+    const r = splitBody(t);
+    expect(r.newText).toBe(t);
+    expect(r.disclaimer).toBe('');
+    expect(textChars(r)).toBe(t.length);
+    // A real footer after a message is still taken off.
+    const withFooter = splitDisclaimer('See you Friday.\n\nThis email and any attachments are confidential and intended solely for the addressee. If you are not the intended recipient, delete it.');
+    expect(withFooter.text).toBe('See you Friday.');
+    expect(withFooter.disclaimer).toMatch(/intended recipient/);
   });
 });

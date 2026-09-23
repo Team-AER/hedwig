@@ -6,14 +6,18 @@ import { query } from '../../services/db.js';
 import { getConfig, saveUserConfig } from '../config.js';
 import { screenerList } from '../sort/senders.js';
 import { decide } from '../sort/service.js';
+import { bodyCoverage } from '../indexer/truth.js';
 
 /**
  * Pure assembly of the status from the query results.
  * @param {{ accounts: object[], sorted: Map<string, number>|object, summary: object, senders: object[],
  *           readyShare?: number, topSenders?: number, done?: boolean }} parts
  */
-export function assembleStatus({ accounts, sorted, summary, senders, readyShare = 0.9, topSenders = 20, done = false }) {
+export function assembleStatus({ accounts, sorted, summary, senders, readyShare = 0.9, topSenders = 20, done = false, bodies = null }) {
   const sortedOf = (id) => (sorted instanceof Map ? sorted.get(id) : sorted?.[id]) || 0;
+  // Real bodies per account from indexer/truth.js (the number admin health shows too); the coverage
+  // ledger's fetched-body count only when that is unavailable.
+  const bodyOf = new Map((bodies?.byAccount || []).map((b) => [b.accountId, b]));
   const list = accounts.map((a) => {
     const indexed = Number(a.indexed) || 0;
     const total = Number(a.total) || 0;
@@ -30,7 +34,9 @@ export function assembleStatus({ accounts, sorted, summary, senders, readyShare 
       indexed,
       total,
       sorted: n,
-      bodies: Number(a.bodies) || 0,
+      bodies: bodyOf.has(a.account_id) ? bodyOf.get(a.account_id).real : Number(a.bodies) || 0,
+      bodyShare: bodyOf.has(a.account_id) ? bodyOf.get(a.account_id).share : null,
+      bodyReasons: bodyOf.has(a.account_id) ? bodyOf.get(a.account_id).reasons : null,
       done: accountDone,
     };
   });
@@ -50,6 +56,12 @@ export function assembleStatus({ accounts, sorted, summary, senders, readyShare 
   return {
     accounts: list,
     summary: {
+      // "Sorted 6,376 messages: 203 people in People, 287 senders in Reading, …, 826 in spam, of
+      // which 1 looks real." Message counts per stream, distinct senders per stream.
+      sorted: Number(summary?.sorted) || 0,
+      peopleSenders: Number(summary?.people_senders) || 0,
+      readingSenders: Number(summary?.reading_senders) || 0,
+      recordsSenders: Number(summary?.records_senders) || 0,
       people: Number(summary?.people) || 0,
       reading: Number(summary?.reading) || 0,
       records: Number(summary?.records) || 0,
@@ -57,6 +69,7 @@ export function assembleStatus({ accounts, sorted, summary, senders, readyShare 
       rescueCandidates: Number(summary?.rescue_candidates) || 0,
       senders: senders.length,
     },
+    bodies: bodies ? { real: bodies.real, indexable: bodies.indexable, share: bodies.share, reasons: bodies.reasons } : null,
     topSenders: top,
     // Disabled accounts are listed but do not hold "ready" back (they do not sync).
     ready: list.some((a) => a.enabled) && list.filter((a) => a.enabled).every((a) => a.done),
@@ -67,7 +80,7 @@ export function assembleStatus({ accounts, sorted, summary, senders, readyShare 
 /** GET /onboarding/status */
 export async function onboardingStatus(userId) {
   const cfg = await getConfig(userId);
-  const [accounts, sorted, summary, screener] = await Promise.all([
+  const [accounts, sorted, summary, screener, bodies] = await Promise.all([
     query(
       `SELECT a.id AS account_id, a.name, a.email_address, a.enabled,
               COALESCE(SUM(c.seen), 0)::int AS indexed, COALESCE(SUM(c.total), 0)::int AS total,
@@ -80,7 +93,11 @@ export async function onboardingStatus(userId) {
     ),
     query('SELECT account_id, COUNT(*)::int AS n FROM hedwig_sort WHERE user_id = $1 GROUP BY account_id', [userId]),
     query(
-      `SELECT COUNT(*) FILTER (WHERE s.stream = 'people')::int AS people,
+      `SELECT COUNT(*)::int AS sorted,
+              COUNT(DISTINCT lower(m.from_email)) FILTER (WHERE s.stream = 'people')::int AS people_senders,
+              COUNT(DISTINCT lower(m.from_email)) FILTER (WHERE s.stream = 'reading')::int AS reading_senders,
+              COUNT(DISTINCT lower(m.from_email)) FILTER (WHERE s.stream = 'records')::int AS records_senders,
+              COUNT(*) FILTER (WHERE s.stream = 'people')::int AS people,
               COUNT(*) FILTER (WHERE s.stream = 'reading')::int AS reading,
               COUNT(*) FILTER (WHERE s.stream = 'records')::int AS records,
               COUNT(*) FILTER (WHERE s.stream = 'spam')::int AS spam,
@@ -90,6 +107,7 @@ export async function onboardingStatus(userId) {
       [userId],
     ),
     screenerList(userId),
+    bodyCoverage({ userId }).catch((err) => { console.warn('[hedwig] onboarding: body coverage unavailable:', err.message); return null; }),
   ]);
   return assembleStatus({
     accounts: accounts.rows,
@@ -99,6 +117,7 @@ export async function onboardingStatus(userId) {
     readyShare: cfg['onboarding.readyShare'],
     topSenders: cfg['onboarding.topSenders'],
     done: cfg['onboarding.done'],
+    bodies,
   });
 }
 

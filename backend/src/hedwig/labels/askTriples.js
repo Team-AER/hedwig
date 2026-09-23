@@ -88,7 +88,7 @@ async function termHits(userId, term) {
 
 /** Verify an answer against its thread: the verifier says supported, and its quote is real. */
 export async function verifyAnswer(userId, { question, answer, sources }) {
-  const { data } = await runPrompt('ask.verify', { question, answer, sources }, { userId, feature: 'labels', lane: 'background' });
+  const { data } = await runPrompt('ask.verify', { question, answer, sources }, { userId, feature: 'labels', lane: 'background', allowLighter: false });
   const quoteOk = quoteInSources(data?.quote, sources.map((s) => s.text));
   return { supported: Boolean(data?.supported) && quoteOk, answerable: Boolean(data?.answerable), quote: data?.quote || '', quoteOk, reason: data?.reason || '' };
 }
@@ -110,41 +110,50 @@ export async function askTriplesForUser(userId, { day = new Date().toISOString()
   const wantUnanswerable = Math.floor(want / 3);
   try {
     for (const [i, thread] of threads.entries()) {
-      const { view, byShort, texts } = threadForPrompt(thread);
-      const gen = await runPrompt('ask.generate', { mode: 'answerable', n: 2, owner, thread: view }, { userId, feature: 'labels', lane: 'background' });
-      for (const it of gen.data?.items || []) {
-        if (!it.answer || stats.answerable >= want - wantUnanswerable) continue;
-        const sourceIds = mapSourceIds(it.sourceIds, byShort);
-        if (!sourceIds.length) { stats.rejected++; continue; }
-        const sources = thread.messages.map((m, k) => ({ id: view[k].id, text: texts.get(m.id) }));
-        const v = await verifyAnswer(userId, { question: it.question, answer: it.answer, sources });
-        if (!v.supported || !v.answerable) { stats.rejected++; continue; }
-        stats.answerable++;
-        labels.push({
-          suite: 'ask', targetId: askTarget(it.question), grade: 'silver', source: 'generated',
-          label: { question: it.question, answer: it.answer, sourceIds, answerable: true },
-          evidence: { rule: 'generated', threadKey: thread.threadKey, quote: v.quote, verify: v.reason, promptVersion: gen.provenance?.promptVersion || null, model: gen.provenance?.model || null, day },
-        });
-      }
-      if (i % 2 === 0 && stats.unanswerable < wantUnanswerable) {
-        const un = await runPrompt('ask.generate', { mode: 'unanswerable', n: 1, owner, thread: view }, { userId, feature: 'labels', lane: 'background' });
-        for (const it of un.data?.items || []) {
-          if (!Array.isArray(it.absentTerms) || !it.absentTerms.length) continue;
-          const hits = {};
-          for (const term of it.absentTerms.slice(0, 3)) hits[term] = await termHits(userId, term);
-          if (!Object.values(hits).some((n) => n === 0)) { stats.rejected++; continue; }
-          stats.unanswerable++;
+      try {
+        const { view, byShort, texts } = threadForPrompt(thread);
+        const gen = await runPrompt('ask.generate', { mode: 'answerable', n: 2, owner, thread: view }, { userId, feature: 'labels', lane: 'background', allowLighter: false });
+        for (const it of gen.data?.items || []) {
+          if (!it.answer || stats.answerable >= want - wantUnanswerable) continue;
+          const sourceIds = mapSourceIds(it.sourceIds, byShort);
+          if (!sourceIds.length) { stats.rejected++; continue; }
+          const sources = thread.messages.map((m, k) => ({ id: view[k].id, text: texts.get(m.id) }));
+          const v = await verifyAnswer(userId, { question: it.question, answer: it.answer, sources });
+          if (!v.supported || !v.answerable) { stats.rejected++; continue; }
+          stats.answerable++;
           labels.push({
             suite: 'ask', targetId: askTarget(it.question), grade: 'silver', source: 'generated',
-            label: { question: it.question, answerable: false, sourceIds: [] },
-            evidence: { rule: 'unanswerable', threadKey: thread.threadKey, absentTerms: hits, promptVersion: un.provenance?.promptVersion || null, day },
+            label: { question: it.question, answer: it.answer, sourceIds, answerable: true },
+            evidence: { rule: 'generated', threadKey: thread.threadKey, quote: v.quote, verify: v.reason, promptVersion: gen.provenance?.promptVersion || null, model: gen.provenance?.model || null, day },
           });
         }
+        if (i % 2 === 0 && stats.unanswerable < wantUnanswerable) {
+          const un = await runPrompt('ask.generate', { mode: 'unanswerable', n: 1, owner, thread: view }, { userId, feature: 'labels', lane: 'background', allowLighter: false });
+          for (const it of un.data?.items || []) {
+            if (!Array.isArray(it.absentTerms) || !it.absentTerms.length) continue;
+            const hits = {};
+            for (const term of it.absentTerms.slice(0, 3)) hits[term] = await termHits(userId, term);
+            if (!Object.values(hits).some((n) => n === 0)) { stats.rejected++; continue; }
+            stats.unanswerable++;
+            labels.push({
+              suite: 'ask', targetId: askTarget(it.question), grade: 'silver', source: 'generated',
+              label: { question: it.question, answerable: false, sourceIds: [] },
+              evidence: { rule: 'unanswerable', threadKey: thread.threadKey, absentTerms: hits, promptVersion: un.provenance?.promptVersion || null, day },
+            });
+          }
+        }
+      } catch (err) {
+        // One thread's unusable output is that thread rejected, not the whole nightly job failed
+        // (a failed attempt would re-run the judge before it).
+        if (err?.name !== 'PromptOutputError') throw err;
+        stats.rejected++;
       }
     }
   } catch (err) {
-    if (!['budget_exceeded', 'llm_disabled'].includes(err.code)) throw err;
+    // tier_degraded: Tier 2 went away (these prompts never run on the lighter model); keep what was made.
+    if (!['budget_exceeded', 'llm_disabled', 'tier_degraded'].includes(err.code)) throw err;
     stats.partial = true;
+    if (err.code === 'tier_degraded') stats.tier2Lost = true;
   }
   await upsertLabels(userId, labels);
   return stats;

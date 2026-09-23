@@ -4,6 +4,8 @@ import { query } from '../../services/db.js';
 import { getConfig } from '../config.js';
 import { runPrompt, recordCorrection, applySortCorrection, tableExists } from './runtime.js';
 import { upsertLabels } from './store.js';
+import { reasoningTier } from './tier.js';
+import { userAddresses } from '../triage/store.js';
 
 export const KINDS = Object.freeze({
   stream: { suite: 'sort', field: 'stream' },
@@ -32,7 +34,7 @@ export function optionsFor(kind) {
 
 // Why a candidate is worth asking, most useful first: the user's own behaviour contradicting the
 // models teaches the most, and a possible spam false positive costs the most.
-export const WHY_PRIORITY = { behaviour_conflict: 3, spam_disagree: 2.5, models_disagree: 2, low_confidence: 1, same_model: 1 };
+export const WHY_PRIORITY = { behaviour_conflict: 3, rescue_candidate: 2.6, spam_disagree: 2.5, models_disagree: 2, low_confidence: 1, same_model: 1 };
 
 /** Best candidate per target, minus targets that were ever asked. Pure. */
 export function dedupeCandidates(candidates, askedTargets = new Set()) {
@@ -72,6 +74,16 @@ const quoteSubject = (s) => `“${String(s || '(no subject)').replace(/\s+/g, ' 
 export function templateQuestion(kind, ev) {
   const who = ev.from || ev.sender || 'this sender';
   const since = ev.senderFirst ? ` since ${monthYear(ev.senderFirst)}` : '';
+  const sortedInto = { reading: 'Reading', records: 'Records' }[ev.models?.sorted] || null;
+  if (kind === 'stream' && ev.why === 'behaviour_conflict' && sortedInto) {
+    const did = (ev.senderReplied || 0) > 0
+      ? `You've replied to ${who} ${plural(ev.senderReplied, 'time', 'times')}${since}`
+      : `You've written to ${who}`;
+    return `${did}, but Hedwig put their latest mail in ${sortedInto}. Keep their mail in People?`;
+  }
+  if (kind === 'spam' && ev.why === 'rescue_candidate') {
+    return `${quoteSubject(ev.subject)} from ${who} was in your spam folder, but it looks like real mail to me. Rescue it?`;
+  }
   switch (kind) {
     case 'needs_you':
       if ((ev.senderCount || 0) > 1) {
@@ -98,9 +110,23 @@ export function questionIsGrounded(text, evidence) {
   return (String(text).match(/\d+/g) || []).every((n) => allowed.has(n));
 }
 
+/**
+ * A model-written question must read as one question to the user: it ends with "?", does not spell
+ * out the options ("Junk / Real mail") and is not the generic "How should I sort this email…",
+ * which the buttons already say. Pure.
+ */
+export function questionIsUsable(text) {
+  const t = String(text || '').trim();
+  if (!t.endsWith('?')) return false;
+  if (/\s\/\s|\((?:[^()]*\/[^()]*)\)/.test(t)) return false;
+  if (/^how should (i|hedwig) (sort|treat|handle|file)\b/i.test(t)) return false;
+  return true;
+}
+
 
 /** Counts and dates about a message and its sender, computed from the user's mail. */
 export async function gatherEvidence(userId, messageId) {
+  const addrs = [...(((await userAddresses([userId])).get(userId)) || [])];
   const { rows } = await query(
     `WITH msg AS (
        SELECT m.id, m.message_id AS mid, m.account_id, m.subject, m.from_name, lower(m.from_email) AS sender, m.date, m.folder,
@@ -117,9 +143,11 @@ export async function gatherEvidence(userId, messageId) {
             (SELECT MIN(date) FROM theirs) AS sender_first,
             (SELECT COUNT(*)::int FROM theirs WHERE is_read) AS sender_opened,
             (SELECT COUNT(DISTINCT o.in_reply_to)::int FROM messages o JOIN email_accounts oa ON oa.id = o.account_id AND oa.user_id = $1
-              WHERE o.in_reply_to IN (SELECT message_id FROM theirs WHERE message_id IS NOT NULL)) AS sender_replied
+               LEFT JOIN folders ofo ON ofo.account_id = o.account_id AND ofo.path = o.folder
+              WHERE o.in_reply_to IN (SELECT message_id FROM theirs WHERE message_id IS NOT NULL)
+                AND (COALESCE(ofo.special_use, '') = '\\Sent' OR lower(o.from_email) = ANY($3::text[]))) AS sender_replied
        FROM msg`,
-    [userId, messageId],
+    [userId, messageId, addrs],
   );
   const r = rows[0];
   if (!r) return null;
@@ -144,14 +172,40 @@ export async function gatherEvidence(userId, messageId) {
 export async function writeQuestion(userId, kind, evidence, options, { useModel = true } = {}) {
   const fallback = templateQuestion(kind, evidence);
   if (!useModel) return { text: fallback, by: 'template' };
+  // Phrasing is a Tier 2 job; on the lighter model the template reads better.
+  const tier = await reasoningTier(userId).catch(() => ({ degraded: false }));
+  if (tier.degraded) return { text: fallback, by: 'template' };
   try {
-    const { data } = await runPrompt('labels.question', { kind, evidence, options }, { userId, feature: 'labels', lane: 'background' });
+    const { data, provenance } = await runPrompt('labels.question', { kind, evidence, options }, { userId, feature: 'labels', lane: 'background' });
     const text = String(data?.question || '').replace(/\s+/g, ' ').trim();
-    if (text.length >= 8 && text.length <= 200 && questionIsGrounded(text, evidence)) return { text, by: 'model' };
+    const lighter = Boolean(provenance?.fellBack) || (provenance?.tier && provenance.tier !== 'reasoning');
+    if (!lighter && text.length >= 8 && text.length <= 200 && questionIsGrounded(text, evidence) && questionIsUsable(text)) return { text, by: 'model' };
   } catch (err) {
     if (!['llm_disabled', 'budget_exceeded'].includes(err.code)) console.warn('[hedwig] labels.question failed:', err.message);
   }
   return { text: fallback, by: 'template' };
+}
+
+/**
+ * Which candidates join the queue, and which never-asked open questions they replace. Pure.
+ * existing: { id, target_id, priority, open, unasked }. Targets ever asked are skipped.
+ * @returns {{ take: object[], replace: string[] }}
+ */
+export function planQueue(candidates, existing, { cap = 15 } = {}) {
+  const fresh = dedupeCandidates(candidates, new Set(existing.map((r) => String(r.target_id))));
+  const open = existing.filter((r) => r.open);
+  const room = Math.max(0, cap - open.length);
+  const take = fresh.slice(0, room);
+  const replace = [];
+  const replaceable = open.filter((r) => r.unasked).sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0));
+  for (const c of fresh.slice(take.length)) {
+    const worst = replaceable[0];
+    if (!worst || (c.priority ?? 0) <= (worst.priority ?? 0)) break;
+    replaceable.shift();
+    replace.push(worst.id);
+    take.push(c);
+  }
+  return { take, replace };
 }
 
 /**
@@ -163,17 +217,30 @@ export async function proposeQuestions(userId, candidates, { useModel = true } =
   const cfg = await getConfig(userId);
   const perDay = cfg['labels.questionsPerDay'];
   if (!perDay || !candidates.length) return 0;
-  const { rows: existing } = await query('SELECT target_id, (answered_at IS NULL AND dropped_at IS NULL) AS open FROM hedwig_questions WHERE user_id = $1', [userId]);
-  const room = perDay * 5 - existing.filter((r) => r.open).length;
-  if (room <= 0) return 0;
-  const fresh = dedupeCandidates(candidates, new Set(existing.map((r) => r.target_id))).slice(0, room);
+  const { rows: existing } = await query(
+    `SELECT id, target_id, priority, (answered_at IS NULL AND dropped_at IS NULL) AS open, (asked_at IS NULL) AS unasked
+       FROM hedwig_questions WHERE user_id = $1`,
+    [userId],
+  );
+  const { take, replace } = planQueue(candidates, existing, { cap: perDay * 5 });
+  if (!take.length) return 0;
+  // A full queue keeps its most useful questions: a better candidate takes the place of the least
+  // useful one never asked (that target is not asked later either).
+  for (const id of replace) {
+    await query(
+      `UPDATE hedwig_questions SET dropped_at = NOW(), drop_reason = 'superseded by a more useful question'
+        WHERE id = $1 AND user_id = $2 AND asked_at IS NULL AND answered_at IS NULL AND dropped_at IS NULL`,
+      [id, userId],
+    );
+  }
+  const fresh = take;
   let n = 0;
   for (const c of fresh) {
     const facts = await gatherEvidence(userId, c.targetId);
     if (!facts) continue;
     const evidence = { ...facts, why: c.why, models: c.values || {} };
     const options = optionsFor(c.kind);
-    const { text, by } = await writeQuestion(userId, c.kind, facts, options, { useModel });
+    const { text, by } = await writeQuestion(userId, c.kind, evidence, options, { useModel });
     const { rowCount } = await query(
       `INSERT INTO hedwig_questions (user_id, kind, target_id, question, evidence, options, priority)
        VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (user_id, target_id) DO NOTHING`,
@@ -185,6 +252,12 @@ export async function proposeQuestions(userId, candidates, { useModel = true } =
 }
 
 async function settleOpen(userId) {
+  // Shown and left unanswered for three days: let it go (it is never asked again).
+  await query(
+    `UPDATE hedwig_questions SET dropped_at = NOW(), drop_reason = 'not answered'
+      WHERE user_id = $1 AND answered_at IS NULL AND dropped_at IS NULL AND asked_at < NOW() - INTERVAL '3 days'`,
+    [userId],
+  );
   const corrections = await tableExists('hedwig_corrections');
   const { rows } = await query(
     `SELECT q.id, q.kind, q.target_id, q.created_at,
@@ -238,6 +311,35 @@ export async function listOpenQuestions(userId) {
     [userId, perDay],
   );
   return rows.map(toApi);
+}
+
+/**
+ * The open question about one message, for showing it inline on that message. It is shown when it
+ * was already asked today, or when today's quota (labels.questionsPerDay) has room, which marks it
+ * asked. Otherwise null: the daily limit holds wherever questions appear.
+ */
+export async function questionFor(userId, messageId) {
+  const cfg = await getConfig(userId);
+  const perDay = cfg['labels.questionsPerDay'];
+  if (!perDay) return null;
+  const { rows } = await query(
+    `SELECT *, COALESCE(asked_at >= date_trunc('day', NOW()), false) AS asked_today
+       FROM hedwig_questions WHERE user_id = $1 AND target_id = $2 AND answered_at IS NULL AND dropped_at IS NULL`,
+    [userId, String(messageId)],
+  );
+  const q = rows[0];
+  if (!q) return null;
+  if (q.asked_today) return toApi(q);
+  const { rows: [{ asked }] } = await query(
+    `SELECT COUNT(*)::int AS asked FROM hedwig_questions WHERE user_id = $1 AND asked_at >= date_trunc('day', NOW())`,
+    [userId],
+  );
+  if (asked >= perDay) return null;
+  const { rows: marked } = await query(
+    'UPDATE hedwig_questions SET asked_at = NOW() WHERE id = $1 AND user_id = $2 AND answered_at IS NULL AND dropped_at IS NULL RETURNING *',
+    [q.id, userId],
+  );
+  return marked[0] ? toApi(marked[0]) : null;
 }
 
 /** Read-only variant for the Brief: never marks anything asked. */

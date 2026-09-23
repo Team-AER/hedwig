@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mockGateway } from '../testing/mockGateway.js';
 
 // ── Mocks: database, config, retrieval ───────────────────────────────────────
-const db = { calls: [], rows: new Map(), log: new Map(), nextAi: 1, prev: null, entities: [] };
+const db = { calls: [], rows: new Map(), log: new Map(), nextAi: 1, prev: null, entities: [], coverage: [] };
 vi.mock('../../services/db.js', () => ({
   pool: {},
   query: vi.fn(async (sql, params = []) => {
@@ -13,6 +13,7 @@ vi.mock('../../services/db.js', () => ({
     if (/UPDATE hedwig_ask_log SET status/.test(sql)) { const row = db.log.get(params[0]); if (row) row.finish = params; return { rows: [] }; }
     if (/FROM hedwig_ask_log WHERE id = \$1 AND user_id = \$2/.test(sql)) return { rows: db.prev && db.prev.id === params[0] ? [db.prev] : [] };
     if (/FROM messages m JOIN email_accounts a/.test(sql) && /ANY\(\$2::uuid\[\]\)/.test(sql)) return { rows: params[1].map((id) => db.rows.get(id)).filter(Boolean) };
+    if (/FROM hedwig_index_coverage WHERE user_id = \$1/.test(sql)) return { rows: db.coverage };
     if (/FROM hedwig_entities e JOIN hedwig_entity_addresses/.test(sql)) return { rows: db.entities.filter((e) => e.name.toLowerCase().startsWith(String(params[1]).toLowerCase())).map((e) => ({ email: e.email })) };
     return { rows: [] };
   }),
@@ -36,6 +37,7 @@ const { checkCitations, citedNumbers, numberResults, runSources, sourcesFromMess
 const { answerQuestion, NOTHING_RELEVANT } = await import('./answer.js');
 const { _resetPrompts } = await import('../prompts/index.js');
 const { _resetLlmState } = await import('../llm.js');
+const { _resetShareCache } = await import('../indexer/truth.js');
 
 const USER = '11111111-1111-4111-8111-111111111111';
 const NOW = new Date('2026-09-23T10:00:00Z'); // a Wednesday
@@ -43,7 +45,8 @@ const M = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
 beforeEach(() => {
   cfg = { ...defaults, 'llm.baseUrl': gw.baseUrl, 'llm.catalogUrl': gw.catalogUrl, 'insights.timezone': 'Europe/London' };
-  db.calls.length = 0; db.rows.clear(); db.log.clear(); db.prev = null; db.entities = [];
+  db.calls.length = 0; db.rows.clear(); db.log.clear(); db.prev = null; db.entities = []; db.coverage = [];
+  _resetShareCache();
   retrieveMock.mockReset();
   gw.reset(); gw.install();
   _resetPrompts({ keepFiles: true }); _resetLlmState(); _resetCitations();
@@ -305,6 +308,46 @@ describe('answerQuestion', () => {
     expect(text.map((m) => m.role)).toEqual(['system', 'user', 'assistant', 'user']);
     expect(text[2].content).not.toContain('[1]');
     expect([...db.log.values()][0].params[4]).toBe(PREV);
+  });
+
+  it('says how much of the mail it could see while the index is incomplete, in the events and the not-found answer', async () => {
+    db.coverage = [
+      { spam: false, state: 'running', total: 1000, dupes: 0, chunked: 900, embedded: 640 },
+      { spam: true, state: 'running', total: 500, dupes: 0, chunked: 0, embedded: 0 },
+    ];
+    retrieveMock.mockResolvedValue({ chunks: [], floor: true });
+    const { events, onEvent } = collect();
+    const out = await answerQuestion(USER, 'What colour is the office carpet in Oslo?', { onEvent, now: NOW });
+    expect(out.coverage).toEqual({ share: 0.64, indexed: 640, total: 1000, complete: false });
+    expect(out.answer).toBe(`${NOTHING_RELEVANT} Only 64% of your mail is indexed so far, so it may still turn up.`);
+    expect(events[0].coverage).toMatchObject({ share: 0.64 });
+    expect(events.at(-1)).toMatchObject({ type: 'done', notFound: true, coverage: { share: 0.64 } });
+  });
+
+  it('labels an answer from the fallback model as lighter model, and keeps the flag with the saved answer', async () => {
+    const QWEN = 'Qwen/Qwen3.8-Flash-Next';
+    const GEMMA = 'google/gemma-4-12B-it-qat-w4a16-ct';
+    cfg = { ...cfg, 'llm.models.long': QWEN, 'llm.fallbackModel': GEMMA };
+    db.rows.set(M(1), row(1, 'visa', 20, { subject: 'Sponsorship – fees', body_text: 'Our fee is £1,450.' }));
+    retrieveMock.mockResolvedValue({ chunks: [chunk(1, 'visa', 0.8)], floor: false });
+    gw.on('ask.plan', { text: 'fee', people: [], after: null, before: null, folders: [], hasAttachment: null, latest: false });
+    gw.on('ask.answer', (req) => (req.model === QWEN ? gw.error(502, 'upstream timed out') : 'The fee is £1,450 [1].'));
+    const { events, onEvent } = collect();
+    const out = await answerQuestion(USER, 'what is the solicitor fee', { onEvent, now: NOW });
+    expect(gw.callsFor('ask.answer').map((c) => c.model)).toEqual([QWEN, GEMMA]);
+    expect(out).toMatchObject({ lighterModel: true, model: GEMMA, citations: [1] });
+    expect(events.at(-1)).toMatchObject({ type: 'done', lighterModel: true, model: GEMMA });
+    const log = [...db.log.values()][0];
+    expect(JSON.parse(log.finish[6]).answer).toEqual({ model: GEMMA, lighterModel: true });
+  });
+
+  it('an answer from Tier 2 is not labelled lighter', async () => {
+    db.rows.set(M(1), row(1, 'visa', 20, { body_text: 'Our fee is £1,450.' }));
+    retrieveMock.mockResolvedValue({ chunks: [chunk(1, 'visa', 0.8)], floor: false });
+    gw.on('ask.plan', { text: 'fee', people: [], after: null, before: null, folders: [], hasAttachment: null, latest: false });
+    gw.on('ask.answer', 'The fee is £1,450 [1].');
+    const out = await answerQuestion(USER, 'what is the solicitor fee', { onEvent: () => {}, now: NOW });
+    expect(out.lighterModel).toBe(false);
   });
 
   it('rejects a follow-up of someone else\'s answer', async () => {

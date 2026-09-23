@@ -2,6 +2,12 @@
 // tier) and the Reflex tier's sort prompt. Where the two tiers agree with each other, with enough
 // confidence, and do not contradict behaviour, the verdict becomes a silver label; where they
 // disagree, or contradict what the user did, the item becomes a candidate question.
+//
+// The two opinions must come from two different models. When Tier 2 is degraded the nightly job
+// waits for it (labels/index.js defers without spending an attempt); after labels.judgeDeferHours
+// it runs in single mode: only the Reflex side, and its confident verdicts that behaviour does not
+// contradict become silver labels marked `singleJudge` (evals report them apart). If Tier 2 stops
+// answering during a dual run, the run stops at that batch (`tier2Lost`), keeping what it labelled.
 import { query } from '../../services/db.js';
 import { getConfig } from '../config.js';
 import { messageText } from '../text.js';
@@ -10,6 +16,7 @@ import { runPrompt, runReflex } from './runtime.js';
 import { stratifiedSample, folderClass } from './sample.js';
 import { upsertLabels, resolveTargetLabels } from './store.js';
 import { proposeQuestions, WHY_PRIORITY } from './questions.js';
+import { ranOnLighterModel } from './tier.js';
 
 const spamBool = (v) => (v == null ? null : v === 'suspected' || v === 'phishing' || v === true);
 
@@ -75,6 +82,44 @@ export function reconcileItem({ targetId, mid = null, inSpam = false, behaviour 
       values: { judge: field === 'spam' ? judge.spam : j, reflex: field === 'spam' ? reflex?.spam ?? null : r, behaviour: b ?? null, rationale: judge.rationale || null, confidence: conf },
       priority: (WHY_PRIORITY[why] || 0) + (1 - conf) * 0.5,
     });
+  }
+  return { labels, candidates };
+}
+
+/**
+ * Single mode: the Reflex answer is the only model opinion. Confident verdicts that behaviour does
+ * not contradict become silver labels marked singleJudge; a contradiction with behaviour becomes a
+ * candidate question. Low confidence makes nothing (without a second opinion it is not worth asking).
+ * Pure.
+ */
+export function reconcileSingle({ targetId, mid = null, inSpam = false, behaviour = {}, reflex, minConfidence = 0.7, meta = {} }) {
+  const labels = [];
+  const candidates = [];
+  if (!reflex) return { labels, candidates };
+  const conf = Number(reflex.confidence) || 0;
+  const values = {
+    stream: { r: reflex.stream ?? null, b: behaviour.stream?.value },
+    needs_you: { r: typeof reflex.needs_you === 'boolean' ? reflex.needs_you : null, b: behaviour.needs_you?.value },
+    spam: { r: spamBool(reflex.spam), b: behaviour.spam?.value },
+  };
+  for (const [field, { r, b }] of Object.entries(values)) {
+    if (r === null) continue;
+    const behaviourConflict = (b !== undefined && b !== null && b !== r) || (field === 'stream' && behaviour.notStream?.value === r);
+    const evidence = {
+      rule: 'judge', mid, confidence: conf, rationale: reflex.reason || null, reflex: r, behaviour: b ?? null,
+      behaviourRule: behaviour[field]?.rule || null, singleJudge: true, judges: 1, ...meta,
+    };
+    if (behaviourConflict) {
+      candidates.push({
+        kind: KIND_OF[field], targetId, why: 'behaviour_conflict',
+        values: { judge: null, reflex: field === 'spam' ? reflex.spam : r, behaviour: b ?? null, rationale: reflex.reason || null, confidence: conf, singleJudge: true },
+        priority: WHY_PRIORITY.behaviour_conflict + (1 - conf) * 0.5,
+      });
+      continue;
+    }
+    if (conf < minConfidence) continue;
+    labels.push({ suite: SUITE_OF[field], targetId, label: { [field]: r }, grade: 'silver', source: 'judge', evidence });
+    if (field === 'spam' && inSpam) labels.push({ suite: 'rescue', targetId, label: { rescue: !r }, grade: 'silver', source: 'judge', evidence });
   }
   return { labels, candidates };
 }
@@ -191,12 +236,15 @@ function behaviourFor(labelRows) {
 
 /**
  * Judge one user's sample. Stops early (partial) when the labels budget runs out.
- * @returns {{ sampled, judged, silver, candidates, proposed, partial, reflexPrompt }}
+ * mode 'dual' (default): labels.judge on Tier 2 plus sort.reflex on Tier 1; stops with tier2Lost
+ *   when the judge's answer came from the lighter model (that batch is discarded).
+ * mode 'single': sort.reflex only, labels marked singleJudge (see reconcileSingle).
+ * @returns {{ sampled, judged, silver, candidates, proposed, partial, reflexPrompt, mode, tier2Lost }}
  */
-export async function judgeForUser(userId, { day = new Date().toISOString().slice(0, 10), useModelForQuestions = true } = {}) {
+export async function judgeForUser(userId, { day = new Date().toISOString().slice(0, 10), useModelForQuestions = true, mode = 'dual' } = {}) {
   const cfg = await getConfig(userId);
   const n = cfg['labels.judgeSample'];
-  const stats = { sampled: 0, judged: 0, silver: 0, candidates: 0, proposed: 0, partial: false, reflexPrompt: null };
+  const stats = { sampled: 0, judged: 0, silver: 0, candidates: 0, proposed: 0, partial: false, reflexPrompt: null, mode, tier2Lost: false };
   if (!cfg.enabled || !n) return stats;
   const addrMap = await userAddresses([userId]);
   const addresses = addrMap.get(userId) || new Set();
@@ -224,13 +272,30 @@ export async function judgeForUser(userId, { day = new Date().toISOString().slic
   for (let i = 0; i < sample.length; i += batchSize) {
     const part = sample.slice(i, i + batchSize);
     const items = part.map((c, k) => toItem(`m${i + k + 1}`, c, bodies.get(c.id), { addresses, stats: senderStats.get(c.sender) }));
-    let judged;
-    try {
-      judged = await runPrompt('labels.judge', { owner, user, items }, { userId, feature: 'labels', lane: 'background' });
-    } catch (err) {
-      if (err.code === 'budget_exceeded' || err.code === 'llm_disabled') { stats.partial = true; break; }
-      console.warn(`[hedwig] labels.judge batch failed for ${userId}:`, err.message);
-      continue;
+    let judged = null;
+    if (mode !== 'single') {
+      try {
+        // Pinned to Tier 2 so an admin routing `labels` to the reflex tier cannot make both opinions Gemma's.
+        // allowLighter: false — never answered by the fallback model; a degraded Tier 2 throws tier_degraded.
+        judged = await runPrompt('labels.judge', { owner, user, items }, { userId, feature: 'labels', lane: 'background', tier: 'reasoning', allowLighter: false });
+      } catch (err) {
+        if (err.code === 'budget_exceeded' || err.code === 'llm_disabled') { stats.partial = true; break; }
+        if (err.code === 'tier_degraded') {
+          console.warn(`[hedwig] labels: Tier 2 is degraded (${err.message}); stopping this judge run until it is back`);
+          stats.tier2Lost = true;
+          stats.partial = true;
+          break;
+        }
+        console.warn(`[hedwig] labels.judge batch failed for ${userId}:`, err.message);
+        continue;
+      }
+      if (ranOnLighterModel(judged.provenance, cfg['llm.models.long'])) {
+        // Tier 2 went away mid-run: two answers from one model would agree for nothing.
+        console.warn(`[hedwig] labels: the judge answered on ${judged.provenance?.model || 'the lighter model'}; stopping this run until Tier 2 is back`);
+        stats.tier2Lost = true;
+        stats.partial = true;
+        break;
+      }
     }
     let reflex = null;
     try {
@@ -240,6 +305,21 @@ export async function judgeForUser(userId, { day = new Date().toISOString().slic
     } catch (err) {
       if (err.code === 'budget_exceeded') stats.partial = true;
       else if (err.code !== 'reflex_unavailable') console.warn(`[hedwig] labels: sort.reflex failed for ${userId}:`, err.message);
+    }
+    if (mode === 'single') {
+      part.forEach((c, k) => {
+        const r = reflex?.items?.[k] || null;
+        if (!r) return;
+        stats.judged++;
+        const res = reconcileSingle({
+          targetId: c.id, mid: c.mid, inSpam: items[k].inSpam, behaviour: behaviour[c.id] || {}, reflex: r, minConfidence,
+          meta: { stratum: c.stratum, reflexModel: reflex?.provenance?.model || null, reflexPrompt: reflex?.promptId || null, reflexTier: reflex?.provenance?.tier || null, day },
+        });
+        labels.push(...res.labels);
+        candidates.push(...res.candidates);
+      });
+      if (stats.partial) break;
+      continue;
     }
     const byShort = new Map((judged.data?.items || []).map((r) => [r.id, r]));
     const independent = independentTiers(judged.provenance, reflex?.provenance);

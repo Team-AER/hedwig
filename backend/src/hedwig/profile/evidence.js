@@ -171,8 +171,8 @@ export function numberFacts(groups) {
  * Run the queries and build the facts for one user.
  * @returns {Promise<{ facts: object[], excerpts: string[], counts: object }>}
  */
-export async function gatherEvidence(userId, cfg) {
-  const days = cfg['profile.windowDays'];
+export async function gatherEvidence(userId, cfg, { days: windowDays = null } = {}) {
+  const days = windowDays || cfg['profile.windowDays'];
   const min = cfg['profile.minCount'];
   const freemail = (cfg['context.freemailDomains'] || []).map((d) => String(d).toLowerCase());
   const addresses = [...((await userAddresses([userId])).get(userId) || new Set())];
@@ -254,7 +254,7 @@ export async function gatherEvidence(userId, cfg) {
     correctionFacts(corrections),
     ruleFacts(rules.rows, Number(blocked.rows[0]?.n) || 0),
   ]);
-  return { facts, excerpts: writing.excerpts, counts: { corrections: corrections.length, sent: samples.length } };
+  return { facts, excerpts: writing.excerpts, counts: { corrections: corrections.length, sent: samples.length }, days };
 }
 
 /** The latest `n` corrections across every kind, newest first (B's recentCorrections is per kind). */

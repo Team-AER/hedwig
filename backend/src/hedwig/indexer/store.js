@@ -6,7 +6,7 @@ import { getConfig } from '../config.js';
 import { embed, toVectorLiteral, EmbeddingError } from '../embeddings.js';
 import { getState, setState } from '../state.js';
 import { MESSAGE_COLUMNS, decorate } from '../pipeline.js';
-import { splitBody } from './parse.js';
+import { splitBody, PARSER_VERSION } from './parse.js';
 import { buildMessageChunks, buildThreadRollup } from './chunk.js';
 import { currentRecipe } from './recipe.js';
 
@@ -366,6 +366,29 @@ export async function chunkPending({ limit = 100 } = {}) {
   await decorate(rows);
   await indexMessages(rows);
   return rows.length;
+}
+
+/**
+ * Once per parser version: messages whose fetched body produced no indexable text under the
+ * previous parser are queued for re-chunking (chunk_version = NULL), so a parser fix reaches them
+ * without a recipe bump re-embedding the whole index. Their old chunks keep serving search until
+ * the new ones land. Returns how many were queued (0 when this version already ran).
+ */
+export async function repairEmptyBodies() {
+  // A failed state read throws (the sweep logs it) rather than reading as "never ran", so a
+  // flaky read cannot re-queue the same messages on every 10 s sweep.
+  const done = await getState('index.parserVersion', null);
+  if (done?.version === PARSER_VERSION) return 0;
+  const recipe = await currentRecipe();
+  const { rowCount } = await query(
+    `UPDATE hedwig_index_msg x SET chunk_version = NULL, updated_at = NOW()
+      WHERE x.had_body AND x.chunk_version = $1 AND x.error IS NULL
+        AND NOT EXISTS (SELECT 1 FROM hedwig_chunks c WHERE c.message_id = x.message_id AND c.recipe = $1 AND c.kind IN ('body', 'quote'))`,
+    [recipe.version],
+  );
+  await setState('index.parserVersion', { version: PARSER_VERSION, requeued: rowCount || 0, at: new Date().toISOString() });
+  if (rowCount) console.log(`[hedwig] index: parser ${PARSER_VERSION}: re-chunking ${rowCount} message(s) whose body gave no text before`);
+  return rowCount || 0;
 }
 
 /** Run `fn` repeatedly while it reports work, within a time budget. */

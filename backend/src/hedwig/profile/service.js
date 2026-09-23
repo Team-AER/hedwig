@@ -2,7 +2,8 @@
 // Every function takes the user id first and touches only that user's rows.
 import { query } from '../../services/db.js';
 import { getConfig } from '../config.js';
-import { enqueue } from '../jobs.js';
+import { enqueue, deferJob } from '../jobs.js';
+import { reasoningTier, ranOnLighterModel } from '../labels/tier.js';
 import { getState, setState } from '../state.js';
 import { runPrompt } from '../prompts/index.js';
 import { gatherEvidence } from './evidence.js';
@@ -25,6 +26,8 @@ function toVersion(row) {
     diff: row.diff || '',
     source: row.source,
     provenance: row.provenance || null,
+    // Built on the lighter model while Tier 2 was degraded; rebuilt when Tier 2 is back.
+    provisional: Boolean(row.provenance?.provisional),
     updatedAt: row.created_at,
   };
 }
@@ -37,7 +40,7 @@ export async function latestVersion(userId) {
 /** GET /profile. A user with no profile yet gets version 0 and empty text. */
 export async function getProfile(userId) {
   const cur = await latestVersion(userId);
-  if (!cur) return { version: 0, text: '', lines: [], pinned: [], dismissed: [], diff: '', source: null, provenance: null, updatedAt: null };
+  if (!cur) return { version: 0, text: '', lines: [], pinned: [], dismissed: [], diff: '', source: null, provenance: null, provisional: false, updatedAt: null };
   return cur;
 }
 
@@ -103,25 +106,42 @@ export async function saveProfileEdit(userId, { text } = {}) {
  * against the facts, pinned lines kept verbatim. No new version when nothing changed.
  * @returns {Promise<{ status: 'done'|'skipped', version?: number, note: string, dropped?: object[] }>}
  */
-export async function rebuildProfile(userId, { fetchFn, lane = 'background' } = {}) {
+/** Too few facts in the usual window: learn from the longer one. */
+export const MIN_FACTS = 3;
+
+export async function rebuildProfile(userId, { fetchFn, lane = 'background', allowLighter = true } = {}) {
   const cfg = await getConfig(userId);
   if (!cfg.enabled || !cfg['profile.enabled']) return { status: 'skipped', note: 'profile is off' };
   const prev = await latestVersion(userId);
   const pinned = prev?.pinned || [];
   const dismissed = prev?.dismissed || [];
   const max = cfg['profile.maxLines'];
-  const { facts, excerpts } = await gatherEvidence(userId, cfg);
+  let evidence = await gatherEvidence(userId, cfg);
+  const longer = cfg['profile.fallbackDays'];
+  if (evidence.facts.length < MIN_FACTS && longer > (evidence.days || cfg['profile.windowDays'])) {
+    // A newly connected account, or a quiet quarter: the facts say which window they cover.
+    const wide = await gatherEvidence(userId, cfg, { days: longer });
+    if (wide.facts.length > evidence.facts.length) evidence = wide;
+  }
+  const { facts, excerpts } = evidence;
+  const days = evidence.days || cfg['profile.windowDays'];
   if (!facts.length && !prev) return { status: 'skipped', note: 'no evidence yet' };
   let generated = [];
   let dropped = [];
   let provenance = null;
   if (facts.length) {
-    const vars = { days: cfg['profile.windowDays'], maxLines: Math.max(1, max - pinned.length), facts, excerpts, pinned, dismissed, previous: prev?.text || '' };
-    const res = await runPrompt(PROFILE_PROMPT, vars, { userId, feature: 'profile', lane, fetchFn });
+    const vars = { days, maxLines: Math.max(1, max - pinned.length), facts, excerpts, pinned, dismissed, previous: prev?.text || '' };
+    const res = await runPrompt(PROFILE_PROMPT, vars, { userId, feature: 'profile', lane, fetchFn, allowLighter });
     const checked = validateLines(res.data?.lines, facts, { pinned, dismissed, max: max - pinned.length });
     generated = checked.kept;
     dropped = [...(res.provenance?.dropped || []).map((d) => ({ text: d.entry?.text ?? null, reason: `invalid entry: ${(d.errors || []).join('; ')}` })), ...checked.dropped];
-    provenance = { ...res.provenance, dropped: undefined, droppedLines: dropped };
+    // Written by the fallback model while Tier 2 was degraded: kept, marked provisional, and
+    // rebuilt on Tier 2 when it is back (weeklyTick).
+    const p = res.provenance || {};
+    // An admin routing the profile to Tier 1 on purpose (provenance.routed) is not a degradation.
+    const provisional = typeof p.lighterModel === 'boolean' ? p.lighterModel
+      : Boolean(p.fellBack) || (p.tier === 'reflex' && !p.routed) || (!p.routed && ranOnLighterModel({ model: p.model }, cfg['llm.models.long']));
+    provenance = { ...res.provenance, dropped: undefined, droppedLines: dropped, provisional, windowDays: days };
     if (dropped.length) console.warn(`[hedwig] profile: dropped ${dropped.length} line(s) for ${userId}: ${dropped.slice(0, 3).map((d) => d.reason).join('; ')}`);
   }
   const lines = composeLines({ pinned, generated, max });
@@ -133,17 +153,33 @@ export async function rebuildProfile(userId, { fetchFn, lane = 'background' } = 
     source: 'rebuild',
     provenance,
   });
-  return { status: 'done', version: v.version, note: `v${v.version}: ${lines.length} lines (${pinned.length} pinned), ${facts.length} facts, ${dropped.length} dropped`, dropped };
+  return { status: 'done', version: v.version, note: `v${v.version}${provenance?.provisional ? ' (provisional, lighter model)' : ''}: ${lines.length} lines (${pinned.length} pinned), ${facts.length} facts from ${days} days, ${dropped.length} dropped`, dropped };
 }
 
-/** Job handler for 'profile.rebuild' { userId }. Budget or gateway off → skipped, not failed. */
+export const TIER2_RETRY_MS = 30 * 60_000;
+
+/**
+ * Job handler for 'profile.rebuild' { userId }. Budget or gateway off → skipped, not failed.
+ * The profile is a Tier 2 job: while Tier 2 is degraded the job waits (deferred, no attempt spent)
+ * for up to profile.deferHours from when it was queued, then builds on the lighter model and marks
+ * the version provisional.
+ */
 export async function runRebuildJob(payload = {}, job = {}) {
   const userId = payload.userId || job.user_id;
   if (!userId) return { status: 'done', note: 'no user' };
   try {
-    const out = await rebuildProfile(userId);
+    const cfg = await getConfig(userId);
+    const queuedAt = job?.created_at ? new Date(job.created_at).getTime() : Date.now();
+    const mayWait = (Date.now() - queuedAt) / 3600_000 < (cfg['profile.deferHours'] ?? 24);
+    const tier = await reasoningTier(userId);
+    if (tier.degraded && mayWait) {
+      deferJob(`Tier 2 (${tier.model || 'reasoning model'}) is degraded (${tier.reason || 'no answer'}); the profile waits for it`, TIER2_RETRY_MS);
+    }
+      // While it may still wait, the prompt must not fall back: tier_degraded then defers the job.
+    const out = await rebuildProfile(userId, { allowLighter: !mayWait });
     return { status: 'done', note: out.note };
   } catch (err) {
+    if (err?.code === 'job_deferred' || err?.code === 'tier_degraded') throw err;
     if (SOFT_ERRORS.has(err?.code)) return { status: 'partial', note: `skipped: ${err.message}` };
     throw err;
   }
@@ -183,12 +219,26 @@ export async function weeklyTick(now = new Date()) {
       const today = now.toISOString().slice(0, 10);
       const weeklyDue = now.getDay() === cfg['profile.weekday'] && now.getHours() >= cfg['profile.hour'] && last?.week !== week;
       let firstDue = false;
+      let provisionalDue = false;
       if (!weeklyDue && last?.day !== today) {
         const { rows: has } = await query('SELECT 1 FROM hedwig_profile WHERE user_id = $1 LIMIT 1', [userId]);
         firstDue = !has.length;
       }
-      if (!weeklyDue && !firstDue) continue;
-      await enqueueRebuild(userId, { reason: weeklyDue ? 'weekly' : 'first' });
+      if (!weeklyDue && !firstDue && (!last?.provisionalAt || now - new Date(last.provisionalAt) > 6 * 3600_000)) {
+        // The latest version was written on the lighter model: redo it once Tier 2 answers again.
+        const { rows: cur } = await query(
+          `SELECT (provenance->>'provisional')::boolean AS provisional, source FROM hedwig_profile WHERE user_id = $1 ORDER BY version DESC LIMIT 1`,
+          [userId],
+        );
+        provisionalDue = Boolean(cur[0]?.provisional && cur[0]?.source === 'rebuild') && !(await reasoningTier(userId)).degraded;
+      }
+      if (!weeklyDue && !firstDue && !provisionalDue) continue;
+      await enqueueRebuild(userId, { reason: weeklyDue ? 'weekly' : firstDue ? 'first' : 'provisional' });
+      if (provisionalDue && !weeklyDue && !firstDue) {
+        await setState(key, { ...(last || {}), provisionalAt: now.toISOString() });
+        enqueued++;
+        continue;
+      }
       await setState(key, { week: weeklyDue ? week : last?.week || null, day: today, at: now.toISOString() });
       enqueued++;
     } catch (err) {

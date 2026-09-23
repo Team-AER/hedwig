@@ -12,6 +12,8 @@ import { responseRows } from './overview.js';
 import { responseSamples, responseTrend } from './stats.js';
 import { insertInsight, toInsight } from './store.js';
 import { validTimezone, startOfLocalDay, describeNow } from './time.js';
+import { reasoningTier, ranOnLighterModel } from '../labels/tier.js';
+import { createHash } from 'node:crypto';
 
 const DAY = 86400_000;
 const HOUR = 3600_000;
@@ -154,8 +156,10 @@ export async function gatherBriefing(userId, { period = 'day', now = Date.now() 
   const tz = validTimezone(cfg['insights.timezone']);
   const minConf = cfg['context.extractMinConfidence'];
   const since = period === 'week' ? now - 7 * DAY : now - DAY;
+  const hasSort = await relationExists('hedwig_sort').catch(() => false);
   const [needsYou, waitingOn, commitments, topics, volume, cards] = await Promise.all([
-    fromTriage(userId, 'needs_you', 8).then((r) => r ?? needsYouFallback(userId, 8)),
+    // The same Needs you list as the Brief screen (sorting's, when installed).
+    briefNeedsYou(userId, hasSort),
     fromTriage(userId, 'waiting_on', 6).then((r) => r ?? waitingOnFallback(userId, 6, cfg['triage.waitingOnDays'])),
     commitmentsDue(userId, period === 'week' ? 14 : 7, minConf),
     newTopics(userId, since),
@@ -304,6 +308,14 @@ export function sanitizeCitations(text, count) {
 
 export { stripThinking };
 
+/** Provenance for the briefing prose (free text, so not a registry prompt): id, version, hash. */
+export const BRIEFING_PROMPT = Object.freeze({
+  id: 'insights.briefing',
+  version: '2026-09-24.1',
+  tier: 'reasoning',
+  hash: createHash('sha256').update(`${SYSTEM_PROMPT.day}\n${SYSTEM_PROMPT.week}`).digest('hex').slice(0, 16),
+});
+
 async function writeWithModel(userId, g) {
   const res = await chat({
     userId,
@@ -311,6 +323,8 @@ async function writeWithModel(userId, g) {
     role: 'long',
     maxTokens: g.period === 'week' ? 1200 : 900,
     temperature: 0.3,
+    workflow: BRIEFING_PROMPT.id,
+    prompt: BRIEFING_PROMPT,
     messages: [
       { role: 'system', content: SYSTEM_PROMPT[g.period] },
       { role: 'user', content: evidenceText(g) },
@@ -318,7 +332,7 @@ async function writeWithModel(userId, g) {
   });
   const body = stripThinking(res.content);
   // A usable briefing has at least a line of prose; anything shorter is treated as a failure.
-  return body.replace(/[#*\-\s]/g, '').length >= 20 ? body : null;
+  return { body: body.replace(/[#*\-\s]/g, '').length >= 20 ? body : null, model: res.model || null, fellBack: Boolean(res.fellBack), lighterModel: res.lighterModel };
 }
 
 /**
@@ -327,15 +341,35 @@ async function writeWithModel(userId, g) {
  */
 export async function composeBriefing(userId, { period = 'day', now = Date.now(), useModel = true } = {}) {
   const g = await gatherBriefing(userId, { period, now });
+  const cfg = await getConfig(userId);
   let body = null;
   let generatedBy = 'deterministic';
   let modelError = null;
-  if (useModel) {
+  let model = null;
+  // Why the template was used instead of prose (null when the model wrote it or was not asked).
+  let fallbackReason = useModel ? null : 'not_requested';
+  const tier2Only = cfg['insights.briefProseTier2Only'] !== false;
+  if (useModel && tier2Only) {
+    const tier = await reasoningTier(userId).catch(() => ({ degraded: false }));
+    if (tier.degraded) fallbackReason = 'tier2_degraded';
+  }
+  if (useModel && !fallbackReason) {
     try {
-      body = await writeWithModel(userId, g);
-      if (body) generatedBy = 'model';
+      const out = await writeWithModel(userId, g);
+      if (out.body && tier2Only && ranOnLighterModel(out, cfg['llm.models.long'])) {
+        // Tier 2 did not answer and the fallback model did: the brief's prose is a Tier 2 job.
+        fallbackReason = 'tier2_degraded';
+        model = out.model;
+      } else if (out.body) {
+        body = out.body;
+        generatedBy = 'model';
+        model = out.model;
+      } else {
+        fallbackReason = 'empty_reply';
+      }
     } catch (err) {
       modelError = err.code || err.message;
+      fallbackReason = err.code === 'budget_exceeded' ? 'budget' : err.code === 'llm_disabled' ? 'models_off' : 'model_error';
       if (!['llm_disabled', 'budget_exceeded'].includes(err.code)) console.warn(`[hedwig] briefing model call failed for ${userId}:`, err.message);
     }
   }
@@ -350,6 +384,10 @@ export async function composeBriefing(userId, { period = 'day', now = Date.now()
     data: {
       period,
       generated_by: generatedBy,
+      // The template stood in for prose; the UI says so ("written from a template: <reason>").
+      fallback: generatedBy !== 'model',
+      fallback_reason: generatedBy === 'model' ? null : fallbackReason,
+      model: generatedBy === 'model' ? model : null,
       model_error: modelError,
       cited,
       counts: {
@@ -464,18 +502,29 @@ async function briefNeedsYou(userId, hasSort) {
   if (hasSort) {
     // One row per conversation (its latest message that needs you), as the People stream counts
     // them, so the headline and the list agree with People.
+    // The same list as People's Needs you: sorting's needs_you, plus the reasons work derives (a
+    // reply overdue, a deadline near; hedwig_work_needs, see work/needs.js workNeedsYouSql).
     const { rows } = await query(
       `SELECT * FROM (
          SELECT DISTINCT ON (m.account_id, COALESCE(m.thread_key, m.id::text))
-                s.message_id AS id, m.thread_key, m.from_name, m.from_email, m.subject, m.date, COALESCE(s.needs_you_reason, s.reason) AS reason
+                s.message_id AS id, m.thread_key, m.from_name, m.from_email, m.subject, m.snippet, m.date,
+                COALESCE(CASE WHEN s.needs_you THEN s.needs_you_reason END, wn.reason, s.reason) AS reason
            FROM hedwig_sort s JOIN messages m ON m.id = s.message_id JOIN email_accounts a ON a.id = m.account_id AND a.user_id = $1
-          WHERE s.user_id = $1 AND s.needs_you AND NOT m.is_deleted AND m.date > NOW() - INTERVAL '14 days'
+           LEFT JOIN LATERAL (
+             SELECT w.reason FROM hedwig_work_needs w
+              WHERE w.user_id = $1 AND w.thread_key = m.thread_key AND w.resolved_at IS NULL
+              ORDER BY CASE w.kind WHEN 'deadline' THEN 0 ELSE 1 END LIMIT 1) wn ON true
+          WHERE s.user_id = $1 AND NOT s.own AND NOT m.is_deleted
+            AND ((s.needs_you AND m.date > NOW() - INTERVAL '14 days') OR (wn.reason IS NOT NULL AND s.stream <> 'spam'))
           ORDER BY m.account_id, COALESCE(m.thread_key, m.id::text), m.date DESC NULLS LAST, m.id DESC
        ) latest
         ORDER BY date DESC LIMIT 8`,
       [userId],
     );
-    return rows;
+    if (rows.length) return rows;
+    // Sorting has not run for this user yet (a new account): triage's list until it has.
+    const { rows: any } = await query('SELECT EXISTS (SELECT 1 FROM hedwig_sort WHERE user_id = $1) AS sorted', [userId]);
+    if (any[0]?.sorted) return rows;
   }
   return (await fromTriage(userId, 'needs_you', 8)) ?? needsYouFallback(userId, 8);
 }
@@ -521,7 +570,14 @@ async function briefToday(userId) {
     const sort = await import('../sort/service.js');
     if (typeof sort.today === 'function') {
       const t = await sort.today(userId);
-      return { screened: t.screened, bundled: t.bundled, rescued: t.rescued, blocked: t.blocked };
+      const entries = (Array.isArray(t.entries) ? t.entries : []).filter((e) => e.undoable);
+      return {
+        screened: t.screened, bundled: t.bundled, rescued: t.rescued, blocked: t.blocked,
+        // "Undo any of it": the newest undoable log entries (POST /sort/undo { logId: id }); the
+        // full list is GET /sort/today.
+        undoable: entries.length,
+        entries: entries.slice(0, 5).map((e) => ({ id: e.id, action: e.action, text: e.text || null, messageId: e.messageId || null, subject: e.subject || null, createdAt: e.createdAt || null })),
+      };
     }
   } catch (err) {
     if (err?.code !== 'ERR_MODULE_NOT_FOUND') console.warn('[hedwig] brief: sort today() unavailable:', err.message);
@@ -534,7 +590,7 @@ async function briefToday(userId) {
        FROM hedwig_sort_log WHERE user_id = $1 AND undone_at IS NULL AND created_at >= date_trunc('day', NOW())`,
     [userId],
   );
-  return rows[0] || { screened: 0, bundled: 0, rescued: 0, blocked: 0 };
+  return { ...(rows[0] || { screened: 0, bundled: 0, rescued: 0, blocked: 0 }), undoable: null, entries: [] };
 }
 
 /** "Today, from your Records" (cards module): parcels, bills, events, codes. Empty when cards are not installed. */
@@ -563,16 +619,17 @@ export async function compileBrief(userId, { now = Date.now() } = {}) {
   const cfg = await getConfig(userId);
   const tz = validTimezone(cfg['insights.timezone']);
   const [hasSort, hasSortLog, hasAttachments] = await Promise.all(['hedwig_sort', 'hedwig_sort_log', 'hedwig_attachment_text'].map(relationExists));
-  const [needs, waiting, commitments, reading, attachments, today, questions, latest, records] = await Promise.all([
+  const [needs, waiting, commitments, reading, attachments, today, questions, latest, records, coverage] = await Promise.all([
     briefNeedsYou(userId, hasSort),
     fromTriage(userId, 'waiting_on', 6).then((r) => r ?? waitingOnFallback(userId, 6, cfg['triage.waitingOnDays'])),
     commitmentsDue(userId, 7, cfg['context.extractMinConfidence']),
     briefReading(userId, hasSort),
     hasAttachments ? briefAttachments(userId) : [],
-    hasSortLog ? briefToday(userId) : { screened: 0, bundled: 0, rescued: 0, blocked: 0 },
+    hasSortLog ? briefToday(userId) : { screened: 0, bundled: 0, rescued: 0, blocked: 0, undoable: null, entries: [] },
     briefQuestions(userId),
     latestBriefing(userId),
     briefRecords(userId, now),
+    import('../indexer/truth.js').then((m) => m.coverageShare(userId)).catch(() => null),
   ]);
   const recipients = await recipientsOf(userId, waiting.filter((m) => !m.to).map((m) => m.id));
   const nudge = Boolean(cfg['features.agent'] && cfg['llm.baseUrl']);
@@ -589,9 +646,21 @@ export async function compileBrief(userId, { now = Date.now() } = {}) {
   const template = briefHeadline(counts);
   const fresh = latest && latest.data?.generated_by === 'model' && now - new Date(latest.created_at).getTime() < 12 * HOUR;
   const cached = fresh ? headlineFromBriefing(latest.body) : null;
+  const todays = latest && now - new Date(latest.created_at).getTime() < 24 * HOUR ? latest : null;
   return {
     headline: cached || template,
     headlineSource: cached ? 'briefing' : 'template',
+    // Where today's briefing prose came from. fallback: true means the template stood in (reason:
+    // tier2_degraded, model_error, budget, models_off, empty_reply) and the UI should say so.
+    prose: todays ? {
+      insightId: todays.id,
+      source: todays.data?.generated_by === 'model' ? 'model' : 'template',
+      fallback: todays.data?.generated_by !== 'model',
+      reason: todays.data?.generated_by === 'model' ? null : (todays.data?.fallback_reason || todays.data?.model_error || null),
+      model: todays.data?.model || null,
+      at: todays.created_at,
+    } : null,
+    coverage,
     generatedAt: new Date(now).toISOString(),
     needsYou: needs.map((m) => ({
       threadId: m.thread_key || null, messageId: m.id, who: person(m), subject: m.subject || '(no subject)', reason: m.reason || null, at: m.date,

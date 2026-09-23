@@ -53,7 +53,7 @@ async function classificationTargets(suite, userId) {
   const main = resolveTargetLabels(rows, field);
   const targets = [];
   for (const [targetId, v] of main) {
-    targets.push({ targetId, truth: v.value, grade: v.grade, mid: v.row.evidence?.mid || null });
+    targets.push({ targetId, truth: v.value, grade: v.grade, mid: v.row.evidence?.mid || null, singleJudge: v.row.evidence?.singleJudge === true });
   }
   if (suite === 'sort') {
     const not = resolveTargetLabels(rows, 'notStream');
@@ -140,6 +140,7 @@ async function livePredictions(suite, userId, messageIds, { promptId, promptVers
 
 async function classificationSuite(suite, users, opts) {
   const pairs = { silver: [], gold: [] };
+  let singleJudge = 0;
   let source = null;
   let provenance = null;
   for (const userId of users) {
@@ -158,11 +159,14 @@ async function classificationSuite(suite, users, opts) {
       const mid = current.get(t.targetId);
       if (!mid || !idSet.has(mid)) continue;
       const pred = res.preds.has(mid) ? res.preds.get(mid) : null;
+      // A single-judge silver label is the Reflex model's own answer: scoring it would grade the
+      // model against itself, so it is counted apart and kept out of the metrics and gates.
+      if (t.grade === 'silver' && t.singleJudge) { singleJudge++; continue; }
       (t.grade === 'gold' ? pairs.gold : pairs.silver).push({ truth: t.truth, pred });
     }
   }
   const score = (p) => (suite === 'sort' ? multiclassMetrics(p, ['people', 'reading', 'records']) : binaryMetrics(p));
-  return { silver: score(pairs.silver), gold: score(pairs.gold), nSilver: pairs.silver.length, nGold: pairs.gold.length, source, provenance };
+  return { silver: score(pairs.silver), gold: score(pairs.gold), nSilver: pairs.silver.length, nGold: pairs.gold.length, nSilverSingleJudge: singleJudge, source, provenance };
 }
 
 async function askItems(userId, { unanswerable = false } = {}) {
@@ -306,7 +310,8 @@ export async function runAndRecord(suite, opts = {}) {
     promptId: live ? (result.provenance?.promptId || opts.promptId || 'sort.reflex') : null,
     promptVersion: live ? (result.provenance?.promptVersion || opts.promptVersion || null) : null,
     model: live ? (result.provenance?.model || opts.model || null) : (result.source || null),
-    metrics: { ...metrics, scope: { userId: opts.userId || null, source: result.source || null, live }, gates, previousRunId: prev?.id || null },
+    // silverSingleJudge: silver labels judged by Tier 1 alone while Tier 2 was degraded (labels/judge.js).
+    metrics: { ...metrics, scope: { userId: opts.userId || null, source: result.source || null, live, silverSingleJudge: result.nSilverSingleJudge ?? 0 }, gates, previousRunId: prev?.id || null },
     nGold: result.nGold,
     nSilver: result.nSilver,
     accepted: gates.pass && (result.nGold + result.nSilver) > 0,

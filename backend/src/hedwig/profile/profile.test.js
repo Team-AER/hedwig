@@ -68,7 +68,7 @@ const { SCHEMA } = await import('../config.js');
 const DEFAULTS = Object.fromEntries(SCHEMA.map((f) => [f.key, f.default]));
 function resetConfig(over = {}) {
   cfg = {
-    ...DEFAULTS, 'llm.baseUrl': gw.baseUrl, 'llm.catalogUrl': gw.catalogUrl, 'llm.models.fast': GEMMA, 'llm.models.long': QWEN,
+    ...DEFAULTS, 'llm.baseUrl': gw.baseUrl, 'llm.catalogUrl': gw.catalogUrl, 'llm.probe.enabled': false, 'llm.models.fast': GEMMA, 'llm.models.long': QWEN,
     'llm.fallbackModel': '', 'llm.timeoutMs': 5000, ...over,
   };
 }
@@ -146,9 +146,9 @@ describe('profile lines (pure)', () => {
       { kind: 'mood', text: 'You are busy.', evidence: [] },
       { kind: 'preference', text: 'keep it SHORT', evidence: [] },
     ], facts, { pinned: ['Keep it short.'], dismissed: [] });
-    expect(kept.map((l) => l.text)).toEqual(['You answer Priya within 3 hours.', 'You like your friends.']);
+    expect(kept.map((l) => l.text)).toEqual(['You answer Priya within 3 hours.']);
     expect(dropped.map((d) => d.reason)).toEqual([
-      'numbers not in the cited evidence: 14', 'numbers not in the cited evidence: 12', 'unknown kind', 'repeats a pinned or dismissed line',
+      'numbers not in the cited evidence: 14', 'cites no evidence', 'cites no evidence', 'unknown kind', 'repeats a pinned or dismissed line',
     ]);
   });
 

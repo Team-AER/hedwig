@@ -25,7 +25,8 @@ const triage = vi.hoisted(() => ({
 }));
 vi.mock('../triage/service.js', () => ({ listTriage: (...args) => triage.listTriage(...args) }));
 vi.mock('../labels/questions.js', () => ({ listOpenQuestions: async () => [{ id: 'q1', kind: 'spam', question: 'Junk?', evidence: {}, options: [] }] }));
-vi.mock('../sort/service.js', () => ({ today: async () => ({ screened: 4, bundled: 9, rescued: 1, blocked: 2, entries: [] }) }));
+const sortToday = vi.hoisted(() => ({ entries: [] }));
+vi.mock('../sort/service.js', () => ({ today: async () => ({ screened: 4, bundled: 9, rescued: 1, blocked: 2, entries: sortToday.entries }) }));
 vi.mock('../hooks.js', () => ({ HEDWIG_HOOKS: {}, collectHedwigHook: async () => [] }));
 
 const { briefHeadline, headlineFromBriefing, dueFigure, compileBrief } = await import('./briefing.js');
@@ -53,7 +54,23 @@ describe('brief pieces', () => {
 });
 
 describe('compileBrief', () => {
-  beforeEach(() => { db.calls.length = 0; chat.mockClear(); });
+  beforeEach(() => { db.calls.length = 0; chat.mockClear(); sortToday.entries = []; });
+
+  it('"what Hedwig did" carries the newest undoable log entries, and the prose flag says where today\'s briefing came from', async () => {
+    sortToday.entries = [
+      { id: 7, action: 'screen', text: 'Screened deals@shop.example into Reading', messageId: 'm7', subject: 'Sale', undoable: true, createdAt: '2026-09-23T08:00:00Z' },
+      { id: 6, action: 'correct', text: 'You moved a message', undoable: false },
+    ];
+    db.routes = [
+      [/SELECT to_regclass/, ([name]) => ({ rows: [{ t: name === 'hedwig_sort_log' ? name : null }] })],
+      [/FROM hedwig_insights WHERE user_id = \$1 AND kind = 'briefing'/, () => ({ rows: [{ id: 'i1', kind: 'briefing', body: 'x', data: { generated_by: 'deterministic', fallback_reason: 'tier2_degraded' }, created_at: new Date(NOW - 3600_000).toISOString() }] })],
+    ];
+    const brief = await compileBrief('u1', { now: NOW });
+    expect(brief.today).toMatchObject({ undoable: 1, entries: [{ id: 7, action: 'screen', text: 'Screened deals@shop.example into Reading', messageId: 'm7' }] });
+    expect(brief.prose).toMatchObject({ insightId: 'i1', source: 'template', fallback: true, reason: 'tier2_degraded' });
+    expect(brief.headlineSource).toBe('template');
+    expect(chat).not.toHaveBeenCalled();
+  });
 
   it('assembles every section from stored data and never calls a model', async () => {
     db.routes = [
@@ -79,20 +96,22 @@ describe('compileBrief', () => {
     ]);
     expect(brief.reading).toEqual([{ title: 'Weekly notes', line: 'This week we shipped the new search.', messageId: 'r1' }]);
     expect(brief.questions).toHaveLength(1);
-    expect(brief.today).toEqual({ screened: 4, bundled: 9, rescued: 1, blocked: 2 });
+    expect(brief.today).toEqual({ screened: 4, bundled: 9, rescued: 1, blocked: 2, undoable: 0, entries: [] });
   });
 
   it('counts what needs you by conversation, as the People stream does', async () => {
     db.routes = [
       [/SELECT to_regclass/, ([name]) => ({ rows: [{ t: name === 'hedwig_sort' ? name : null }] })],
-      [/WHERE s\.user_id = \$1 AND s\.needs_you/, () => ({ rows: [
+      [/FROM hedwig_sort s JOIN messages m ON m\.id = s\.message_id JOIN email_accounts a[\s\S]*hedwig_work_needs/, () => ({ rows: [
         { id: 'm5', thread_key: 'doc', from_name: 'Dr Anand', subject: 'Re: Follow-up', date: '2026-09-22T15:00:00Z', reason: 'Pick a slot' },
         { id: 'm6', thread_key: 'marta', from_name: 'Marta', subject: 'Invoice 2041', date: '2026-09-23T06:00:00Z', reason: 'Amount differs' },
       ] })],
     ];
     const brief = await compileBrief('u1', { now: NOW });
-    const sql = db.calls.find((s) => /s\.needs_you AND NOT m\.is_deleted/.test(s));
+    const sql = db.calls.find((s) => /FROM hedwig_work_needs w/.test(s));
     expect(sql).toContain('DISTINCT ON (m.account_id, COALESCE(m.thread_key, m.id::text))');
+    // One Needs you list: sorting's flag or a reason work derived (reply overdue, deadline near).
+    expect(sql).toMatch(/s\.needs_you AND m\.date > NOW\(\) - INTERVAL '14 days'\) OR \(wn\.reason IS NOT NULL/);
     expect(brief.needsYou.map((n) => n.messageId)).toEqual(['m5', 'm6']);
     expect(brief.headline.startsWith('Two things need you.')).toBe(true);
   });
@@ -105,7 +124,7 @@ describe('compileBrief', () => {
     const brief = await compileBrief('u1', { now: NOW });
     expect(brief.headline).toBe('One thing needs you. One deadline today.');
     expect(brief.headlineSource).toBe('template');
-    expect(brief.today).toEqual({ screened: 0, bundled: 0, rescued: 0, blocked: 0 });
+    expect(brief.today).toEqual({ screened: 0, bundled: 0, rescued: 0, blocked: 0, undoable: null, entries: [] });
     expect(db.calls.some((s) => s.includes('hedwig_sort_log'))).toBe(false);
   });
 });

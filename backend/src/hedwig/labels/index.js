@@ -3,15 +3,16 @@
 // See docs/hedwig/V2-BUILD.md "Labels without homework".
 import { query } from '../../services/db.js';
 import { getConfig } from '../config.js';
-import { defineJob, enqueue } from '../jobs.js';
+import { defineJob, enqueue, deferJob } from '../jobs.js';
 import { defineSchedule } from '../schedule.js';
 import { getState, setState } from '../state.js';
 import { behaviourTick, recordDwell } from './behaviour.js';
 import { judgeForUser } from './judge.js';
 import { askTriplesForUser, answerFeedback } from './askTriples.js';
-import { listOpenQuestions, answerQuestionById, skipQuestion } from './questions.js';
+import { listOpenQuestions, answerQuestionById, skipQuestion, questionFor } from './questions.js';
 import { labelStats } from './store.js';
 import { EVAL_SUITES, runAndRecord, listRuns } from './eval.js';
+import { reasoningTier } from './tier.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -37,13 +38,35 @@ const requireUuid = (v, what) => {
   return v;
 };
 
-/** Nightly: judge, then Ask triples. */
-export async function runNightly({ userId, day }) {
+export const TIER2_RETRY_MS = 30 * 60_000;
+
+/**
+ * Nightly: judge, then Ask triples. Both need Tier 2: while it is degraded the job waits (deferred,
+ * no attempt spent) for up to labels.judgeDeferHours from when it was queued; after that the judge
+ * runs in single mode (Tier 1 only, labels marked singleJudge) and the Ask triples are skipped.
+ */
+export async function runNightly({ userId, day }, job = {}) {
   if (!userId) return null;
-  const judge = await judgeForUser(userId, { day });
-  const ask = await askTriplesForUser(userId, { day });
-  const partial = judge.partial || ask.partial;
-  const note = `judge ${judge.judged}/${judge.sampled}, ${judge.silver} silver, ${judge.proposed} questions; ask ${ask.answerable}+${ask.unanswerable} (${ask.rejected} rejected)`;
+  const cfg = await getConfig(userId);
+  const queuedAt = job?.created_at ? new Date(job.created_at).getTime() : Date.now();
+  const waitedH = (Date.now() - queuedAt) / 3600_000;
+  const mayWait = waitedH < (cfg['labels.judgeDeferHours'] ?? 18);
+  const tier = await reasoningTier(userId);
+  if (tier.degraded && mayWait) {
+    deferJob(`Tier 2 (${tier.model || 'reasoning model'}) is degraded (${tier.reason || 'no answer'}); the judge needs two different models`, TIER2_RETRY_MS);
+  }
+  const mode = tier.degraded ? 'single' : 'dual';
+  const judge = await judgeForUser(userId, { day, mode });
+  if (judge.tier2Lost && mayWait) {
+    // What it labelled before Tier 2 went away is kept; the rest of the sample runs when it is back.
+    deferJob(`Tier 2 stopped answering during the judge run (${judge.judged} judged, ${judge.silver} silver kept)`, TIER2_RETRY_MS);
+  }
+  const skipAsk = tier.degraded || judge.tier2Lost;
+  const ask = skipAsk ? { answerable: 0, unanswerable: 0, rejected: 0, partial: false, skipped: true } : await askTriplesForUser(userId, { day });
+  const partial = judge.partial || ask.partial || judge.mode === 'single' || skipAsk;
+  const judgeNote = `judge${judge.mode === 'single' ? ' (single, Tier 2 degraded)' : ''} ${judge.judged}/${judge.sampled}, ${judge.silver} silver, ${judge.proposed} questions`;
+  const askNote = ask.skipped ? 'ask triples skipped: Tier 2 degraded' : `ask ${ask.answerable}+${ask.unanswerable} (${ask.rejected} rejected)`;
+  const note = `${judgeNote}; ${askNote}`;
   return partial ? { status: 'partial', note } : { status: 'done', note };
 }
 
@@ -73,6 +96,11 @@ export default {
   routes(r) {
     r.get('/labels/questions', handle(async (req, res) => {
       res.json({ questions: await listOpenQuestions(req.session.userId) });
+    }));
+
+    // The open question about one message, for asking it inline there (counts toward the daily limit).
+    r.get('/labels/questions/for/:messageId', handle(async (req, res) => {
+      res.json({ question: await questionFor(req.session.userId, requireUuid(req.params.messageId, 'message id')) });
     }));
 
     r.post('/labels/questions/:id/answer', handle(async (req, res) => {
@@ -137,7 +165,7 @@ export default {
   },
 
   worker() {
-    defineJob('labels.nightly', (payload) => runNightly(payload), { timeoutMs: 45 * 60_000 });
+    defineJob('labels.nightly', (payload, job) => runNightly(payload, job), { timeoutMs: 45 * 60_000 });
     defineJob('labels.eval', async (payload) => {
       const out = await runAndRecord(payload.suite, { ...payload, record: true });
       return { status: 'done', note: `run ${out.id}: ${out.accepted ? 'accepted' : 'not accepted'}${out.gates.failures.length ? ` (${out.gates.failures.join('; ')})` : ''}` };

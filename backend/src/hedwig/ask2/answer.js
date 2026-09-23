@@ -1,9 +1,13 @@
 // Ask on the v2 index: plan → retrieve (A's retrieve(), threads expanded) → relevance floor →
 // evidence grouped by thread → streamed answer on the reasoning tier → citation check → log.
 // Events (unchanged for the frontend, fields only added):
-//   { type: 'sources', sources: [{ n, message: MessageLite }], askLogId, plan }
+//   { type: 'sources', sources: [{ n, message: MessageLite }], askLogId, plan, coverage }
 //   { type: 'delta', text }…
-//   { type: 'done', answer, citations: [n], unsupported, notFound, invalidCitations: [n], askLogId }
+//   { type: 'done', answer, citations: [n], unsupported, notFound, invalidCitations: [n], askLogId,
+//     coverage, model, lighterModel }
+// coverage = { share: 0..1, indexed, total, complete } (indexer/truth.js): until the index is
+// complete, the UI says how much of the mail the answer could see. lighterModel: the answer came
+// from the fallback model because Tier 2 did not answer (label it "lighter model").
 import { query } from '../../services/db.js';
 import { getConfig } from '../config.js';
 import { chatStream } from '../llm.js';
@@ -15,8 +19,18 @@ import { planQuery } from './plan.js';
 import { groupByThread, buildEvidence } from './evidence.js';
 import { checkCitations } from './citations.js';
 import { ANSWER_PROMPT, answerMessages, ownerLine } from './prompt.js';
+import { coverageShare } from '../indexer/truth.js';
+import { ranOnLighterModel } from '../labels/tier.js';
 
 export const NOTHING_RELEVANT = "I couldn't find anything relevant in your mail about that.";
+
+/** The "nothing found" answer, saying how much of the mail was searchable when the index is incomplete. Pure. */
+export function nothingRelevant(coverage) {
+  const share = coverage?.share;
+  if (coverage?.complete || typeof share !== 'number' || !(share < 1)) return NOTHING_RELEVANT;
+  const pct = Math.max(0, Math.min(99, Math.floor(share * 100)));
+  return `${NOTHING_RELEVANT} Only ${pct}% of your mail is indexed so far, so it may still turn up.`;
+}
 
 const ROW_COLS = `m.id, m.thread_key, m.subject, m.from_name, m.from_email, m.to_addresses, m.date, m.folder,
   m.body_text, m.body_html, m.snippet, m.attachments, m.has_attachments`;
@@ -111,7 +125,11 @@ export async function answerQuestion(userId, question, { entityId = null, topicI
   ).catch((err) => console.warn('[hedwig] ask: could not record the answer:', err.message));
 
   try {
-    const planned = await planQuery(userId, q, { now, cfg, signal });
+    const [planned, coverage] = await Promise.all([
+      planQuery(userId, q, { now, cfg, signal }),
+      coverageShare(userId).catch(() => null),
+    ]);
+    const nothing = nothingRelevant(coverage);
     // A short follow-up ("and the fee?") searches with the earlier question for context.
     const shortFollowUp = previous && q.split(/\s+/).length < 7;
     const queryText = shortFollowUp ? `${previous.question} ${planned.text}` : planned.text;
@@ -121,11 +139,11 @@ export async function answerQuestion(userId, question, { entityId = null, topicI
     const pinned = previous ? (Array.isArray(previous.sources) ? previous.sources : []).filter(isUuid).slice(0, cfg['ask.followUpSources']) : [];
     if (!got.chunks.length && !pinned.length) {
       // Nothing above the relevance floor (or nothing at all): answer without a model call.
-      onEvent({ type: 'sources', sources: [], askLogId, plan: compactPlan(planned) });
-      onEvent({ type: 'delta', text: NOTHING_RELEVANT });
-      onEvent({ type: 'done', answer: NOTHING_RELEVANT, citations: [], unsupported: false, notFound: true, invalidCitations: [], askLogId });
-      await finish({ status: 'done', answer: NOTHING_RELEVANT, citations: [], sources: [], unsupported: false, notFound: true });
-      return { answer: NOTHING_RELEVANT, citations: [], sources: [], unsupported: false, notFound: true, askLogId, plan };
+      onEvent({ type: 'sources', sources: [], askLogId, plan: compactPlan(planned), coverage });
+      onEvent({ type: 'delta', text: nothing });
+      onEvent({ type: 'done', answer: nothing, citations: [], unsupported: false, notFound: true, invalidCitations: [], askLogId, coverage, model: null, lighterModel: false });
+      await finish({ status: 'done', answer: nothing, citations: [], sources: [], unsupported: false, notFound: true });
+      return { answer: nothing, citations: [], sources: [], unsupported: false, notFound: true, askLogId, plan, coverage, model: null, lighterModel: false };
     }
 
     const ids = [...new Set([...pinned, ...got.chunks.map((c) => c.messageId)])];
@@ -140,13 +158,13 @@ export async function answerQuestion(userId, question, { entityId = null, topicI
     const lite = new Map((await loadMessagesLite(userId, evidence.sources.map((s) => s.messageId), { dedupe: false })).map((m) => [m.id, m]));
     const sources = evidence.sources.map((s) => ({ n: s.n, message: lite.get(s.messageId) || { id: s.messageId } }));
     const sourceIds = evidence.sources.map((s) => s.messageId);
-    onEvent({ type: 'sources', sources, askLogId, plan: compactPlan(planned) });
+    onEvent({ type: 'sources', sources, askLogId, plan: compactPlan(planned), coverage });
 
     if (!sources.length) {
-      onEvent({ type: 'delta', text: NOTHING_RELEVANT });
-      onEvent({ type: 'done', answer: NOTHING_RELEVANT, citations: [], unsupported: false, notFound: true, invalidCitations: [], askLogId });
-      await finish({ status: 'done', answer: NOTHING_RELEVANT, citations: [], sources: [], unsupported: false, notFound: true });
-      return { answer: NOTHING_RELEVANT, citations: [], sources, unsupported: false, notFound: true, askLogId, plan };
+      onEvent({ type: 'delta', text: nothing });
+      onEvent({ type: 'done', answer: nothing, citations: [], unsupported: false, notFound: true, invalidCitations: [], askLogId, coverage, model: null, lighterModel: false });
+      await finish({ status: 'done', answer: nothing, citations: [], sources: [], unsupported: false, notFound: true });
+      return { answer: nothing, citations: [], sources, unsupported: false, notFound: true, askLogId, plan, coverage, model: null, lighterModel: false };
     }
 
     const messages = answerMessages({
@@ -168,19 +186,24 @@ export async function answerQuestion(userId, question, { entityId = null, topicI
         onEvent({ type: 'delta', text: ev.text });
       } else if (ev.type === 'done') {
         if (typeof ev.content === 'string') answer = ev.content;
-        meta = { model: ev.model, aiCallId: ev.aiCallId };
+        meta = { model: ev.model, aiCallId: ev.aiCallId, fellBack: Boolean(ev.fellBack), lighterModel: ev.lighterModel };
       }
     }
     const checked = checkCitations(answer.trim(), sources.length);
+    const lighterModel = ranOnLighterModel(meta, cfg['llm.models.long']);
+    plan.answer = { model: meta.model || null, lighterModel };
     onEvent({
       type: 'done', answer: checked.answer, citations: checked.citations, unsupported: checked.unsupported,
-      notFound: checked.notFound, invalidCitations: checked.invalid, askLogId,
+      notFound: checked.notFound, invalidCitations: checked.invalid, askLogId, coverage, model: meta.model || null, lighterModel,
     });
     await finish({
       status: 'done', answer: checked.answer, citations: checked.citations, sources: sourceIds,
       unsupported: checked.unsupported, notFound: checked.notFound, model: meta.model, aiCallId: meta.aiCallId,
     });
-    return { answer: checked.answer, citations: checked.citations, sources, unsupported: checked.unsupported, notFound: checked.notFound, askLogId, plan };
+    return {
+      answer: checked.answer, citations: checked.citations, sources, unsupported: checked.unsupported, notFound: checked.notFound,
+      askLogId, plan, coverage, model: meta.model || null, lighterModel,
+    };
   } catch (err) {
     await finish({ status: signal?.aborted ? 'aborted' : 'error', error: String(err?.message || err).slice(0, 500) });
     throw err;

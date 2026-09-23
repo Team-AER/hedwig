@@ -57,6 +57,6 @@ describe.skipIf(!process.env.HEDWIG_IT)('labels against the dev database', () =>
     const brief = await compileBrief(userId);
     expect(typeof brief.headline).toBe('string');
     for (const k of ['needsYou', 'waitingOn', 'cards', 'reading', 'questions']) expect(Array.isArray(brief[k])).toBe(true);
-    expect(Object.keys(brief.today).sort()).toEqual(['blocked', 'bundled', 'rescued', 'screened']);
+    expect(Object.keys(brief.today).sort()).toEqual(['blocked', 'bundled', 'entries', 'rescued', 'screened', 'undoable']);
   });
 });

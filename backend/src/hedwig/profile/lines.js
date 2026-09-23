@@ -39,8 +39,8 @@ function allowedNumbers(facts) {
 }
 
 /**
- * Keep the model's lines that are grounded: a known kind, cited facts that exist, and every number
- * in the text found in the facts it cites (a line with numbers and no valid citation is dropped).
+ * Keep the model's lines that are grounded: a known kind, at least one cited fact that exists, and
+ * every number in the text found in the facts it cites.
  * Lines that repeat a pinned line or bring back a dismissed one are dropped too.
  * @returns {{ kept: Array<{ text, kind, evidence }>, dropped: Array<{ text, reason }> }}
  */
@@ -54,14 +54,16 @@ export function validateLines(lines, facts, { pinned = [], dismissed = [], max =
     if (!text) continue;
     const kind = KIND_ORDER.includes(raw?.kind) ? raw.kind : null;
     if (!kind) { dropped.push({ text, reason: 'unknown kind' }); continue; }
+    if (blocked.has(normLine(text))) { dropped.push({ text, reason: 'repeats a pinned or dismissed line' }); continue; }
     const cited = (Array.isArray(raw.evidence) ? raw.evidence : []).map(String).filter((id) => byId.has(id));
+    // Every generated line rests on at least one fact: a line citing nothing is a guess.
+    if (!cited.length) { dropped.push({ text, reason: 'cites no evidence' }); continue; }
     const numbers = text.match(/\d+/g) || [];
     if (numbers.length) {
       const allowed = allowedNumbers(cited.map((id) => byId.get(id)));
       const invented = numbers.filter((n) => !allowed.has(n));
       if (invented.length) { dropped.push({ text, reason: `numbers not in the cited evidence: ${[...new Set(invented)].join(', ')}` }); continue; }
     }
-    if (blocked.has(normLine(text))) { dropped.push({ text, reason: 'repeats a pinned or dismissed line' }); continue; }
     kept.push({ text, kind, evidence: [...new Set(cited)] });
   }
   const unique = uniqueBy(kept, (l) => normLine(l.text));

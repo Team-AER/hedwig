@@ -119,6 +119,10 @@ export function splitDisclaimer(text) {
     else break;
   }
   if (paras.length && EXTERNAL_BANNER.test(paras[0])) out.unshift(paras.shift());
+  // A footer is what follows the message. When the rules would take everything (a one-paragraph
+  // body that happens to say "confidential", a subject like "Poor confidentiality…"), there is no
+  // message left to follow: keep the text as the message.
+  if (!paras.some((p) => p.trim() && !SEPARATOR_LINE.test(p))) return { text: tidy(text), disclaimer: '' };
   const disclaimer = tidy(out.filter((p) => p.trim() && !SEPARATOR_LINE.test(p)).join('\n\n'));
   return { text: tidy(paras.join('\n\n')), disclaimer };
 }
@@ -226,22 +230,48 @@ export function splitHtml(html) {
 // ── Public API ───────────────────────────────────────────────────────────────
 
 /**
+ * Bump when a change to splitBody can turn a message that had no indexable text into one that has
+ * some. The chunk sweep then re-chunks, once, the messages whose body produced no text before
+ * (store.js repairEmptyBodies), without re-chunking the whole index.
+ */
+export const PARSER_VERSION = '2026-09-24.1';
+
+const HTML_START = /^\s*(<!doctype\s+html|<html[\s>]|<head[\s>]|<body[\s>]|<(div|table|p|span|style|meta|center|font)[\s>])/i;
+/** A text/plain part that is really HTML. Pure. */
+export function looksLikeHtml(text) {
+  const t = String(text || '');
+  return HTML_START.test(t) && /<\/[a-z]+>/i.test(t);
+}
+
+/** Characters of indexable text a split produced (new text plus quoted history). Pure. */
+export function textChars(parts) {
+  return String(parts?.newText || '').trim().length + String(parts?.quoted || '').trim().length;
+}
+
+/**
  * Split a body. Accepts { body_text, body_html, snippet } (a message row) or a plain string.
  * @returns {{ newText: string, quoted: string, signature: string, disclaimer: string }}
  */
 export function splitBody(input) {
   const row = typeof input === 'string' ? { body_text: input } : (input || {});
-  let base = row.body_text || '';
+  // Some senders put a bare line break in the text/plain part ("\r\n") and the whole message in
+  // the HTML part, and some send HTML in the text/plain part. Neither is text to index as-is.
+  let base = String(row.body_text || '').trim() ? row.body_text : '';
+  let html = row.body_html || '';
+  if (base && looksLikeHtml(base)) {
+    if (!String(html).trim()) html = base;
+    base = '';
+  }
   const quotedParts = [];
   const sigParts = [];
-  if (row.body_html) {
-    const s = splitHtml(row.body_html);
+  if (html) {
+    const s = splitHtml(html);
     if (s) {
       base = s.main;
       if (s.quoted) quotedParts.push(s.quoted);
       if (s.signature) sigParts.push(s.signature);
     } else if (!base) {
-      base = convert(row.body_html);
+      base = convert(html);
     }
   }
   if (!base && !quotedParts.length) base = row.snippet || '';

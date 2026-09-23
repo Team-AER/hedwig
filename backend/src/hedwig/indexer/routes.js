@@ -1,5 +1,6 @@
 // /api/hedwig/index/… and /api/hedwig/admin/index/…
 import { indexStatus, rebuild } from './service.js';
+import { coverageShare } from './truth.js';
 
 const sendError = (res, err) => res.status(err.status || 500).json({ error: err.message || 'Internal error' });
 
@@ -7,6 +8,10 @@ export function indexRoutes(r) {
   // Per-folder coverage with percentages, totals, recipe and backlog for the signed-in user.
   r.get('/index/status', async (req, res) => {
     try { res.json(await indexStatus(req.session.userId)); } catch (err) { sendError(res, err); }
+  });
+  // The small version for "features light up as the index fills": { share, indexed, total, complete }.
+  r.get('/index/coverage', async (req, res) => {
+    try { res.json(await coverageShare(req.session.userId)); } catch (err) { sendError(res, err); }
   });
 }
 
