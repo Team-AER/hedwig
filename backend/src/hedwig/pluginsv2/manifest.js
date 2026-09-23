@@ -49,6 +49,8 @@ export function describePermission(name) {
 export const HOOKS = Object.freeze({
   beforeTriage: { registry: HEDWIG_HOOKS.beforeTriage, permission: 'triage.hook', timeoutMs: 10_000 },
   afterTriage: { registry: HEDWIG_HOOKS.afterTriage, permission: 'triage.hook', timeoutMs: 60_000 },
+  beforeSort: { registry: HEDWIG_HOOKS.beforeSort, permission: 'triage.hook', timeoutMs: 10_000 },
+  afterSort: { registry: HEDWIG_HOOKS.afterSort, permission: 'triage.hook', timeoutMs: 60_000 },
   onContextBuilt: { registry: HEDWIG_HOOKS.onContextBuilt, permission: 'context.read', timeoutMs: 60_000 },
   beforeSend: { registry: HEDWIG_HOOKS.beforeSend, permission: 'mail.read', timeoutMs: 5_000 },
   onMessageIndexed: { registry: HEDWIG_HOOKS.onMessageIndexed, permission: 'mail.read', timeoutMs: 120_000 },

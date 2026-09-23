@@ -16,6 +16,10 @@ export const HEDWIG_HOOKS = Object.freeze({
   onMessageIndexed: 'hedwig.onMessageIndexed',
   // collectHook: return insight cards { title, body, severity, data } for a user's daily run.
   collectInsights: 'hedwig.collectInsights',
+  // collectHook: return { verdict?: { stream, bundle?, needsYou?, reason } } to steer sorting. ctx: { userId, message, proposal }
+  beforeSort: 'hedwig.beforeSort',
+  // runHook: a sorting decision was stored. ctx: { userId, messageId, sort: { stream, bundle, needsYou, spam, layer, reason, confidence } }
+  afterSort: 'hedwig.afterSort',
 });
 
 export function runHedwigHook(name, ctx) {
