@@ -150,6 +150,10 @@ export function createAiProvider({
   // works out of the box. Returns { baseUrl, apiKey, model } or null. Also names the one private
   // gateway the operator already trusts, so saving it does not need allow_private_hosts.
   defaultGatewayFn = null,
+  // Hedwig: while the gateway default is in use, requests go through Hedwig's model client so they
+  // get its fallback model, budgets and call log. completeFn resolves to text; streamFn yields text.
+  gatewayCompleteFn = null,
+  gatewayStreamFn = null,
 } = {}) {
   async function loadAiConfig() {
     const result = await queryFn("SELECT value FROM system_settings WHERE key = 'ai_config'");
@@ -318,6 +322,7 @@ export function createAiProvider({
 
   async function completeText(messages, options = {}) {
     const config = await requireSelectedConfig();
+    if (config.inherited === 'hedwig' && gatewayCompleteFn) return gatewayCompleteFn(messages, options);
     if (config.provider === AI_PROVIDER_API_KEY) return completeApiKey(config, messages, options);
     let credentials = await getCodexAccessFn();
     try {
@@ -331,6 +336,10 @@ export function createAiProvider({
 
   async function* streamChat(messages, options = {}) {
     const config = await requireSelectedConfig();
+    if (config.inherited === 'hedwig' && gatewayStreamFn) {
+      yield* gatewayStreamFn(messages, options);
+      return;
+    }
     if (config.provider === AI_PROVIDER_API_KEY) {
       yield* streamApiKey(config, messages, options);
       return;
@@ -416,7 +425,40 @@ async function hedwigGateway() {
   return { baseUrl: cfg['llm.baseUrl'], apiKey: cfg['llm.apiKey'] || null, model: models.long.active };
 }
 
-const defaultProvider = createAiProvider({ defaultGatewayFn: hedwigGateway });
+function gatewayError(err) {
+  if (err instanceof AiProviderError) return err;
+  const status = err?.status && err.status >= 400 && err.status < 600 ? err.status : 503;
+  return new AiProviderError(err?.message || 'AI request failed', { status, expose: true });
+}
+
+async function hedwigComplete(messages, options = {}) {
+  const { chat } = await import('../hedwig/llm.js');
+  try {
+    const out = await chat({ feature: 'assistant', role: 'long', messages, maxTokens: options.maxTokens, signal: options.signal });
+    if (typeof out.content === 'string') return out.content;
+    if (options.allowEmpty) return '';
+    throw new AiProviderError(`AI provider returned an empty completion (finish_reason: ${out.finishReason})`, { status: 502, expose: true });
+  } catch (err) {
+    throw gatewayError(err);
+  }
+}
+
+async function* hedwigStream(messages, options = {}) {
+  const { chatStream } = await import('../hedwig/llm.js');
+  try {
+    for await (const evt of chatStream({ feature: 'assistant', role: 'long', messages, maxTokens: options.maxTokens, signal: options.signal })) {
+      if (evt.type === 'delta') yield evt.text;
+    }
+  } catch (err) {
+    throw gatewayError(err);
+  }
+}
+
+const defaultProvider = createAiProvider({
+  defaultGatewayFn: hedwigGateway,
+  gatewayCompleteFn: hedwigComplete,
+  gatewayStreamFn: hedwigStream,
+});
 
 export const loadAiConfig = defaultProvider.loadAiConfig;
 export const getAdminAiConfig = defaultProvider.getAdminAiConfig;

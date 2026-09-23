@@ -534,3 +534,28 @@ describe('Hedwig gateway default', () => {
       .rejects.toThrow(/private addresses/);
   });
 });
+
+describe('Hedwig gateway requests', () => {
+  const gateway = { baseUrl: 'http://llm-proxy.cls/v1', apiKey: null, model: 'Qwen/Qwen3.8-Flash-Next' };
+
+  it('sends inherited-default requests through the Hedwig client instead of calling the URL directly', async () => {
+    const gatewayCompleteFn = vi.fn().mockResolvedValue('via hedwig');
+    async function* gatewayStreamFn() { yield 'a'; yield 'b'; }
+    const { provider, deps } = factory({ defaultGatewayFn: vi.fn().mockResolvedValue(gateway), gatewayCompleteFn, gatewayStreamFn });
+    expect(await provider.completeText([{ role: 'user', content: 'hi' }], { maxTokens: 5 })).toBe('via hedwig');
+    expect(gatewayCompleteFn).toHaveBeenCalledWith([{ role: 'user', content: 'hi' }], { maxTokens: 5 });
+    expect(await collect(provider.streamChat([{ role: 'user', content: 'hi' }]))).toEqual(['a', 'b']);
+    expect(deps.fetchFn).not.toHaveBeenCalled();
+  });
+
+  it('keeps calling a saved provider directly', async () => {
+    const gatewayCompleteFn = vi.fn();
+    const { provider, deps } = factory({
+      initial: { provider: AI_PROVIDER_API_KEY, apiKeyConfig: { baseUrl: 'https://api.example.com/v1', model: 'm' } },
+      defaultGatewayFn: vi.fn().mockResolvedValue(gateway), gatewayCompleteFn,
+    });
+    deps.fetchFn.mockResolvedValue(jsonResponse({ choices: [{ message: { content: 'direct' }, finish_reason: 'stop' }] }));
+    expect(await provider.completeText([{ role: 'user', content: 'hi' }])).toBe('direct');
+    expect(gatewayCompleteFn).not.toHaveBeenCalled();
+  });
+});
