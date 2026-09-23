@@ -14,7 +14,8 @@
     "lint:plugins": "eslint -c eslint.plugins-boundary.js src/plugins",
     "plugin": "node scripts/hedwig-plugin.mjs",
     "audit:redos": "npm i --no-save --silent eslint-plugin-redos && eslint -c eslint.redos.config.mjs src",
-    "test:hedwig-it": "HEDWIG_IT=1 vitest run src/hedwig --no-file-parallelism"
+    "test:hedwig-it": "HEDWIG_IT=1 vitest run src/hedwig --no-file-parallelism",
+    "hedwig:eval": "node scripts/hedwig-eval.mjs"
   },
   "dependencies": {
     "archiver": "^7.0.1",
