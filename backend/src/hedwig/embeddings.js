@@ -5,7 +5,28 @@
 import { createHash } from 'crypto';
 import { getConfig } from './config.js';
 
-export class EmbeddingError extends Error {}
+/**
+ * `status` is the endpoint's HTTP status (undefined for connection failures and bad replies);
+ * `retryAfterSec` is its Retry-After header, when it sent one. Callers use them to tell one bad
+ * input (4xx) from an outage or rate limit (429, 5xx, no connection).
+ */
+export class EmbeddingError extends Error {
+  constructor(message, { status, retryAfterSec } = {}) {
+    super(message);
+    this.name = 'EmbeddingError';
+    if (status !== undefined) this.status = status;
+    if (retryAfterSec !== undefined) this.retryAfterSec = retryAfterSec;
+  }
+}
+
+function retryAfter(res) {
+  const raw = res.headers?.get?.('retry-after');
+  if (!raw) return undefined;
+  const n = Number(raw);
+  if (Number.isFinite(n) && n >= 0) return n;
+  const at = Date.parse(raw);
+  return Number.isFinite(at) ? Math.max(0, Math.round((at - Date.now()) / 1000)) : undefined;
+}
 
 /** @returns {Promise<{provider: string, model: string, dims: number} | null>} */
 export async function embeddingProfile() {
@@ -93,7 +114,9 @@ export async function embed(texts, { fetchFn = fetch, kind = 'passage' } = {}) {
     } catch (err) {
       throw new EmbeddingError(`embeddings request failed: ${err.message}`);
     }
-    if (!res.ok) throw new EmbeddingError(`embeddings ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    if (!res.ok) {
+      throw new EmbeddingError(`embeddings ${res.status}: ${(await res.text()).slice(0, 200)}`, { status: res.status, retryAfterSec: retryAfter(res) });
+    }
     const body = await res.json();
     const data = (body.data || []).sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
     if (data.length !== slice.length) throw new EmbeddingError('embeddings response size mismatch');

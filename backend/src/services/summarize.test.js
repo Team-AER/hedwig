@@ -100,4 +100,10 @@ describe('summarizeMessage', () => {
     completeText.mockRejectedValue(new Error('provider down'));
     await expect(summarizeMessage({ subject: 'S', content: 'b' })).resolves.toBeNull();
   });
+
+  it('charges the call to the given user and lane (the Hedwig gateway budgets per user)', async () => {
+    completeText.mockResolvedValue('line');
+    await summarizeMessage({ subject: 'S', content: 'b', userId: 'u1', lane: 'background' });
+    expect(completeText).toHaveBeenCalledWith(expect.anything(), { maxTokens: 120, userId: 'u1', lane: 'background' });
+  });
 });

@@ -96,9 +96,9 @@ router.delete('/admin/ai', requireAdmin, async (_req, res) => {
   }
 });
 
-router.post('/admin/ai/test', requireAdmin, async (_req, res) => {
+router.post('/admin/ai/test', requireAdmin, async (req, res) => {
   try {
-    res.json(await testAiProvider());
+    res.json(await testAiProvider({ userId: req.session?.userId }));
   } catch (error) {
     serviceError(res, error, 'AI provider test failed');
   }
@@ -213,7 +213,7 @@ router.post('/ai/chat', requireAuth, async (req, res) => {
   res.flushHeaders();
 
   try {
-    for await (const delta of streamChat(providerMessages, { signal: controller.signal })) {
+    for await (const delta of streamChat(providerMessages, { signal: controller.signal, userId: req.session.userId })) {
       if (controller.signal.aborted || res.destroyed) break;
       res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: delta } }] })}\n\n`);
     }

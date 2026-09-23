@@ -26,6 +26,12 @@ describe('aiClassifyMessage provider adapter integration', () => {
     },
   );
 
+  it('charges the call to the requesting user', async () => {
+    completeText.mockResolvedValue('social');
+    await expect(aiClassifyMessage('Subject', 'sender@example.com', 'Preview', { userId: 'u1' })).resolves.toBe('social');
+    expect(completeText).toHaveBeenCalledWith(expect.anything(), { maxTokens: 1024, userId: 'u1' });
+  });
+
   it.each([
     'not-a-category',
     'This looks like a promotion',

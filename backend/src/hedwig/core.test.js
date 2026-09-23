@@ -59,6 +59,28 @@ describe('embeddings', () => {
   it('round-trips pgvector literals', () => {
     expect(fromVectorLiteral(toVectorLiteral([0.5, -0.25]))).toEqual([0.5, -0.25]);
   });
+  it('embedding errors carry the HTTP status and Retry-After (so the index can tell bad input from an outage)', async () => {
+    const { embed, EmbeddingError } = await import('./embeddings.js');
+    const { invalidateConfigCache } = await import('./config.js');
+    const saved = { provider: process.env.HEDWIG_EMBEDDINGS_PROVIDER, url: process.env.HEDWIG_EMBEDDINGS_BASE_URL };
+    process.env.HEDWIG_EMBEDDINGS_PROVIDER = 'openai';
+    process.env.HEDWIG_EMBEDDINGS_BASE_URL = 'http://embed.test/v1';
+    invalidateConfigCache();
+    try {
+      const rateLimited = embed(['x'], { fetchFn: async () => new Response('slow down', { status: 429, headers: { 'Retry-After': '42' } }) });
+      await expect(rateLimited).rejects.toBeInstanceOf(EmbeddingError);
+      await expect(rateLimited).rejects.toMatchObject({ status: 429, retryAfterSec: 42 });
+      await expect(embed(['x'], { fetchFn: async () => new Response('too long', { status: 400 }) })).rejects.toMatchObject({ status: 400 });
+      const down = await embed(['x'], { fetchFn: async () => { throw new Error('ECONNREFUSED'); } }).catch((e) => e);
+      expect(down).toBeInstanceOf(EmbeddingError);
+      expect(down.status).toBeUndefined();
+    } finally {
+      for (const [k, v] of [['HEDWIG_EMBEDDINGS_PROVIDER', saved.provider], ['HEDWIG_EMBEDDINGS_BASE_URL', saved.url]]) {
+        if (v === undefined) delete process.env[k]; else process.env[k] = v;
+      }
+      invalidateConfigCache();
+    }
+  });
 });
 
 describe('text', () => {

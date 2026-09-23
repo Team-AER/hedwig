@@ -59,7 +59,7 @@ async function runPool(items, limit, worker) {
 // Guards against two overlapping sections fetches queueing the same message twice.
 const _inFlight = new Set();
 
-async function generateForAccount(accountId, ids) {
+async function generateForAccount(accountId, ids, userId) {
   // Skip ids that already carry a cached gist (belt-and-suspenders over the sections-side filter,
   // so a head that got a gist since the sections snapshot isn't regenerated / doesn't re-broadcast).
   const existing = await getMessageAnnotations(accountId, ids, 'gtd');
@@ -73,6 +73,8 @@ async function generateForAccount(accountId, ids) {
       subject: row.subject,
       from: row.from_name || row.from_email,
       content: row.content,
+      userId, // charged to the user whose sections asked for it; nobody waits on a gist
+      lane: 'background',
     });
     if (!gist) return;
     // Store under GTD's annotation namespace on the message (cleaned with the message on delete).
@@ -111,7 +113,7 @@ export async function queueGistGeneration({ sections, userId, broadcast } = {}) 
     for (const [accountId, ids] of byAccount) {
       let wrote = 0;
       try {
-        wrote = await generateForAccount(accountId, ids);
+        wrote = await generateForAccount(accountId, ids, userId);
       } catch (err) {
         console.warn(`GTD gist generation failed for account ${accountId}:`, err.message);
       } finally {

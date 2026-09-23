@@ -242,7 +242,7 @@ router.post('/categories/ai-classify/:messageId', requireAuth, async (req, res) 
   if (!msgResult.rows.length) return res.status(404).json({ error: 'Message not found' });
   const { subject, from_email, snippet } = msgResult.rows[0];
 
-  const category = await aiClassifyMessage(subject, from_email, snippet);
+  const category = await aiClassifyMessage(subject, from_email, snippet, { userId: req.session.userId });
   if (!category) return res.status(503).json({ error: 'AI classification unavailable or failed' });
 
   // Persist the AI-assigned category.

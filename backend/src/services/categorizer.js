@@ -127,8 +127,8 @@ export function classifyMessage(parsedHeaders, fromEmail, socialDomains) {
 // Use the configured AI provider to classify a message that has no header
 // signals. Returns a valid category string, or null if AI is unavailable or
 // the response is unusable. Errors are swallowed — the caller treats null as
-// 'keep primary'.
-export async function aiClassifyMessage(subject, fromEmail, snippet) {
+// 'keep primary'. `userId` is the user the call is charged to (the Hedwig gateway budgets per user).
+export async function aiClassifyMessage(subject, fromEmail, snippet, { userId } = {}) {
   const prompt = `Classify this email into exactly one category. Reply with only the category name, nothing else.
 
 Categories:
@@ -145,7 +145,7 @@ ${snippet ? `Preview: ${snippet.slice(0, 300)}` : ''}
 Category:`;
 
   try {
-    const response = await completeText([{ role: 'user', content: prompt }], { maxTokens: 1024 });
+    const response = await completeText([{ role: 'user', content: prompt }], { maxTokens: 1024, ...(userId ? { userId } : {}) });
     if (typeof response !== 'string') return null;
     const category = response.toLowerCase().trim();
     return ['primary', 'newsletter', 'promotion', 'automated', 'social'].includes(category)

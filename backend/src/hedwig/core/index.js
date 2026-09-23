@@ -1,13 +1,16 @@
 // Core Hedwig routes: status, configuration, layouts, usage. Also defines the API-side body fetch.
 import { query } from '../../services/db.js';
 import { getConfig, describeConfig, saveSystemConfig, saveUserConfig, SCHEMA } from '../config.js';
-import { defineJob, queueStats, pruneJobs, enqueue } from '../jobs.js';
+import { defineJob, queueStats, pruneJobs, enqueue, retryFailed, gatewayHealth } from '../jobs.js';
 import { pipelineStats, resetBackfill, definedSteps } from '../pipeline.js';
 import { getCatalog, llmAvailable, activeModels } from '../llm.js';
 import { embeddingProfile, embed } from '../embeddings.js';
 import { defineSchedule, definedSchedules } from '../schedule.js';
 import { hedwigStatus } from '../status.js';
 import { makeFetchBodyHandler } from './bodies.js';
+import { indexHealth } from '../indexer/service.js';
+import { runtimeAdminRoutes } from '../ledger/routes.js';
+import { registerRuntimeSchedules } from '../ledger/schedules.js';
 
 const LAYOUT_DEVICES = ['desktop', 'tablet', 'phone'];
 
@@ -37,7 +40,8 @@ export default {
     defineJob('mail.fetchBody', makeFetchBodyHandler(imapManager), { timeoutMs: 90_000 });
   },
 
-  worker() {
+  async worker() {
+    await registerRuntimeSchedules();
     defineSchedule({ name: 'core.pruneJobs', everySec: 6 * 3600, run: () => pruneJobs(7) });
     defineSchedule({
       name: 'core.pruneAiCalls',
@@ -127,7 +131,8 @@ export default {
       );
       const cfg = await getConfig(req.session.userId);
       const budgets = Object.fromEntries(SCHEMA.filter((f) => f.key.startsWith('llm.dailyBudget.')).map((f) => [f.key.split('.').pop(), cfg[f.key]]));
-      res.json({ today: rows, budgets });
+      const tokenBudgets = Object.fromEntries(SCHEMA.filter((f) => f.key.startsWith('llm.tokenBudget.')).map((f) => [f.key.split('.').pop(), cfg[f.key]]));
+      res.json({ today: rows, budgets, tokenBudgets });
     });
   },
 
@@ -156,14 +161,15 @@ export default {
       } catch (err) { res.json({ ok: false, error: err.message, ms: Date.now() - started }); }
     });
     r.get('/health', async (req, res) => {
-      const [jobs, pipeline, calls] = await Promise.all([
+      const [jobs, pipeline, calls, index] = await Promise.all([
         queueStats(),
         pipelineStats(),
         query(`SELECT feature, COUNT(*)::int AS calls, COUNT(*) FILTER (WHERE NOT ok)::int AS errors,
                       COALESCE(AVG(latency_ms),0)::int AS avg_latency_ms
                  FROM hedwig_ai_calls WHERE created_at > NOW() - INTERVAL '24 hours' GROUP BY feature ORDER BY calls DESC`),
+        indexHealth().catch((err) => ({ error: err.message })),
       ]);
-      res.json({ status: hedwigStatus, models: await activeModels(null), jobs, pipeline, aiCalls24h: calls.rows, steps: definedSteps(), schedules: definedSchedules() });
+      res.json({ status: hedwigStatus, models: await activeModels(null), gateway: gatewayHealth(), jobs, pipeline, index, aiCalls24h: calls.rows, steps: definedSteps(), schedules: definedSchedules() });
     });
     r.post('/reindex', async (req, res) => {
       // Re-run the pipeline over history: clears per-message state (derived data only).
@@ -173,9 +179,9 @@ export default {
       res.json({ ok: true, scope });
     });
     r.post('/jobs/retry-failed', async (req, res) => {
-      const { rowCount } = await query("UPDATE hedwig_jobs SET failed_at = NULL, attempts = 0, run_at = NOW() WHERE failed_at > NOW() - INTERVAL '7 days'");
-      res.json({ retried: rowCount });
+      try { res.json(await retryFailed()); } catch (err) { sendError(res, err); }
     });
+    runtimeAdminRoutes(r);
     r.post('/jobs/enqueue', async (req, res) => {
       const { kind, payload, userId } = req.body || {};
       if (!kind) return res.status(400).json({ error: 'kind is required' });

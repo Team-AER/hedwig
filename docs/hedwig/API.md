@@ -153,3 +153,39 @@ PluginInfo = { id, name, version, tier, source, description, author, activated, 
 
 Frontend bundles are ES modules that receive the host API as `window.hedwig`:
 `{ React, h, registerView, registerCommand, registerSlot, api, stream, useHedwig, tokens, pluginId }`.
+
+## Runtime — `backend/src/hedwig/jobs.js`, `ledger/`, `prompts/`
+
+Admin only (`/api/hedwig/admin`). The job ledger's states are `queued`, `running`, `done`, `partial`
+(the handler returned `{ status: 'partial', note }`), `failed`, and two terminal states for rows
+that failed: `resolved` (a later run of the same work succeeded, or the kind's `rebuild()` no longer
+lists it) and `retried` (a fresh job was enqueued for it). "Failed" counts only rows still failed.
+
+| Method | Path | Body / query | Returns |
+| --- | --- | --- | --- |
+| GET | `/admin/jobs/stats` | | `{ kinds: JobKind[], stats: JobStats[], gateway: GatewayHealth }` |
+| GET | `/admin/jobs/failed` | `kind?`, `limit?` (≤ 500, default 50) | `{ jobs: FailedJob[] }`, newest first |
+| POST | `/admin/jobs/retry` | `{ kind? }` (omit for every kind) | `{ retried, enqueued, resolved }` |
+| POST | `/admin/jobs/reconcile` | | `{ resolved, reaped, gateway: { ok, deferred, error? } }` (runs reconcile, the reaper and the health gate now) |
+| POST | `/admin/jobs/retry-failed` | | `{ retried, enqueued, resolved }` (older route, now the same as `/admin/jobs/retry` for every kind) |
+| GET | `/admin/prompts` | | `{ prompts: [{ id, version, hash, tier, feature, maxTokens, batch }] }` |
+
+```ts
+JobKind       = { kind, timeoutMs, rebuild: boolean, needsGateway: boolean }   // kinds defined in this process
+JobStats      = { kind, pending, running, failed_24h, done_24h, last_error, tokens_in, tokens_out,
+                  status: { queued, running, done, partial, failed, resolved, retried } } // last 7 days + all still-failed rows
+FailedJob     = { id, kind, user_id, payload, dedupe_key, attempts, max_attempts, last_error, note,
+                  created_at, failed_at, tokens_in, tokens_out }
+GatewayHealth = { ok, checkedAt /* epoch ms, 0 = not probed in this process */, error }
+```
+
+`GET /admin/health` also carries `gateway: GatewayHealth`. `GET /usage` adds `tokenBudgets`
+(`llm.tokenBudget.<feature>`, tokens per user per day) next to `budgets` (calls per day).
+
+Model-call provenance: every row of `hedwig_ai_calls` now records `prompt_id`, `prompt_version`,
+`prompt_hash`, `lane` (`interactive|background`), `tier` (`reflex|reasoning`), `workflow` (the
+`X-Workflow` header sent to the gateway) and `job_id`; `prompt_text`/`output_text` only while
+`llm.keepTranscripts` is on (nulled after `llm.transcriptDays`). `runPrompt` returns the same
+provenance as `{ aiCallId, promptId, promptVersion, promptHash, model, tier, fellBack, tokensIn,
+tokensOut, attempts, escalated, repaired, dropped }`; store `aiCallId` next to anything derived
+from a model call.

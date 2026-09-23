@@ -388,14 +388,14 @@ export function createAiProvider({
     };
   }
 
-  async function testAiProvider() {
+  async function testAiProvider(options = {}) {
     // The connection test only needs to prove the endpoint is reachable, the key
     // is accepted, and the model returns a well-formed completion. `allowEmpty`
     // keeps it from failing on reasoning models that spend the small token budget
     // on reasoning and return empty content (see completeApiKey).
     await completeText(
       [{ role: 'user', content: 'Reply with only the word "ok".' }],
-      { maxTokens: 16, allowEmpty: true },
+      { maxTokens: 16, allowEmpty: true, userId: options.userId, budgetExempt: 'admin connection test' },
     );
     return { ok: true };
   }
@@ -431,10 +431,20 @@ function gatewayError(err) {
   return new AiProviderError(err?.message || 'AI request failed', { status, expose: true });
 }
 
-async function hedwigComplete(messages, options = {}) {
+// Callers pass { userId } (the Hedwig 'assistant' budget is per user) and, off the request path,
+// { lane: 'background' }. A caller where no user can exist passes { budgetExempt: '<why>' } instead
+// (hedwig/llm.js checkBudget); without either the call fails with user_required.
+function hedwigChatOptions(messages, options) {
+  return {
+    userId: options.userId, feature: 'assistant', role: 'long', lane: options.lane === 'background' ? 'background' : 'interactive',
+    messages, maxTokens: options.maxTokens, signal: options.signal, budgetExempt: options.userId ? undefined : options.budgetExempt,
+  };
+}
+
+export async function hedwigComplete(messages, options = {}) {
   const { chat } = await import('../hedwig/llm.js');
   try {
-    const out = await chat({ feature: 'assistant', role: 'long', messages, maxTokens: options.maxTokens, signal: options.signal });
+    const out = await chat(hedwigChatOptions(messages, options));
     if (typeof out.content === 'string') return out.content;
     if (options.allowEmpty) return '';
     throw new AiProviderError(`AI provider returned an empty completion (finish_reason: ${out.finishReason})`, { status: 502, expose: true });
@@ -443,10 +453,10 @@ async function hedwigComplete(messages, options = {}) {
   }
 }
 
-async function* hedwigStream(messages, options = {}) {
+export async function* hedwigStream(messages, options = {}) {
   const { chatStream } = await import('../hedwig/llm.js');
   try {
-    for await (const evt of chatStream({ feature: 'assistant', role: 'long', messages, maxTokens: options.maxTokens, signal: options.signal })) {
+    for await (const evt of chatStream(hedwigChatOptions(messages, options))) {
       if (evt.type === 'delta') yield evt.text;
     }
   } catch (err) {

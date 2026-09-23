@@ -67,11 +67,13 @@ export async function summarizeAvailable() {
 // Summarize one message into a sanitised ≤maxLen line, or null when the output is unusable or
 // the provider errors. Never throws. Does NOT check summarizeAvailable() itself — a batching
 // caller should gate once up front; a one-off caller can call summarizeAvailable() first.
-export async function summarizeMessage({ subject, from, content, maxLen = SUMMARY_MAX_LEN } = {}) {
+// `userId` is the user the call is charged to (the Hedwig gateway budgets per user and refuses a
+// call without one); `lane: 'background'` for work nobody is waiting on.
+export async function summarizeMessage({ subject, from, content, maxLen = SUMMARY_MAX_LEN, userId, lane } = {}) {
   try {
     const response = await completeText(
       [{ role: 'user', content: buildSummaryPrompt({ subject, from, content, maxLen }) }],
-      { maxTokens: maxLen }
+      { maxTokens: maxLen, ...(userId ? { userId } : {}), ...(lane ? { lane } : {}) }
     );
     return sanitizeSummaryLine(response, maxLen);
   } catch {

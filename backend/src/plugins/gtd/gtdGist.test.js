@@ -126,9 +126,11 @@ describe('queueGistGeneration — write path', () => {
 
     await queueGistGeneration({ sections: waitingHeads(['w1']), userId: 'u1', broadcast });
 
+    // Charged to the requesting user (the Hedwig gateway refuses budgeted calls without one), in
+    // the background lane since nobody waits on a gist.
     expect(completeText).toHaveBeenCalledWith([
       { role: 'user', content: expect.stringContaining('Subject: S w1') },
-    ], { maxTokens: 120 });
+    ], { maxTokens: 120, userId: 'u1', lane: 'background' });
     expect(fetch).not.toHaveBeenCalled();
 
     const selectCall = query.mock.calls.find((c) => isBodySelect(c[0]));

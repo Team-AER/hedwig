@@ -1,10 +1,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const hedwigLlm = vi.hoisted(() => ({
+  chat: vi.fn(async () => ({ content: 'ok', finishReason: 'stop' })),
+  chatStream: vi.fn(async function* () { yield { type: 'delta', text: 'a' }; }),
+}));
+vi.mock('../hedwig/llm.js', () => hedwigLlm);
+
 import {
   AI_PROVIDER_API_KEY,
   AI_PROVIDER_CHATGPT,
   MASKED_API_KEY,
   createAiProvider,
   normalizeAiConfig,
+  hedwigComplete,
+  hedwigStream,
 } from './aiProvider.js';
 
 const encoder = new TextEncoder();
@@ -557,5 +566,33 @@ describe('Hedwig gateway requests', () => {
     deps.fetchFn.mockResolvedValue(jsonResponse({ choices: [{ message: { content: 'direct' }, finish_reason: 'stop' }] }));
     expect(await provider.completeText([{ role: 'user', content: 'hi' }])).toBe('direct');
     expect(gatewayCompleteFn).not.toHaveBeenCalled();
+  });
+});
+
+describe('Hedwig gateway call options', () => {
+  it('charges the given user and keeps the caller lane (background off the request path)', async () => {
+    hedwigLlm.chat.mockClear();
+    await hedwigComplete([{ role: 'user', content: 'hi' }], { userId: 'u1', lane: 'background', maxTokens: 9 });
+    expect(hedwigLlm.chat).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u1', feature: 'assistant', lane: 'background', maxTokens: 9, budgetExempt: undefined }));
+    await hedwigComplete([{ role: 'user', content: 'hi' }], { userId: 'u1' });
+    expect(hedwigLlm.chat).toHaveBeenLastCalledWith(expect.objectContaining({ lane: 'interactive' }));
+    hedwigLlm.chatStream.mockClear();
+    await collect(hedwigStream([{ role: 'user', content: 'hi' }], { userId: 'u2', lane: 'background' }));
+    expect(hedwigLlm.chatStream).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u2', lane: 'background' }));
+  });
+
+  it('passes an explicit budget exemption only when there is no user', async () => {
+    hedwigLlm.chat.mockClear();
+    await hedwigComplete([], { budgetExempt: 'admin connection test' });
+    expect(hedwigLlm.chat).toHaveBeenLastCalledWith(expect.objectContaining({ userId: undefined, budgetExempt: 'admin connection test' }));
+    await hedwigComplete([], { userId: 'u1', budgetExempt: 'admin connection test' });
+    expect(hedwigLlm.chat).toHaveBeenLastCalledWith(expect.objectContaining({ userId: 'u1', budgetExempt: undefined }));
+  });
+
+  it('the connection test marks itself budget-exempt', async () => {
+    const gatewayCompleteFn = vi.fn().mockResolvedValue('ok');
+    const { provider } = factory({ defaultGatewayFn: vi.fn().mockResolvedValue({ baseUrl: 'http://llm-proxy.cls/v1', apiKey: null, model: 'm' }), gatewayCompleteFn });
+    await provider.testAiProvider({});
+    expect(gatewayCompleteFn).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ budgetExempt: 'admin connection test' }));
   });
 });

@@ -12,6 +12,9 @@ vi.mock('./config.js', () => ({ getConfig: vi.fn(async () => ({ ...cfg, get: (k)
 
 const { chat, chatStream, activeModels, _resetLlmState } = await import('./llm.js');
 
+// Budgeted features (triage here) must name the user they charge.
+const USER = '11111111-1111-4111-8111-111111111111';
+
 const okBody = (model) => JSON.stringify({ choices: [{ message: { content: `hi from ${model}` }, finish_reason: 'stop' }], usage: {} });
 
 /** fetch mock: the primary hangs (until aborted), the fallback answers at once. /models for the catalog. */
@@ -41,7 +44,7 @@ describe('llm fallback', () => {
 
   it('uses the primary when it answers', async () => {
     const { fn, calls } = makeFetch({ primary: 'ok' });
-    const out = await chat({ feature: 'triage', messages: [], fetchFn: fn });
+    const out = await chat({ userId: USER, feature: 'triage', messages: [], fetchFn: fn });
     expect(out.model).toBe('primary-model');
     expect(out.fellBack).toBe(false);
     expect(calls).toEqual(['primary-model']);
@@ -49,10 +52,10 @@ describe('llm fallback', () => {
 
   it('falls back when the primary does not respond in time, then skips it during the cooldown', async () => {
     const { fn, calls } = makeFetch();
-    const first = await chat({ feature: 'triage', messages: [], fetchFn: fn });
+    const first = await chat({ userId: USER, feature: 'triage', messages: [], fetchFn: fn });
     expect(first.model).toBe('fallback-model');
     expect(first.fellBack).toBe(true);
-    const second = await chat({ feature: 'triage', messages: [], fetchFn: fn });
+    const second = await chat({ userId: USER, feature: 'triage', messages: [], fetchFn: fn });
     expect(second.model).toBe('fallback-model');
     expect(calls).toEqual(['primary-model', 'fallback-model', 'fallback-model']);
     const models = await activeModels();
@@ -61,10 +64,10 @@ describe('llm fallback', () => {
 
   it('falls back on a 5xx but not on a 4xx', async () => {
     const five = makeFetch({ primary: '500' });
-    expect((await chat({ feature: 'triage', messages: [], fetchFn: five.fn })).model).toBe('fallback-model');
+    expect((await chat({ userId: USER, feature: 'triage', messages: [], fetchFn: five.fn })).model).toBe('fallback-model');
     _resetLlmState();
     const four = makeFetch({ primary: '400' });
-    await expect(chat({ feature: 'triage', messages: [], fetchFn: four.fn })).rejects.toThrow(/400/);
+    await expect(chat({ userId: USER, feature: 'triage', messages: [], fetchFn: four.fn })).rejects.toThrow(/400/);
     expect(four.calls).toEqual(['primary-model']);
   });
 
