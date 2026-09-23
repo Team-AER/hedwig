@@ -128,7 +128,7 @@ export function contextRoutes(r) {
     // SSE comment every 15 s so proxies keep the connection open while the model is queued.
     const keepalive = setInterval(() => { if (!res.writableEnded && !res.destroyed) res.write(': keepalive\n\n'); }, 15_000);
     try {
-      await answerQuestion(userId, question, { entityId, topicId, onEvent: send, signal: controller.signal });
+      await answerQuestion(userId, question, { entityId, topicId, followUpOf: isUuid(req.body?.followUpOf) ? req.body.followUpOf : null, onEvent: send, signal: controller.signal });
     } catch (err) {
       if (!controller.signal.aborted) {
         if (!(err instanceof LlmError) && !err?.expose) console.warn('[hedwig] context ask failed:', err?.message || err);

@@ -1,0 +1,322 @@
+import { describe, it, expect, vi } from 'vitest';
+
+vi.mock('../../services/db.js', () => ({ pool: {}, query: vi.fn(async () => ({ rows: [] })) }));
+
+const F = await import('./fixtures.testutil.js');
+const { detectSchemaOrg, detectIcs, detectTracking, detectCodes, detectDeterministic, calendarAttachments } = await import('./detect/index.js');
+const { findTrackingNumbers, s10Valid, deliveryStatusOf } = await import('./detect/tracking.js');
+const { parseIcs, icsDate } = await import('./detect/ics.js');
+const { findSubscriptions, cadenceOf } = await import('./subscriptions.js');
+const { mergeCards, validateEdit } = await import('./store.js');
+const { verifyModelCard, locateQuote, quoteSupports } = await import('./extract.js');
+const { todayFigures, formatMoney } = await import('./today.js');
+const { sortRows, totalsByCurrency } = await import('./ledger.js');
+const { cardIcs, reminderFor, cardActions, foldIcs } = await import('./actions.js');
+const { dedupeKey, normAmount, normCurrency, merchantKey, eventAt } = await import('./kinds.js');
+const { parseLooseDate, parseByTime, sentenceAround } = await import('./text.js');
+
+const row = (x, extra = {}) => ({ id: 'msg-1', date: '2026-09-23T08:00:00Z', ...x, ...extra });
+
+describe('schema.org', () => {
+  it('reads an Order with its ParcelDelivery (JSON-LD), citing the markup for every field', () => {
+    const cards = detectSchemaOrg(row({ body_html: F.ORDER_JSONLD }));
+    const receipt = cards.find((c) => c.kind === 'receipt');
+    const delivery = cards.find((c) => c.kind === 'delivery');
+    expect(receipt.fields).toMatchObject({ merchant: 'Nordic Outdoor AS', orderNumber: 'NO-448120', total: 1299, currency: 'NOK', date: '2026-09-20' });
+    expect(receipt.fields.items).toEqual([{ name: 'Trail running shoes', quantity: 1, price: 1299 }]);
+    expect(delivery.fields).toMatchObject({ carrier: 'Posten', trackingNumber: '70712345678901234', status: 'in_transit', expectedDate: '2026-09-24', merchant: 'Nordic Outdoor AS' });
+    for (const c of cards) {
+      expect(Object.keys(c.sources).sort()).toEqual(Object.keys(c.fields).sort());
+      expect(c.layer).toBe('schema_org');
+    }
+    expect(receipt.sources.orderNumber.quote).toBe('schema.org Order.orderNumber = NO-448120');
+  });
+
+  it('reads flight and hotel reservations', () => {
+    const [flight, hotel] = detectSchemaOrg(row({ body_html: F.FLIGHT_JSONLD }));
+    expect(flight.fields).toMatchObject({ type: 'flight', reference: 'XK7P2Q', provider: 'Norwegian', flightNumber: 'DY 604', from: 'BGO', to: 'OSL', departAt: '2026-10-02T05:10:00.000Z' });
+    expect(hotel.fields).toMatchObject({ type: 'hotel', provider: 'Hotel Bristol', checkIn: '2026-10-02', checkOut: '2026-10-04', location: 'Kristian IVs gate 7, Oslo' });
+    expect(dedupeKey(flight)).toBe('ref:XK7P2Q:DY 604:2026-10-02');
+  });
+
+  it('reads an Invoice and an EventReservation', () => {
+    expect(detectSchemaOrg(row({ body_html: F.INVOICE_JSONLD }))[0].fields).toMatchObject({ issuer: 'Fjordkraft', invoiceNumber: 'INV-2026-0912', amount: 1240, currency: 'NOK', dueDate: '2026-09-25', status: 'due' });
+    expect(detectSchemaOrg(row({ body_html: F.EVENT_JSONLD }))[0].fields).toMatchObject({ title: 'Bergen Philharmonic: Mahler 2', start: '2026-10-09T17:30:00.000Z', location: 'Grieghallen' });
+  });
+
+  it('reads microdata', () => {
+    const [receipt] = detectSchemaOrg(row({ body_html: F.ORDER_MICRODATA }));
+    expect(receipt.fields).toMatchObject({ merchant: 'Bookshop Ltd', orderNumber: 'BS-10023', total: 24.98, currency: 'GBP', items: [{ name: 'The Overstory', quantity: 1, price: 12.49 }] });
+    expect(receipt.sources.merchant.via).toBe('schema.org microdata');
+  });
+
+  it('ignores HTML without markup and broken JSON-LD', () => {
+    expect(detectSchemaOrg(row({ body_html: '<p>Hello</p>' }))).toEqual([]);
+    expect(detectSchemaOrg(row({ body_html: '<script type="application/ld+json">{ not json</script>' }))).toEqual([]);
+  });
+});
+
+describe('calendar parts', () => {
+  it('parses an Outlook invite: Windows zone, escaped text, alarms ignored, upstream rendering as the source', () => {
+    const [ev] = detectIcs(row({}), [{ text: F.ICS_INVITE, filename: 'invite.ics' }], { tz: 'Europe/London' });
+    expect(ev.fields).toMatchObject({
+      title: "Parents' evening, class 4B", start: '2026-09-24T16:30:00.000Z', end: '2026-09-24T18:00:00.000Z', allDay: false,
+      location: 'Møhlenpris skole, room 12', organizer: 'Anna Berg', method: 'request',
+    });
+    expect(ev.sources.start.quote).toMatch(/^When: Thursday, September 24, 2026, 6:30 PM/);
+    expect(ev.sources.location.attachment).toBe('invite.ics');
+    expect(dedupeKey(ev)).toBe('uid:040000008200E00074C5B7101A82E0080000000070DA');
+  });
+
+  it('marks cancellations and carries the sequence', () => {
+    const [ev] = detectIcs(row({}), [{ text: F.ICS_CANCEL }]);
+    expect(ev.fields.status).toBe('cancelled');
+    expect(ev.sequence).toBe(1);
+  });
+
+  it('treats DATE values as all-day with an exclusive end', () => {
+    const [ev] = parseIcs(F.ICS_ALLDAY);
+    expect(ev).toMatchObject({ start: '2026-10-12', end: '2026-10-14', allDay: true });
+    expect(icsDate('20260924T183000Z')).toEqual({ iso: '2026-09-24T18:30:00.000Z', allDay: false });
+    expect(icsDate('20260924T183000', { TZID: 'Europe/Oslo' }).iso).toBe('2026-09-24T16:30:00.000Z');
+  });
+
+  it('finds calendar attachments and reads VCALENDAR bodies', () => {
+    expect(calendarAttachments([{ filename: 'photo.jpg', type: 'image/jpeg', part: '2' }, { filename: 'invite.ics', type: 'application/octet-stream', part: '3', size: 900 }])
+      .map((a) => a.index)).toEqual([1]);
+    const cards = detectDeterministic(row({ body_text: F.ICS_ALLDAY }));
+    expect(cards.map((c) => c.kind)).toEqual(['event']);
+  });
+});
+
+describe('tracking numbers', () => {
+  it('reads a DHL waybill with status, expected date, time and link, and skips the phone number', () => {
+    const [d] = detectTracking(row(F.DHL_MAIL), { tz: 'Europe/Oslo' });
+    expect(d.fields).toMatchObject({ carrier: 'DHL', trackingNumber: '1234567890', status: 'out_for_delivery', expectedDate: '2026-09-23', expectedBy: '16:00', trackingUrl: 'https://www.dhl.com/track?AWB=1234567890' });
+    expect(d.sources.trackingNumber.quote).toBe('Your shipment with waybill number 1234567890 is out for delivery today.');
+    expect(detectTracking(row(F.DHL_MAIL))).toHaveLength(1);
+  });
+
+  it('reads UPS 1Z numbers with the scheduled day', () => {
+    const [d] = detectTracking(row(F.UPS_MAIL));
+    expect(d.fields).toMatchObject({ carrier: 'UPS', trackingNumber: '1Z999AA10123456784', status: 'in_transit', expectedDate: '2026-09-24' });
+  });
+
+  it('checks UPU S10 check digits and names the carrier by country', () => {
+    expect(s10Valid('12345678', '5')).toBe(true);
+    expect(s10Valid('12345678', '4')).toBe(false);
+    const [d] = detectTracking(row(F.ROYAL_MAIL));
+    expect(d.fields).toMatchObject({ carrier: 'Royal Mail', trackingNumber: 'AB123456785GB', status: 'delivered' });
+    expect(findTrackingNumbers('Your item AB123456784GB has been delivered')).toEqual([]);
+  });
+
+  it('needs the carrier and a tracking word for bare digit runs', () => {
+    expect(findTrackingNumbers('Invoice 1234567890 for your parcel')).toEqual([]);            // no carrier named
+    expect(findTrackingNumbers('DHL: call 1234567890 about your shipment')).toEqual([]);         // a phone number
+    expect(findTrackingNumbers('DHL order reference 1234567890 was paid')).toEqual([]);         // no tracking word near
+    expect(findTrackingNumbers('Posten: sporing av pakke 70712345678901234')).toMatchObject([{ carrier: 'Posten/Bring', number: '70712345678901234' }]);
+    expect(findTrackingNumbers('Your GLS parcel 12345678901 is on its way', { from: 'GLS' })).toMatchObject([{ carrier: 'GLS' }]);
+    expect(findTrackingNumbers('DPD tracking 0123 4567 8901 23')).toMatchObject([{ carrier: 'DPD', number: '01234567890123' }]);
+    expect(findTrackingNumbers('PostNord: kolli 00370712345678901234 er sendt')).toMatchObject([{ carrier: 'PostNord' }]);
+    expect(findTrackingNumbers('FedEx tracking number 123456789012')).toMatchObject([{ carrier: 'FedEx' }]);
+    expect(findTrackingNumbers('USPS tracking 9400 1000 0000 0000 0000 00')).toMatchObject([{ carrier: 'USPS' }]);
+  });
+
+  it('reads the latest status the mail states', () => {
+    expect(deliveryStatusOf('Your parcel will be delivered tomorrow. It has left the depot.').status).toBe('in_transit');
+    expect(deliveryStatusOf('We missed you: delivery attempt failed').status).toBe('exception');
+    expect(deliveryStatusOf('Your order has been dispatched').status).toBe('shipped');
+  });
+});
+
+describe('one-time codes', () => {
+  it('reads a code with its service and expiry', () => {
+    const [c] = detectCodes(row(F.OTP_MAIL));
+    expect(c.fields).toMatchObject({ code: '482913', service: 'Vipps', expiresAt: '2026-09-23T08:10:00.000Z' });
+    expect(c.sources.code.quote).toBe('Use this verification code to sign in: 482 913');
+  });
+
+  it('reads codes in the subject and leaves booking references alone', () => {
+    expect(detectCodes(row(F.GOOGLE_CODE))[0].fields.code).toBe('731904');
+    expect(detectCodes(row(F.BOOKING_CONFIRMATION))).toEqual([]);
+    expect(detectCodes(row({ subject: 'Your order', body_text: 'Your code: see order #123456 for £1999' }))).toEqual([]);
+    expect(detectCodes(row({ subject: 'Newsletter', body_text: 'Security matters in 2026. Read more.' }))).toEqual([]);
+  });
+});
+
+describe('subscriptions', () => {
+  const charge = (date, amount = 139, merchant = 'Netflix', currency = 'NOK', messageId = `m-${date}`) => ({ messageId, merchant, amount, currency, date, cardId: `c-${date}` });
+
+  it('groups steady monthly charges and predicts the next renewal', () => {
+    const subs = findSubscriptions([charge('2026-06-14'), charge('2026-07-14'), charge('2026-08-14', 149, 'Netflix Inc.'), charge('2026-09-14')], { now: new Date('2026-09-23') });
+    expect(subs).toHaveLength(1);
+    expect(subs[0]).toMatchObject({ cadence: 'monthly', lastCharged: '2026-09-14', nextRenewal: '2026-10-14', charges: 4, amount: 139, currency: 'NOK' });
+  });
+
+  it('knows yearly and weekly, and month ends', () => {
+    expect(findSubscriptions([charge('2024-03-01', 99, 'iCloud'), charge('2025-03-01', 99, 'iCloud')], { now: new Date('2025-06-01') })[0]).toMatchObject({ cadence: 'yearly', nextRenewal: '2026-03-01' });
+    expect(cadenceOf([7, 7, 8, 6])).toBe('weekly');
+    expect(findSubscriptions([charge('2026-07-31', 10, 'Gym'), charge('2026-08-31', 10, 'Gym')], { now: new Date('2026-09-01') })[0].nextRenewal).toBe('2026-09-30');
+  });
+
+  it('ignores one-off shopping and irregular charges', () => {
+    expect(findSubscriptions([charge('2026-06-01', 89, 'Amazon'), charge('2026-06-20', 12, 'Amazon'), charge('2026-08-03', 240, 'Amazon')])).toEqual([]);
+    expect(findSubscriptions([charge('2026-06-01'), charge('2026-06-19'), charge('2026-09-02')])).toEqual([]);
+    expect(findSubscriptions([charge('2026-09-01')])).toEqual([]);
+  });
+
+  it('keeps currencies apart and drops a lapsed renewal date', () => {
+    const subs = findSubscriptions([charge('2025-01-05', 5, 'Spotify', 'GBP'), charge('2025-02-05', 5, 'Spotify', 'GBP'), charge('2025-03-05', 5, 'Spotify', 'EUR')], { now: new Date('2026-09-01') });
+    expect(subs).toHaveLength(1);
+    expect(subs[0]).toMatchObject({ currency: 'GBP', lapsed: true, nextRenewal: null });
+  });
+});
+
+describe('merging and editing cards', () => {
+  const old = {
+    fields: { carrier: 'DHL', trackingNumber: '1234567890', status: 'shipped', history: [{ status: 'shipped', at: '2026-09-20T08:00:00.000Z', messageId: 'a' }] },
+    sources: { carrier: { quote: 'x' }, status: { quote: 'shipped' } }, layer: 'pattern', confidence: 0.9, messageIds: ['a'], messageDate: '2026-09-20T08:00:00.000Z',
+  };
+
+  it('takes a delivery status from later mail and keeps the history', () => {
+    const m = mergeCards('delivery', old, { fields: { carrier: 'DHL', trackingNumber: '1234567890', status: 'out_for_delivery', expectedDate: '2026-09-23' }, sources: { status: { quote: 'out for delivery' }, expectedDate: { quote: 'today' } }, layer: 'pattern', confidence: 0.9, messageId: 'b', messageDate: '2026-09-23T07:00:00.000Z' });
+    expect(m.fields.status).toBe('out_for_delivery');
+    expect(m.fields.history.map((h) => h.status)).toEqual(['shipped', 'out_for_delivery']);
+    expect(m.fields.expectedDate).toBe('2026-09-23');
+    expect(m.sources.status.quote).toBe('out for delivery');
+    expect(m.messageIds).toEqual(['a', 'b']);
+  });
+
+  it('never moves a delivery back because of an older mail, and never overrides an edit', () => {
+    const delivered = mergeCards('delivery', old, { fields: { status: 'delivered' }, sources: {}, layer: 'pattern', messageId: 'c', messageDate: '2026-09-24T12:00:00Z' });
+    const late = mergeCards('delivery', { ...old, fields: delivered.fields, messageDate: '2026-09-24T12:00:00Z' }, { fields: { status: 'in_transit' }, sources: {}, layer: 'pattern', messageId: 'd', messageDate: '2026-09-21T12:00:00Z' });
+    expect(late.fields.status).toBe('delivered');
+    const edited = mergeCards('receipt', { fields: { merchant: 'My name for it', total: 10 }, sources: { merchant: { via: 'user' } }, layer: 'reflex', messageIds: [] }, { fields: { merchant: 'ACME', total: 12 }, sources: {}, layer: 'schema_org', messageId: 'x', messageDate: '2026-09-30' });
+    expect(edited.fields).toEqual({ merchant: 'My name for it', total: 12 });
+  });
+
+  it('lets a calendar update with a higher sequence replace the event', () => {
+    const m = mergeCards('event', { fields: { title: 'Parents evening', start: '2026-09-24T16:30:00.000Z', sequence: 0 }, sources: {}, layer: 'ics', messageIds: ['a'], messageDate: '2026-09-25' },
+      { fields: { title: 'Parents evening', start: '2026-09-24T17:00:00.000Z', status: 'confirmed' }, sources: {}, layer: 'ics', messageId: 'b', messageDate: '2026-09-20', sequence: 2 });
+    expect(m.fields).toMatchObject({ start: '2026-09-24T17:00:00.000Z', sequence: 2 });
+  });
+
+  it('validates edits against the kind', () => {
+    expect(validateEdit('receipt', { total: '£12.50', merchant: 'ACME', orderNumber: null })).toEqual({ set: { total: 12.5, merchant: 'ACME' }, clear: ['orderNumber'] });
+    expect(() => validateEdit('receipt', { trackingNumber: 'x' })).toThrow(/not a field/);
+    expect(() => validateEdit('delivery', { status: 'lost' })).toThrow(/invalid value/);
+    expect(() => validateEdit('delivery', { history: [] })).toThrow(/not a field/);
+  });
+});
+
+describe('model cards are only kept with real quotes', () => {
+  const text = 'Thanks for your order from Kaffebrenneriet.\nOrder total: 289,00 kr\nOrder number KB-7781.';
+  it('keeps quoted fields and drops invented ones', () => {
+    const card = verifyModelCard({
+      kind: 'receipt', confidence: 0.8,
+      fields: { merchant: 'Kaffebrenneriet', total: 289, currency: 'NOK', orderNumber: 'KB-7781', date: '2026-09-01' },
+      quotes: [
+        { field: 'merchant', quote: 'Thanks for your order from Kaffebrenneriet.' },
+        { field: 'total', quote: 'Order total: 289,00 kr' },
+        { field: 'orderNumber', quote: 'Order number KB-7780.' },            // wrong number: dropped
+        { field: 'date', quote: 'Ordered on 1 September 2026' },             // not in the mail: dropped
+      ],
+    }, { messageId: 'm1', text, attachments: [], provenance: { promptId: 'cards.extract' } });
+    expect(card.fields).toEqual({ merchant: 'Kaffebrenneriet', total: 289, currency: 'NOK' });
+    expect(card.sources.total).toMatchObject({ messageId: 'm1', quote: 'Order total: 289,00 kr', via: 'reflex' });
+    expect(card.provenance.promptId).toBe('cards.extract');
+  });
+
+  it('finds quotes in attachments and rejects a card without its key fields', () => {
+    expect(locateQuote('Amount due: 1 240,00 NOK', { text: 'see attached', attachments: [{ filename: 'faktura.pdf', text: 'Faktura\nAmount due: 1 240,00 NOK\nDue 25.09.2026' }] })).toEqual({ attachment: 'faktura.pdf' });
+    expect(verifyModelCard({ kind: 'event', fields: { title: 'Dinner' }, quotes: [{ field: 'title', quote: 'Thanks for your order' }] }, { messageId: 'm', text })).toBeNull();
+    expect(quoteSupports('receipt', 'total', 289, 'Order total: 289,00 kr')).toBe(true);
+    expect(quoteSupports('receipt', 'total', 300, 'Order total: 289,00 kr')).toBe(false);
+  });
+});
+
+describe('Today figures', () => {
+  const now = new Date('2026-09-23T07:30:00Z').getTime(); // Wednesday, 09:30 in Oslo
+  const card = (kind, fields, extra = {}) => ({ id: `${kind}-1`, kind, fields, messageId: 'm', updatedAt: '2026-09-23T06:00:00Z', message: { date: '2026-09-23T07:25:00Z' }, ...extra });
+  it('shows parcels arriving today, bills due this week, events today or tomorrow and fresh codes', () => {
+    const figs = todayFigures([
+      card('delivery', { carrier: 'DHL', item: 'Running shoes', status: 'out_for_delivery', history: [{ status: 'out_for_delivery', at: '2026-09-23T06:00:00Z' }] }),
+      card('delivery', { carrier: 'Posten', item: 'Two books', status: 'in_transit', expectedDate: '2026-09-23', expectedBy: '16:00' }),
+      card('delivery', { carrier: 'UPS', status: 'delivered', expectedDate: '2026-09-23' }),
+      card('invoice', { issuer: 'Fjordkraft', amount: 1240, currency: 'NOK', dueDate: '2026-09-25' }),
+      card('invoice', { issuer: 'Old', amount: 5, currency: 'NOK', dueDate: '2026-10-25' }),
+      card('event', { title: "Parents' evening", start: '2026-09-24T16:30:00.000Z' }),
+      card('event', { title: 'Cancelled', start: '2026-09-24T16:30:00.000Z', status: 'cancelled' }),
+      card('code', { code: '482913', service: 'Vipps', expiresAt: '2026-09-23T07:35:00Z' }),
+      card('code', { code: '111111', service: 'Old' }, { message: { date: '2026-09-23T05:00:00Z' } }),
+    ], { now, tz: 'Europe/Oslo' });
+    expect(figs.map((f) => [f.kind, f.figure, f.title, f.caption])).toEqual([
+      ['code', '482913', 'Vipps', 'code, expires in 5 min'],
+      ['delivery', 'Today', 'Running shoes', 'DHL, out for delivery'],
+      ['delivery', 'Today', 'Two books', 'Posten, by 16:00'],
+      ['event', '18:30', "Parents' evening", 'Tomorrow'],
+      ['invoice', '1,240 NOK', 'Fjordkraft', 'Fjordkraft, due Friday'],
+    ]);
+    expect(figs.every((f) => f.messageId === 'm' && f.cardId)).toBe(true);
+  });
+
+  it('formats money the way the Brief shows it', () => {
+    expect(formatMoney(1240, 'NOK')).toBe('1,240 NOK');
+    expect(formatMoney(89.99, 'GBP')).toBe('£89.99');
+    expect(formatMoney(1600, 'EUR')).toBe('€1,600');
+  });
+});
+
+describe('ledger', () => {
+  it('sorts with nulls last and totals by currency', () => {
+    const rows = [{ amount: 10, currency: 'GBP', date: '2026-09-01' }, { amount: null, date: null }, { amount: 5.5, currency: 'GBP', date: '2026-09-03' }, { amount: 100, currency: 'NOK', date: '2026-08-01', cadence: 'yearly' }];
+    expect(sortRows(rows, 'date', 'desc').map((r) => r.date)).toEqual(['2026-09-03', '2026-09-01', '2026-08-01', null]);
+    expect(sortRows(rows, 'amount', 'asc')[0].amount).toBe(5.5);
+    expect(totalsByCurrency(rows)).toEqual([{ currency: 'GBP', total: 15.5, count: 2 }, { currency: 'NOK', total: 100, count: 1 }]);
+    expect(totalsByCurrency([{ amount: 120, currency: 'NOK', cadence: 'yearly' }, { amount: 10, currency: 'NOK', cadence: 'monthly' }], { monthly: true })[0]).toMatchObject({ total: 130, monthly: 20 });
+  });
+});
+
+describe('actions', () => {
+  const ev = { id: 'card-1', kind: 'event', messageId: 'm', fields: { title: "Parents' evening, class 4B", start: '2026-09-24T16:30:00.000Z', end: '2026-09-24T18:00:00.000Z', location: 'Møhlenpris skole; room 12' }, message: { subject: 'Invitation', thread_key: 't' } };
+  it('builds an .ics for the calendar', () => {
+    const { ics, filename, mime } = cardIcs(ev, { now: new Date('2026-09-23T08:00:00Z') });
+    expect(mime).toBe('text/calendar');
+    expect(filename).toBe('Parents-evening-class-4B.ics');
+    expect(ics).toContain('DTSTART:20260924T163000Z\r\n');
+    expect(ics).toContain('SUMMARY:Parents\' evening\\, class 4B');
+    expect(ics).toContain('LOCATION:Møhlenpris skole\\; room 12');
+    expect(ics).toContain('UID:card-1@hedwig');
+    expect(cardIcs({ id: 'x', kind: 'invoice', fields: { dueDate: '2026-09-25', issuer: 'Fjordkraft', amount: 1240, currency: 'NOK' } }).ics).toContain('DTSTART;VALUE=DATE:20260925\r\nDTEND;VALUE=DATE:20260926');
+    expect(foldIcs('X'.repeat(80)).split('\r\n ').map((l) => l.length)).toEqual([75, 5]);
+  });
+
+  it('builds reminder payloads without side effects', () => {
+    expect(reminderFor(ev, { now: new Date('2026-09-23T08:00:00Z') })).toMatchObject({ title: "Parents' evening, class 4B", remindAt: '2026-09-24T15:30:00.000Z', messageId: 'm', threadId: 't', source: { kind: 'card', cardId: 'card-1' } });
+    const bill = reminderFor({ id: 'b', kind: 'invoice', fields: { dueDate: '2026-09-30', issuer: 'Fjordkraft' } }, { tz: 'Europe/Oslo', now: new Date('2026-09-23T08:00:00Z') });
+    expect(bill.remindAt).toBe('2026-09-28T07:00:00.000Z');
+    expect(cardActions({ id: 'c', kind: 'code', fields: { code: '123456' } }).map((a) => a.id)).toEqual(['copy']);
+    expect(cardActions(ev).map((a) => a.id)).toEqual(['calendar', 'reminder']);
+  });
+});
+
+describe('kinds and text helpers', () => {
+  it('normalises amounts, currencies and merchants', () => {
+    expect([normAmount('1.240,50'), normAmount('1,240.50'), normAmount('89,99'), normAmount('£89.99'), normAmount('abc')]).toEqual([1240.5, 1240.5, 89.99, 89.99, null]);
+    expect([normCurrency('£'), normCurrency('nok'), normCurrency('pounds')]).toEqual(['GBP', 'NOK', null]);
+    expect(merchantKey('Netflix, Inc.')).toBe('netflix');
+    expect(eventAt({ kind: 'invoice', fields: { dueDate: '2026-09-25' } })).toBe('2026-09-25T00:00:00.000Z');
+  });
+
+  it('parses loose dates and times', () => {
+    const ref = '2026-09-23T08:00:00Z';
+    expect(parseLooseDate('Arriving Thursday', ref)).toBe('2026-09-24');
+    expect(parseLooseDate('arriving tomorrow', ref)).toBe('2026-09-24');
+    expect(parseLooseDate('Estimated delivery: 26 September', ref)).toBe('2026-09-26');
+    expect(parseLooseDate('Delivery on Oct 2, 2026', ref)).toBe('2026-10-02');
+    expect(parseLooseDate('by 5 Jan', '2026-12-20T08:00:00Z')).toBe('2027-01-05');
+    expect(parseByTime('between 8 and 12')).toBe('12:00');
+    expect(parseByTime('by 4pm')).toBe('16:00');
+    expect(sentenceAround('First one. The total is £89.99 today. Last.', 20)).toBe('The total is £89.99 today.');
+  });
+});

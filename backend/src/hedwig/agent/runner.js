@@ -5,6 +5,7 @@
 // step, so a crash or a closed tab leaves a readable record.
 import { getConfig } from '../config.js';
 import { chatStream } from '../llm.js';
+import { stripThinking } from '../prompts/think.js';
 import { toOpenAiTools } from './toolRegistry.js';
 import { userTools } from './access.js';
 import { validateArgs } from './validate.js';
@@ -12,6 +13,7 @@ import { buildSystemPrompt, userProfile } from './prompt.js';
 import { engineAvailable } from './mailOps.js';
 import { approveAction, truncate } from './actions.js';
 import * as store from './store.js';
+import { runSources } from '../ask2/citations.js';
 
 export const TOOL_RESULT_MAX_CHARS = 6000;
 export const TOOL_TIMEOUT_MS = 60_000;
@@ -32,9 +34,7 @@ function throwIfAborted(signal) {
   if (signal?.aborted) throw new AbortedError();
 }
 
-export function stripThinking(text) {
-  return String(text || '').replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
-}
+export { stripThinking };
 
 function withTimeout(promise, ms, signal) {
   let timer;
@@ -285,6 +285,6 @@ export async function runAgent({ userId, prompt, runId = null, allowedTools = nu
   await store.appendToRun(userId, run.id, { status, result, ...(error !== undefined ? { error } : {}) })
     .catch((err) => console.error(`[hedwig] could not record the end of run ${run.id}:`, err.message));
   if (status === 'error') emit({ type: 'error', error, runId: run.id });
-  else emit({ type: 'done', runId: run.id, status, result });
+  else emit({ type: 'done', runId: run.id, status, result, sources: await runSources(userId, run.id).catch(() => []) });
   return { runId: run.id, status, result, error, pendingActions };
 }

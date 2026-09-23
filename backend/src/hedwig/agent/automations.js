@@ -11,6 +11,7 @@ import { userTools } from './access.js';
 import { createRun, httpError, isUuid } from './store.js';
 import { validTimezone } from '../insights/time.js';
 import { insertInsight, ownedMessageIds } from '../insights/store.js';
+import { runSources } from '../ask2/citations.js';
 
 export const RUN_JOB = 'agent.runAutomation';
 // Unattended runs stop (status 'cancelled') before the job's own timeout would abandon them.
@@ -172,19 +173,26 @@ export function automationTools(automation, available) {
 }
 
 /**
- * Rewrite the agent's [msg:<id>] citations as the Insight convention ([n] → sources[n-1]), keeping
- * only messages that belong to the user.
+ * Rewrite the agent's citations as the Insight convention ([n] → sources[n-1]), keeping only
+ * messages that belong to the user. The agent cites [n] from its run's search results (runId);
+ * older runs cited [msg:<id>], which is still understood.
  */
-export async function citeForInsight(userId, text) {
-  const ids = [...String(text || '').matchAll(/\[msg:([0-9a-f-]{36})\]/gi)].map((m) => m[1].toLowerCase());
-  const owned = await ownedMessageIds(userId, ids);
+export async function citeForInsight(userId, text, runId = null) {
+  const runIds = new Map((runId ? await runSources(userId, runId).catch(() => []) : []).map((s) => [s.n, String(s.id).toLowerCase()]));
+  const legacy = [...String(text || '').matchAll(/\[msg:([0-9a-f-]{36})\]/gi)].map((m) => m[1].toLowerCase());
+  const owned = await ownedMessageIds(userId, [...legacy, ...runIds.values()]);
   const sources = [];
-  const body = String(text || '').replace(/\[msg:([0-9a-f-]{36})\]/gi, (_, id) => {
-    const key = id.toLowerCase();
-    if (!owned.has(key)) return '';
+  const numberFor = (key) => {
+    if (!key || !owned.has(key)) return null;
     let n = sources.indexOf(key);
     if (n < 0) { sources.push(key); n = sources.length - 1; }
-    return `[${n + 1}]`;
+    return n + 1;
+  };
+  // One pass, in reading order, so the insight numbers follow the text.
+  const body = String(text || '').replace(/\[msg:([0-9a-f-]{36})\]|\[(\d{1,3}(?:\s*,\s*\d{1,3})*)\](?!\()/gi, (_, id, list) => {
+    const ns = id ? [numberFor(id.toLowerCase())] : list.split(',').map((x) => numberFor(runIds.get(Number(x.trim()))));
+    const kept = [...new Set(ns.filter(Boolean))];
+    return kept.length ? `[${kept.join(', ')}]` : '';
   });
   return { body, sources };
 }
@@ -203,7 +211,7 @@ async function deliver(userId, automation, run) {
   const text = run.status === 'done'
     ? (run.result || '_The automation finished without an answer._')
     : `_The automation did not finish (${run.status}${run.error ? `: ${run.error}` : ''})._`;
-  const { body, sources } = await citeForInsight(userId, text);
+  const { body, sources } = await citeForInsight(userId, text, run.runId);
   const footer = pending ? `\n\n_${pending} proposed action${pending === 1 ? ' is' : 's are'} waiting for your approval._` : '';
   const insight = await insertInsight(userId, {
     kind: 'automation',

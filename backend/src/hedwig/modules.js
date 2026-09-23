@@ -15,5 +15,11 @@ import triage from './triage/index.js';
 import insights from './insights/index.js';
 import agent from './agent/index.js';
 import pluginsV2 from './pluginsv2/index.js';
+import sort from './sort/index.js';
+import labels from './labels/index.js';
+import indexer from './indexer/index.js';
+import work from './work/index.js';
+import ask2 from './ask2/index.js';
+import cards from './cards/index.js';
 
-export const MODULES = [core, context, triage, insights, agent, pluginsV2];
+export const MODULES = [core, context, triage, insights, agent, pluginsV2, sort, labels, indexer, work, ask2, cards];
