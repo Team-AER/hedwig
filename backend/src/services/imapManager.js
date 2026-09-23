@@ -4550,6 +4550,9 @@ export class ImapManager {
       let consecutiveErrors = 0;
       for (const { folder } of foldersResult.rows) {
         let done = false;
+        // Messages still to fetch one at a time after a batch the server rejected, so one message it
+        // will not return is found and skipped instead of failing the same batch on every run.
+        let isolate = 0;
         while (!done) {
           // Stop if account was deleted
           const alive = await query('SELECT id FROM email_accounts WHERE id = $1', [account.id]);
@@ -4575,7 +4578,7 @@ export class ImapManager {
             `SELECT uid FROM messages
              WHERE account_id = $1 AND folder = $2 AND (snippet IS NULL OR snippet = '') AND snippet_attempted_at IS NULL
              ORDER BY date DESC LIMIT $3`,
-            [account.id, folder, batchSize]
+            [account.id, folder, isolate > 0 ? 1 : batchSize]
           );
           if (!batchResult.rows.length) { done = true; break; }
 
@@ -4614,9 +4617,10 @@ export class ImapManager {
             );
             batchCount++;
             consecutiveErrors = 0;
+            if (isolate > 0) isolate--;
           } catch (err) {
             consecutiveErrors++;
-            console.error(`Snippet indexer batch error ${logAccount(account)}/${folder}:`, err.message);
+            console.error(`Snippet indexer batch error ${logAccount(account)}/${folder} (${uids.length} uid${uids.length === 1 ? '' : 's'}):`, extractImapError(err));
             // Connection refusal = the provider is at its per-host/per-IP connection limit
             // (iCloud especially, or many accounts on one server, right after a startup backfill
             // burst). Reopening a fresh connection to retry would only pile on more pressure and
@@ -4628,6 +4632,17 @@ export class ImapManager {
               refused = true;
               console.log(`Snippet indexer backing off ${logAccount(account)} — provider refusing connections (at limit)`);
               return;
+            }
+            if (uids.length > 1) {
+              isolate = uids.length;
+            } else {
+              await query(
+                `UPDATE messages SET snippet_attempted_at = NOW()
+                 WHERE account_id = $1 AND folder = $2 AND uid = $3 AND snippet_attempted_at IS NULL`,
+                [account.id, folder, uids[0]]
+              );
+              console.warn(`Snippet indexer skipping ${logAccount(account)}/${folder} uid ${uids[0]}: the server will not return it`);
+              if (isolate > 0) isolate--;
             }
             await new Promise(r => setTimeout(r, cfg.errorDelay));
             if (consecutiveErrors >= 3) {

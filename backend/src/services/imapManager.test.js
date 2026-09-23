@@ -2741,3 +2741,56 @@ describe('computeThreadId subject fallback requires a shared correspondent (#468
     expect(id).toBe('header-thread');
   });
 });
+
+// ── startSnippetIndexer — a message the server will not return ───────────────
+
+describe('startSnippetIndexer — a message the server will not return', () => {
+  const acct = { id: 'yahoo-1', user_id: 'u1', enabled: true, imap_host: 'imap.mail.yahoo.com', imap_port: 993, imap_tls: true, auth_user: 'me' };
+  let snippets, skipped, fetched;
+  beforeEach(() => {
+    vi.useFakeTimers();
+    snippets = new Map(); skipped = new Set(); fetched = [];
+    getConnectionPolicy.mockResolvedValue({ allowPrivateHosts: true });
+    resolveForConnection.mockResolvedValue({ host: '127.0.0.1', addresses: ['127.0.0.1'] });
+    parseMessage.mockImplementation(async (m) => ({ snippet: `snippet ${m.uid}` }));
+    // Newest first, as the indexer orders them; message 3 is the one the server rejects.
+    const pending = () => [5, 4, 3, 2, 1].filter(u => !snippets.has(u) && !skipped.has(u));
+    query.mockReset();
+    query.mockImplementation(async (sql, params = []) => {
+      if (sql.includes('SELECT count(*) FROM messages')) return { rows: [{ count: String(pending().length) }] };
+      if (sql.includes('GROUP BY folder')) return { rows: pending().length ? [{ folder: 'Archive', cnt: pending().length }] : [] };
+      if (sql.includes('FROM email_accounts')) return { rows: [acct] };
+      if (sql.includes('SELECT uid FROM messages')) return { rows: pending().slice(0, params[2]).map(uid => ({ uid })) };
+      if (sql.includes('SET snippet = $1')) { snippets.set(params[2], params[0]); return { rows: [] }; }
+      if (sql.includes('SET snippet_attempted_at')) {
+        for (const u of [params[2]].flat()) if (!snippets.has(u)) skipped.add(u);
+        return { rows: [] };
+      }
+      return { rows: [] };
+    });
+    ImapFlow.mockImplementation(function () {
+      return {
+        on: vi.fn(), close: vi.fn(), connect: vi.fn(async () => {}),
+        getMailboxLock: vi.fn(async () => ({ release: vi.fn() })),
+        fetch: (range) => (async function* () {
+          const uids = String(range).split(',').map(Number);
+          fetched.push(uids);
+          if (uids.includes(3)) throw Object.assign(new Error('Command failed'), { responseText: 'Server error - Please try again later' });
+          for (const uid of uids) yield { uid };
+        })(),
+      };
+    });
+  });
+  afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
+
+  it('isolates the rejected message and skips only it, instead of failing the same batch every run', async () => {
+    const mgr = { snippetIndexerRunning: new Set(), snippetBackoff: new Map(), lastUserActivity: new Map(), _bgConnSem: createKeyedSemaphore(2) };
+    const run = ImapManager.prototype.startSnippetIndexer.call(mgr, acct);
+    await vi.runAllTimersAsync();
+    await run;
+    expect([...snippets.keys()].sort()).toEqual([1, 2, 4, 5]);
+    expect([...skipped]).toEqual([3]);
+    // one full batch, then one message at a time for as many messages as that batch held
+    expect(fetched).toEqual([[5, 4, 3, 2, 1], [5], [4], [3], [2], [1]]);
+  });
+});
