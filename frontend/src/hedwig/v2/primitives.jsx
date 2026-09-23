@@ -3,6 +3,7 @@
 // italic), DM Mono for times and counts, one accent. No pills, no uppercase eyebrows, no
 // left-border cards, no avatars. Inline styles over --hw-* variables, as upstream does.
 import { createContext, forwardRef, useContext, useEffect, useState } from 'react';
+import { tv } from './i18n.js';
 
 export const V = {
   paper: 'var(--hw-paper, #F4F2EC)',
@@ -321,10 +322,14 @@ export function Glyph({ name, size = 22, stroke = 1.6 }) {
  * glass sheet pinned over the scrolling content (rounded at the bottom), as in the phone mockups.
  */
 export function ViewHead({ title, sub, actions, children, phone, before, compact = false }) {
+  // A view pushed onto a phone tab's stack gets a way back in its own header.
+  const nav = useContext(PhoneContext);
+  const back = phone && nav?.depth > 0 && nav.back ? nav.back : null;
   const titleEl = compact
     ? null
     : (
       <div style={{ display: 'flex', alignItems: 'baseline', gap: phone ? 10 : 12, minWidth: 0 }}>
+        {back && <IconBtn label={tv('hedwig.v2.thread.back', 'Back')} onClick={back} style={{ alignSelf: 'center', marginLeft: -12 }}><Glyph name="back" /></IconBtn>}
         <h1 style={{ margin: 0, fontFamily: V.serif, fontWeight: 400, fontSize: 40, lineHeight: 1, letterSpacing: '-0.015em', whiteSpace: 'nowrap' }}>{title}</h1>
         {sub && <span style={{ fontSize: 13, color: V.muted, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sub}</span>}
         <span style={{ flexGrow: 1 }} />

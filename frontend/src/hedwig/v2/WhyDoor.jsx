@@ -26,13 +26,16 @@ export function streamOptions() {
 }
 
 /**
- * Whether the message came through a mailing list (a List-Id), as far as the why record says: its
- * sender key is the list, the sender decision is list-scoped, or a signal names the list header.
- * Personal mail has none, and "Everything from this list" is not offered for it.
+ * Whether the message came through a mailing list (a List-Id). The why record says so directly:
+ * `senderScope` is the scope of the key the message is grouped under, 'list' when it has a
+ * List-Id. Personal mail has none, and "Everything from this list" is not offered for it.
+ * A server older than that field is read the old way (the list-scoped sender decision, or the
+ * List-Id form of the sorter's signal).
  */
 export function hasListKey(d) {
   if (!d || typeof d !== 'object') return false;
-  if (d.senderScope === 'list' || d.listId || d.list) return true;
+  if ('senderScope' in d) return d.senderScope === 'list';
+  if (d.listId || d.list) return true;
   if (d.senderDecision?.scope === 'list') return true;
   // The sorter's 'list' signal also fires for bulk headers without a List-Id ("Mailing list or
   // bulk headers …"); only the List-Id form ("Mailing list <id>") counts.

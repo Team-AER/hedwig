@@ -5,10 +5,10 @@ import { useState } from 'react';
 import { useStore } from '../../store/index.js';
 import { useHedwig } from '../store.js';
 import { getView } from '../registry.js';
-import { useV2Resource } from './hooks.js';
+import { useV2Resource, useWork } from './hooks.js';
 import { listOf } from './client.js';
 import { openThread, showView, VIEW } from './nav.js';
-import { nudge } from './mail.js';
+import { nudgeThread } from './mail.js';
 import { Question } from './Question.jsx';
 import { ErrorLine, Figure, LinkBtn, Mono, Quiet, V, ViewBody, Why, usePhone, ViewHead } from './primitives.jsx';
 import { ageLabel, briefDateLine, listTime, senderName } from './format.js';
@@ -59,6 +59,8 @@ export default function Brief() {
   const res = useV2Resource('/insights/brief/today');
   const [ask, setAsk] = useState('');
   const [answered, setAnswered] = useState([]);
+  const [nudging, setNudging] = useState(null);
+  const work = useWork();
   const b = res.data || {};
   const needs = listOf(b.needsYou, 'items');
   const waiting = listOf(b.waitingOn, 'items');
@@ -72,6 +74,19 @@ export default function Brief() {
   const noModel = b.modelCall === false || b.headlineSource === 'template';
   const who = (x) => (typeof x.who === 'string' ? x.who : senderName(x.who || x.from));
   const totalQuestions = listOf(b.questions, 'questions').length;
+
+  // Nudge drafts the follow-up in your voice (the work module) and opens the composer with it.
+  const nudgeFrom = async (w) => {
+    const key = w.threadId || w.messageId;
+    setNudging(key);
+    try {
+      await nudgeThread({ ...w, who: who(w) });
+    } catch (e) {
+      useStore.getState().addNotification?.({ type: 'error', title: tv('hedwig.v2.waiting.nudgeFailed', 'Could not start the nudge'), body: e?.message });
+    } finally {
+      setNudging(null);
+    }
+  };
 
   const submitAsk = (e) => {
     e.preventDefault();
@@ -118,12 +133,17 @@ export default function Brief() {
       ))}
       {waiting.length > 0 && (
         <>
-          <Why style={{ padding: '26px 0 6px' }}>{tv('hedwig.v2.brief.waiting', 'Waiting on others')}</Why>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, padding: '26px 0 6px' }}>
+            <Why style={{ flexGrow: 1 }}>{tv('hedwig.v2.brief.waiting', 'Waiting on others')}</Why>
+            {work && <LinkBtn hit={phone} onClick={() => showView(VIEW.waiting)}>{tv('hedwig.v2.brief.seeAll', 'See all')}</LinkBtn>}
+          </div>
           {waiting.map((w) => (
             <Item
               key={w.messageId || w.what || w.subject}
               time={ageLabel(w.since || w.askedAt || w.at || w.date)}
-              action={w.messageId ? <LinkBtn onClick={() => nudge(w.messageId, (who(w) || '').split(' ')[0])}>{tv('hedwig.v2.brief.nudge', 'Nudge')}</LinkBtn> : null}
+              action={w.messageId || w.threadId
+                ? <LinkBtn hit={phone} disabled={nudging === (w.threadId || w.messageId)} onClick={() => nudgeFrom(w)}>{nudging === (w.threadId || w.messageId) ? tv('hedwig.v2.thread.drafting', 'Drafting…') : tv('hedwig.v2.brief.nudge', 'Nudge')}</LinkBtn>
+                : null}
             >
               <span style={{ fontSize: 16 }}>{[who(w), w.what || w.subject].filter(Boolean).join(' · ')}</span>
               {(w.note || w.reason) && <span style={{ fontSize: 13, color: V.muted }}>{w.note || w.reason}</span>}

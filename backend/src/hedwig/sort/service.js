@@ -437,6 +437,10 @@ export async function why(userId, messageId) {
     spam: s.spam,
     spamReason: s.spam_reason,
     labels: s.labels || [],
+    // The key this message is grouped under (the list when it has a List-Id), so the why door can
+    // offer "Everything from this list" only when there is one.
+    senderKey: s.sender_key || null,
+    senderScope: s.sender_scope || null,
     senderDecision: sd[0] || null,
     decidedAt: s.decided_at,
     bodySeen: s.body_seen,

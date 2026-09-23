@@ -6,7 +6,7 @@ import { useStore } from '../../store/index.js';
 import { openReplyFromMessage } from '../../utils/composeFromMessage.js';
 import { v2Api, isMockMode, announceSortChange } from './client.js';
 import { useV2 } from './state.js';
-import { tv } from './i18n.js';
+import { tv, tvn } from './i18n.js';
 
 function notify(type, title, body) {
   useStore.getState().addNotification?.({ type, title, ...(body ? { body } : {}) });
@@ -172,19 +172,76 @@ export async function sendReply(messageId, text) {
   return sendPrepared(await prepareReply(messageId, text));
 }
 
-/** Open upstream's composer with a reply to this message, the body pre-filled. */
-export async function openReplyComposer(messageId, text = '') {
-  if (isMockMode()) { useStore.getState().openCompose?.({ body: text, subject: 'Re:' }); return; }
+/**
+ * Open upstream's composer with a reply to this message, the body pre-filled. `hints` (a nudge's
+ * { to, subject }) replace the addresses and subject upstream would pick when they are given.
+ */
+export async function openReplyComposer(messageId, text = '', hints = {}) {
+  const to = (hints.to || []).filter((a) => a?.email);
+  const apply = (d) => ({ ...d, ...(to.length ? { to, originalFrom: to } : {}), ...(hints.subject ? { subject: hints.subject } : {}), body: text });
+  if (isMockMode()) { useStore.getState().openCompose?.(apply({ subject: 'Re:' })); return; }
   const message = await fullMessage(messageId);
   const st = useStore.getState();
   await openReplyFromMessage(message, {
     accounts: st.accounts || [],
-    openCompose: (d) => st.openCompose({ ...addressOwnMessage(d, message, st.accounts || []), body: text }),
+    openCompose: (d) => st.openCompose(apply(addressOwnMessage(d, message, st.accounts || []))),
     getMessageBody: api.getMessageBody,
   });
 }
 
-/** Nudge: a reply to the last message you sent, with a gentle opener. */
+/** Nudge without a draft: a reply to the last message you sent, with a gentle opener. */
 export function nudge(messageId, who) {
   return openReplyComposer(messageId, tv('hedwig.v2.brief.nudgeText', 'Hi {{who}}, just checking in on this.', { who: who || '' }).replace(/\s+,/, ','));
+}
+
+/**
+ * Nudge a thread you are waiting on: POST /work/waiting/:threadId/nudge drafts the follow-up in
+ * your voice (returned, never sent) and the composer opens with it and the reply hints. Without
+ * the work routes, or when drafting is off or fails, the composer opens with the plain opener.
+ * "You have not written in this thread" (409) is an answer, not a failure, and is passed on.
+ */
+export async function nudgeThread(w) {
+  const who = String(w?.who || '').split(' ')[0];
+  const caps = useV2.getState().caps.work;
+  const work = caps === null ? await useV2.getState().probeWork() : caps;
+  if (w?.threadId && work === true) {
+    let res = null;
+    try {
+      res = await v2Api.post(`/work/waiting/${encodeURIComponent(w.threadId)}/nudge`, {});
+    } catch (err) {
+      if (err?.status === 409) throw err;
+      if (err?.status !== 404 && err?.status !== 403) notify('info', tv('hedwig.v2.waiting.nudgePlain', 'Hedwig could not draft this nudge, so here is a plain one.'), err?.message);
+    }
+    const draft = typeof res?.draft === 'string' ? res.draft.trim() : '';
+    const target = res?.reply?.inReplyToMessageId || w.messageId;
+    if (draft && target) {
+      await openReplyComposer(target, draft, { to: res.reply?.to, subject: res.reply?.subject });
+      return 'drafted';
+    }
+  }
+  if (!w?.messageId) return null;
+  await nudge(w.messageId, who);
+  return 'plain';
+}
+
+/**
+ * "Remind me if no reply in N days" after a reply went out: POST /work/waiting { threadId, days }.
+ * The reply is already sent, so a failure here is reported on its own and never as a send failure.
+ */
+export async function watchForReply(threadId, days) {
+  if (!threadId || useV2.getState().caps.work !== true) return false;
+  try {
+    await v2Api.post('/work/waiting', { threadId, days });
+    notify('success', tvn(days, ['hedwig.v2.waiting.watchOne', 'Hedwig will remind you if there is no reply by tomorrow.'], ['hedwig.v2.waiting.watchMany', 'Hedwig will remind you if there is no reply in {{n}} days.']));
+    return true;
+  } catch (err) {
+    notify('error', tv('hedwig.v2.waiting.watchFailed', 'Sent, but the reminder could not be set.'), err?.message);
+    return false;
+  }
+}
+
+/** A per-user setting from GET /settings (the fields useV2 keeps), or the fallback. */
+export function settingValue(key, fallback) {
+  const f = (useV2.getState().settingsFields || []).find((x) => x?.key === key);
+  return f && f.value !== undefined && f.value !== null ? f.value : fallback;
 }

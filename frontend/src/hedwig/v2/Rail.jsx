@@ -13,12 +13,13 @@ import { useV2, countText } from './state.js';
 import { useWork } from './hooks.js';
 import { todayLine } from './Brief.jsx';
 import { currentMainView, showView, VIEW } from './nav.js';
+import { LEDGER_KINDS, SIMPLE_LEDGERS, ledgerTitle } from './Ledger.jsx';
 import { Glyph, Hair, LinkBtn, Mono, V, Why } from './primitives.jsx';
 import { tv } from './i18n.js';
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
 
-function NavItem({ label, count, accentCount, on, onClick }) {
+function NavItem({ label, count, accentCount, on, onClick, sub = false }) {
   return (
     <button
       type="button"
@@ -26,8 +27,8 @@ function NavItem({ label, count, accentCount, on, onClick }) {
       aria-current={on ? 'page' : undefined}
       onClick={onClick}
       style={{
-        display: 'flex', alignItems: 'center', gap: 10, height: 38, padding: '0 12px', borderRadius: 8, width: '100%', boxSizing: 'border-box',
-        border: 0, background: on ? V.tint : 'transparent', color: V.ink, font: 'inherit', fontSize: 15, textAlign: 'left', cursor: 'pointer', flexShrink: 0,
+        display: 'flex', alignItems: 'center', gap: 10, height: sub ? 32 : 38, padding: sub ? '0 12px 0 26px' : '0 12px', borderRadius: 8, width: '100%', boxSizing: 'border-box',
+        border: 0, background: on ? V.tint : 'transparent', color: sub && !on ? V.muted : V.ink, font: 'inherit', fontSize: sub ? 14 : 15, textAlign: 'left', cursor: 'pointer', flexShrink: 0,
       }}
     >
       <span style={{ flexGrow: 1, fontWeight: on ? 600 : 400, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
@@ -60,6 +61,8 @@ export default function Rail() {
   const [query, setQuery] = useState('');
   const current = currentMainView(tree);
   const on = (id, list) => current?.id === id && (!list || current.props?.list === list);
+  const onLedger = (kind) => current?.id === VIEW.ledger && (current.props?.kind || 'purchases') === kind;
+  const ledgers = power ? LEDGER_KINDS : SIMPLE_LEDGERS;
 
   const submit = (e) => {
     e.preventDefault();
@@ -119,12 +122,16 @@ export default function Rail() {
       <NavItem label={tv('hedwig.v2.stream.people', 'People')} count={countText(counts, more, 'people')} on={on(VIEW.people)} onClick={() => showView(VIEW.people)} />
       <NavItem label={tv('hedwig.v2.stream.reading', 'Reading')} count={countText(counts, more, 'reading')} on={on(VIEW.reading)} onClick={() => showView(VIEW.reading)} />
       <NavItem label={tv('hedwig.v2.stream.records', 'Records')} count={countText(counts, more, 'records')} on={on(VIEW.records)} onClick={() => showView(VIEW.records)} />
+      {ledgers.map((kind) => (
+        <NavItem key={kind} sub label={ledgerTitle(kind)} on={onLedger(kind)} onClick={() => showView(VIEW.ledger, { kind })} />
+      ))}
       <Hair style={{ margin: '12px 12px' }} />
       {work && (
         <>
           <NavItem label={tv('hedwig.v2.rail.replyLater', 'Reply Later')} count={countText(counts, more, 'replyLater')} on={on(VIEW.list, 'replyLater')} onClick={() => showView(VIEW.list, { list: 'replyLater' })} />
           <NavItem label={tv('hedwig.v2.rail.setAside', 'Set Aside')} count={countText(counts, more, 'setAside')} on={on(VIEW.list, 'setAside')} onClick={() => showView(VIEW.list, { list: 'setAside' })} />
           <NavItem label={tv('hedwig.v2.rail.snoozed', 'Snoozed')} count={countText(counts, more, 'snoozed')} on={on(VIEW.list, 'snoozed')} onClick={() => showView(VIEW.list, { list: 'snoozed' })} />
+          <NavItem label={tv('hedwig.v2.waiting.title', 'Waiting on')} on={on(VIEW.waiting)} onClick={() => showView(VIEW.waiting)} />
         </>
       )}
       <NavItem label={tv('hedwig.v2.rail.brief', 'Daily Brief')} on={on(VIEW.brief)} onClick={() => showView(VIEW.brief)} />

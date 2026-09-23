@@ -13,9 +13,11 @@ import { markRead, LIST_KIND } from './mail.js';
 import { useWhyDoor } from './WhyDoor.jsx';
 import { Question } from './Question.jsx';
 import { StreamRow, GroupLabel, onListKeyDown } from './rows.jsx';
-import { Glyph, Hair, IconBtn, LinkBtn, Mono, Quiet, ErrorLine, TextTabs, V, ViewBody, ViewHead, Why, usePhone } from './primitives.jsx';
+import { Figure, Glyph, Hair, IconBtn, LinkBtn, Mono, Quiet, ErrorLine, TextTabs, V, ViewBody, ViewHead, Why, usePhone } from './primitives.jsx';
 import { groupBundles, groupLabel, listTime, splitStream } from './format.js';
 import { tv, tvn } from './i18n.js';
+import { bundleCardSummary, cardFigure, cardsByMessage, cardsForItems } from './cards.js';
+import { LEDGER_KINDS, SIMPLE_LEDGERS, ledgerTitle } from './Ledger.jsx';
 import { useShell } from '../shell/state.js';
 
 export function streamTitle(stream) {
@@ -40,8 +42,12 @@ function Rows({ items, stream, phone, onWhy }) {
   ));
 }
 
-function BundleGroup({ group, phone, onWhy, open, onToggle }) {
+function BundleGroup({ group, phone, onWhy, open, onToggle, cards = [] }) {
   const label = open ? tv('hedwig.v2.records.hide', 'Hide') : tv('hedwig.v2.records.show', 'Show');
+  // The bundle's cards say more than its senders: "2 deliveries, 1 arriving today", and the first
+  // few as figures while the bundle is closed.
+  const cardLine = bundleCardSummary(cards);
+  const figures = open ? [] : cards.slice(0, phone ? 2 : 3).map((c) => ({ id: c.id, ...cardFigure(c) })).filter((f) => f.figure);
   return (
     <div>
       <button
@@ -65,8 +71,17 @@ function BundleGroup({ group, phone, onWhy, open, onToggle }) {
         </span>
         <span />
         <span style={{ gridColumn: '2 / 4', paddingTop: 3, fontSize: 14, color: V.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          {group.summary}{group.items[0]?.subject ? ` · ${group.items[0].subject}` : ''}
+          {cardLine ? `${cardLine} · ${group.summary}` : `${group.summary}${group.items[0]?.subject ? ` · ${group.items[0].subject}` : ''}`}
         </span>
+        {figures.length > 0 && (
+          <span style={{ gridColumn: '2 / 4', display: 'grid', gridTemplateColumns: `repeat(${figures.length}, minmax(0, 1fr))`, paddingTop: 12 }}>
+            {figures.map((f, i) => (
+              <span key={f.id} style={{ padding: i === 0 ? '0 14px 0 0' : '0 14px', borderLeft: i === 0 ? 0 : `1px solid ${V.line2}`, minWidth: 0 }}>
+                <Figure value={f.figure} caption={f.caption} size={phone ? 22 : 24} />
+              </span>
+            ))}
+          </span>
+        )}
       </button>
       {open && <div style={{ paddingLeft: phone ? 8 : 16 }}><Rows items={group.items} stream="records" phone={phone} onWhy={onWhy} /></div>}
     </div>
@@ -95,6 +110,9 @@ export default function StreamView({ props }) {
   const needsRes = useV2Pages(streamPath(stream, { needsYou: true }), { refreshOn: LIST_EVENTS });
   const res = useV2Pages(streamPath(stream), { refreshOn: LIST_EVENTS });
   const bundles = useV2Resource(stream === 'records' ? '/sort/bundles' : null);
+  const cardsRes = useV2Resource(stream === 'records' ? '/cards?limit=200' : null);
+  const byMessage = useMemo(() => cardsByMessage(listOf(cardsRes.data, 'cards')), [cardsRes.data]);
+  const power = useV2((s) => s.prefs.powerMode);
   const replyLaterCount = useV2((s) => s.counts.replyLater);
   const needsCount = useV2((s) => countText(s.counts, s.countsMore, 'people'));
   const questions = useQuestions(stream === 'people' && phone);
@@ -197,7 +215,7 @@ export default function StreamView({ props }) {
       {stream === 'records' && bundleGroups.map((g, i) => (
         <section key={g.key || 'none'} aria-label={g.name}>
           {(i > 0 || needs.length > 0) && <Hair inset={phone ? 0 : 12} />}
-          <BundleGroup group={g} phone={phone} onWhy={door.open} open={Boolean(openBundles[g.key])} onToggle={() => setOpenBundles((o) => ({ ...o, [g.key]: !o[g.key] }))} />
+          <BundleGroup group={g} phone={phone} onWhy={door.open} cards={cardsForItems(g.items, byMessage)} open={Boolean(openBundles[g.key])} onToggle={() => setOpenBundles((o) => ({ ...o, [g.key]: !o[g.key] }))} />
         </section>
       ))}
       {!showNeedsOnly && <MoreButton pages={res} phone={phone} />}
@@ -215,9 +233,19 @@ export default function StreamView({ props }) {
   }
 
   if (phone) {
+    // On a phone the rail is not there: Records carries its ledgers in the header.
+    const ledgerLinks = stream === 'records'
+      ? (
+        <nav aria-label={tv('hedwig.v2.ledger.label', 'Ledgers')} style={{ display: 'flex', gap: 18, flexWrap: 'wrap', paddingBottom: 6 }}>
+          {(power ? LEDGER_KINDS : SIMPLE_LEDGERS).map((kind) => (
+            <LinkBtn key={kind} style={{ minHeight: 44 }} onClick={() => showView(VIEW.ledger, { kind })}>{ledgerTitle(kind)}</LinkBtn>
+          ))}
+        </nav>
+      )
+      : null;
     return (
       <ViewBody phone label={title} padded={false}>
-        <ViewHead phone title={title} sub={sub} actions={actions}>{phoneTabs}</ViewHead>
+        <ViewHead phone title={title} sub={sub} actions={actions}>{phoneTabs || ledgerLinks}</ViewHead>
         <div style={{ padding: '0 16px', flex: '1 0 auto' }}>{content}</div>
         {door.element}
       </ViewBody>

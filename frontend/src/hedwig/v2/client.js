@@ -2,7 +2,7 @@
 // VITE_HEDWIG_MOCK=1 (or setMockMode(true) in tests) every call is answered by mock.js instead,
 // using the response shapes in docs/hedwig/V2-BUILD.md, so the views can be built and checked
 // before the sorting, labels and index routes land.
-import { hedwigApi } from '../api.js';
+import { hedwigApi, hedwigStream } from '../api.js';
 
 const env = import.meta.env || {};
 let mock = env.VITE_HEDWIG_MOCK === '1' || env.VITE_HEDWIG_MOCK === 'true';
@@ -37,6 +37,15 @@ export const v2Api = {
   put: (path, body = {}) => call('PUT', path, body),
   del: (path) => call('DELETE', path),
 };
+
+/**
+ * A streaming POST (SSE, one JSON event per `data:` line) through hedwigStream; the mock answers
+ * it with the same events. Resolves when the stream ends.
+ */
+export function v2Stream(path, body, { onEvent, signal } = {}) {
+  if (mock) return import('./mock.js').then((m) => m.mockStream(path, body, { onEvent, signal }));
+  return hedwigStream(path, body, { onEvent, signal });
+}
 
 // Some routes answer with a bare array, some wrap it; views accept either.
 export function listOf(data, key) {

@@ -88,7 +88,7 @@ function StackScreen({ entry, depth, onBack, onOpenPalette }) {
   useRegistryVersion();
   const view = getView(entry.id);
   const title = view?.title || entry.id;
-  const v2 = entry.id.startsWith('hedwig.stream.') || ['hedwig.screener', 'hedwig.thread', 'hedwig.brief', 'hedwig.today', 'hedwig.list'].includes(entry.id);
+  const v2 = entry.id.startsWith('hedwig.stream.') || ['hedwig.screener', 'hedwig.thread', 'hedwig.brief', 'hedwig.today', 'hedwig.list', 'hedwig.ledger', 'hedwig.waiting', 'hedwig.ask'].includes(entry.id);
   const nav = useMemo(() => ({ phone: true, depth, back: onBack, openPalette: onOpenPalette }), [depth, onBack, onOpenPalette]);
   return (
     <PhoneContext.Provider value={nav}>

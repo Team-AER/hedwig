@@ -5,6 +5,7 @@ import { useHedwig } from '../store.js';
 import { useShell } from '../shell/state.js';
 import * as M from '../shell/model.js';
 import { useV2 } from './state.js';
+import { getView } from '../registry.js';
 
 export const VIEW = {
   rail: 'hedwig.rail',
@@ -16,10 +17,12 @@ export const VIEW = {
   brief: 'hedwig.brief',
   today: 'hedwig.today',
   list: 'hedwig.list',
+  ledger: 'hedwig.ledger',
+  waiting: 'hedwig.waiting',
 };
 
 // Views that live in the "list" pane of the streams layout; the rail swaps between them.
-export const MAIN_VIEWS = [VIEW.people, VIEW.reading, VIEW.records, VIEW.screener, VIEW.brief, VIEW.today, VIEW.list];
+export const MAIN_VIEWS = [VIEW.people, VIEW.reading, VIEW.records, VIEW.screener, VIEW.brief, VIEW.today, VIEW.list, VIEW.ledger, VIEW.waiting];
 
 const isPhone = () => typeof window !== 'undefined' && window.innerWidth < 768;
 
@@ -52,11 +55,19 @@ export function showView(viewId, props) {
   useHedwig.getState().openView(viewId, props || {});
 }
 
-/** Open a stream item's thread: the thread pane on desktop, a pushed screen on a phone. */
+/**
+ * Open a stream item's thread: the thread pane on desktop, a pushed screen on a phone. While a
+ * wide view (the Brief, a ledger) has the thread pane's room, the thread opens as the overlay
+ * sheet instead, so the click is not lost behind the wide view.
+ */
 export function openThread(item) {
   if (!item) return;
   useV2.getState().select(item);
   if (isPhone()) { useHedwig.getState().openView(VIEW.thread, { item }); return; }
   const tree = useShell.getState().tree;
-  if (!tree || !M.panesHosting(tree, VIEW.thread).length) useHedwig.getState().openView(VIEW.thread, { item });
+  if (!tree || !M.panesHosting(tree, VIEW.thread).length) { useHedwig.getState().openView(VIEW.thread, { item }); return; }
+  const main = currentMainView(tree);
+  if (main && getView(main.id)?.wide && getView(VIEW.thread)?.hideBesideWide) {
+    useShell.setState({ overlay: { key: M.newKey(), id: VIEW.thread, props: { item } } });
+  }
 }

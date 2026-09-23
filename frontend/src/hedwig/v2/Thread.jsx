@@ -12,7 +12,8 @@ import { useV2 } from './state.js';
 import { v2Api, SORT_EVENTS } from './client.js';
 import { isMissing, useWork } from './hooks.js';
 import { loadThread, loadBody } from './threadData.js';
-import { archiveThread, addToList, snooze, snoozeTimes, prepareReply, guardReply, sendPrepared } from './mail.js';
+import { archiveThread, addToList, snooze, snoozeTimes, prepareReply, guardReply, sendPrepared, watchForReply, settingValue } from './mail.js';
+import { MessageCards } from './Cards.jsx';
 import { useWhyDoor } from './WhyDoor.jsx';
 import { Btn, Glyph, IconBtn, LinkBtn, Mono, Quiet, Sheet, Slip, V, Why, ErrorLine, usePhone } from './primitives.jsx';
 import { firstName, fullTime, listTime, senderName, slipDate, storyParts } from './format.js';
@@ -110,7 +111,7 @@ function DeadlineSlip({ deadline, from, phone, onRemind, onWrong }) {
 
 function MessageBlock({ m, n, you, phone, children }) {
   const to = m.to && m.to !== 'you' ? tv('hedwig.v2.thread.toName', 'to {{name}}', { name: m.to }) : tv('hedwig.v2.thread.toYou', 'to you');
-  return (
+  const article = (
     <article id={`hw-msg-${n}`} style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '18px 0 0', borderTop: `1px solid ${V.line2}` }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
         <span style={{ fontWeight: 600, fontSize: phone ? 16 : 15 }}>{you ? tv('hedwig.v2.thread.you', 'You') : senderName(m.from)}</span>
@@ -123,6 +124,14 @@ function MessageBlock({ m, n, you, phone, children }) {
       </p>
       {children}
     </article>
+  );
+  // The cards Hedwig read from a message sit above it.
+  if (!m.id) return article;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <MessageCards messageId={m.id} phone={phone} />
+      {article}
+    </div>
   );
 }
 
@@ -164,6 +173,33 @@ function EarlierMessages({ messages, open, onToggle, myEmails, phone }) {
   );
 }
 
+const WAIT_DAYS = [1, 2, 3, 5, 7, 10, 14];
+function defaultWaitDays() {
+  const n = Math.round(Number(settingValue('work.waitingDefaultDays', 3)));
+  return Number.isFinite(n) && n >= 1 ? Math.min(60, n) : 3;
+}
+
+/** The reply bar's "remind me if no reply" checkbox with its number of days. */
+function RemindIfNoReply({ on, days, onToggle, onDays, phone }) {
+  const options = WAIT_DAYS.includes(days) ? WAIT_DAYS : [...WAIT_DAYS, days].sort((a, b) => a - b);
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', fontSize: 13, color: V.muted }}>
+      <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minHeight: phone ? 44 : 28, cursor: 'pointer' }}>
+        <input type="checkbox" checked={on} onChange={(e) => onToggle(e.target.checked)} style={{ accentColor: 'var(--hw-accent)', width: phone ? 20 : 16, height: phone ? 20 : 16, margin: 0 }} />
+        {tv('hedwig.v2.waiting.remindIfNoReply', 'Remind me if no reply')}
+      </label>
+      <select
+        value={days}
+        onChange={(e) => { onDays(Number(e.target.value)); onToggle(true); }}
+        aria-label={tv('hedwig.v2.waiting.remindAfter', 'Remind me after')}
+        style={{ height: phone ? 44 : 28, border: 0, borderBottom: `1px solid ${V.line2}`, background: 'transparent', color: on ? V.ink : V.muted, font: 'inherit', fontSize: 13, borderRadius: 0, cursor: 'pointer' }}
+      >
+        {options.map((n) => <option key={n} value={n}>{tvn(n, ['hedwig.v2.waiting.inOneDay', 'in 1 day'], ['hedwig.v2.waiting.inDays', 'in {{n}} days'])}</option>)}
+      </select>
+    </div>
+  );
+}
+
 export default function Thread({ props }) {
   const phoneCtx = usePhone();
   const phone = Boolean(phoneCtx?.phone);
@@ -179,9 +215,11 @@ export default function Thread({ props }) {
   const [busy, setBusy] = useState(null);
   const [actionError, setActionError] = useState(null);
   const [warnings, setWarnings] = useState(null); // { body, list } from the send guard
+  const [watchOn, setWatchOn] = useState(false);      // "remind me if no reply in N days"
+  const [remindDays, setRemindDays] = useState(() => defaultWaitDays());
   const inputRef = useRef(null);
 
-  useEffect(() => { setShowEarlier(false); setDraft(''); setActionError(null); setWarnings(null); }, [item?.messageId]);
+  useEffect(() => { setShowEarlier(false); setDraft(''); setActionError(null); setWarnings(null); setWatchOn(false); setRemindDays(defaultWaitDays()); }, [item?.messageId]);
 
   const data = t.data;
   const messages = data?.messages || [];
@@ -272,6 +310,7 @@ export default function Thread({ props }) {
     await sendPrepared(payload);
     setDraft('');
     setWarnings(null);
+    if (watchOn) { setWatchOn(false); await watchForReply(threadId, remindDays); }
   });
   const warned = warnings && warnings.body === draft.trim() ? warnings.list : null;
 
@@ -304,6 +343,9 @@ export default function Thread({ props }) {
         <div role="alert" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           {warned.map((w, i) => <Why key={i} tone="accent" size={15}>{w.text || w.message}</Why>)}
         </div>
+      )}
+      {work && (
+        <RemindIfNoReply phone={phone} on={watchOn} days={remindDays} onToggle={setWatchOn} onDays={setRemindDays} />
       )}
       <form onSubmit={(e) => { e.preventDefault(); send(); }} style={{ display: 'flex', alignItems: 'center', gap: phone ? 10 : 12 }}>
         <input

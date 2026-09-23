@@ -246,7 +246,7 @@ export function reduceAsk(state, event) {
   }
 }
 
-export const AGENT_INITIAL = Object.freeze({ runId: null, status: 'idle', items: [], result: null, error: null });
+export const AGENT_INITIAL = Object.freeze({ runId: null, status: 'idle', items: [], result: null, error: null, sources: [] });
 
 /**
  * Fold one /agent/runs event into the transcript. Items are
@@ -286,12 +286,42 @@ export function reduceAgent(state, event) {
     case 'action_pending':
       return event.action ? { ...state, items: [...items, { kind: 'action', action: event.action }] } : state;
     case 'done':
-      return { ...state, runId: event.runId ?? state.runId, status: event.status || 'done', result: event.result ?? null };
+      return {
+        ...state, runId: event.runId ?? state.runId, status: event.status || 'done', result: event.result ?? null,
+        // The run's numbered sources ([{ n, id }]) resolve the [n] its answer cites.
+        sources: Array.isArray(event.sources) ? event.sources : (state.sources || []),
+      };
     case 'error':
       return { ...state, status: 'error', error: event.error || 'The run failed' };
     default:
       return state;
   }
+}
+
+/**
+ * The numbered sources of a stored run, `[{ n, id }]`, read from its search_mail results the way
+ * the server numbers them (a message keeps the number it was first found under), for runs opened
+ * from the history, whose `done` event is long gone.
+ */
+export function sourcesFromRun(run) {
+  const ids = [];
+  for (const m of Array.isArray(run?.messages) ? run.messages : []) {
+    if (m?.role !== 'tool' || m.name !== 'search_mail' || typeof m.content !== 'string') continue;
+    let parsed;
+    try { parsed = JSON.parse(m.content); } catch { continue; }
+    for (const r of Array.isArray(parsed?.results) ? parsed.results : []) {
+      if (!r?.id || !Number.isInteger(r.n) || r.n < 1) continue;
+      ids[r.n - 1] = r.id;
+    }
+  }
+  return ids.map((id, i) => (id ? { n: i + 1, id } : null)).filter(Boolean);
+}
+
+/** A resolver for Markdown's [n] citations from a run's `[{ n, id }]` sources. */
+export function citeResolver(sources) {
+  const map = new Map();
+  for (const s of Array.isArray(sources) ? sources : []) if (s && Number.isInteger(s.n) && s.id) map.set(s.n, s.id);
+  return (n) => map.get(n) || null;
 }
 
 /** Replace an action (by id) wherever it appears in the transcript. */

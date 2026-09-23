@@ -1,7 +1,7 @@
 // hedwig.agent — chat with the agent (streamed runs, tool steps, confirmations) and automations.
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { hedwigApi, hedwigStream } from '../api.js';
-import { AGENT_INITIAL, formatArgs, formatAgo, itemsFromRun, reduceAgent, truncate, updateActionInItems } from './helpers.js';
+import { AGENT_INITIAL, citeResolver, formatArgs, formatAgo, itemsFromRun, reduceAgent, sourcesFromRun, truncate, updateActionInItems } from './helpers.js';
 import { useAction, useResource } from './hooks.js';
 import Automations from './Automations.jsx';
 import {
@@ -54,7 +54,10 @@ function Chat({ initialPrompt, openRunId, onRunOpened }) {
     setError(null);
     try {
       const data = await hedwigApi.get(`/agent/runs/${encodeURIComponent(id)}`);
-      setState({ ...AGENT_INITIAL, runId: data?.run?.id || id, status: data?.run?.status || 'done', items: itemsFromRun(data?.run, data?.actions), result: data?.run?.result ?? null });
+      setState({
+        ...AGENT_INITIAL, runId: data?.run?.id || id, status: data?.run?.status || 'done', items: itemsFromRun(data?.run, data?.actions),
+        result: data?.run?.result ?? null, sources: Array.isArray(data?.sources) ? data.sources : sourcesFromRun(data?.run),
+      });
     } catch (err) {
       setError(err);
     } finally {
@@ -96,6 +99,9 @@ function Chat({ initialPrompt, openRunId, onRunOpened }) {
   const shownActionIds = new Set(state.items.filter((i) => i.kind === 'action').map((i) => i.action?.id));
   const otherPending = (pending.data || []).filter((a) => !shownActionIds.has(a.id));
   const running = state.status === 'running';
+  // [n] in the agent's answer is a message its search_mail found in this run; [msg:<id>] (older
+  // runs) opens the message directly.
+  const resolveCite = useMemo(() => citeResolver(state.sources), [state.sources]);
 
   return (
     <>
@@ -129,7 +135,7 @@ function Chat({ initialPrompt, openRunId, onRunOpened }) {
               The agent can search and read your mail, look up people and topics, and draft replies. Anything that changes mail waits for you to approve it.
             </Empty>
           )}
-          {state.items.map((it, i) => <Item key={i} item={it} onAction={onAction} />)}
+          {state.items.map((it, i) => <Item key={i} item={it} onAction={onAction} resolveCite={resolveCite} />)}
           {running && <Spinner label="Working…" />}
           {state.error && <ActionError error={{ message: state.error }} />}
           <ActionError error={error} onDismiss={() => setError(null)} />
@@ -154,7 +160,7 @@ function toneColor(tone) {
   return { amber: T.amber, teal: T.teal, red: T.red }[tone] || T.muted;
 }
 
-function Item({ item, onAction }) {
+function Item({ item, onAction, resolveCite }) {
   if (item.kind === 'user') {
     return (
       <div style={{ alignSelf: 'flex-end', maxWidth: '80%', padding: '8px 12px', borderRadius: 12, background: T.raised, whiteSpace: 'pre-wrap', fontSize: 14 }}>
@@ -162,7 +168,7 @@ function Item({ item, onAction }) {
       </div>
     );
   }
-  if (item.kind === 'text') return item.text ? <Markdown text={item.text} /> : null;
+  if (item.kind === 'text') return item.text ? <Markdown text={item.text} resolveCite={resolveCite} /> : null;
   if (item.kind === 'note') return <div style={{ alignSelf: 'center', fontSize: 12, color: T.muted, fontStyle: 'italic', textAlign: 'center', maxWidth: '85%' }}>{item.text}</div>;
   if (item.kind === 'tool') return <ToolStep step={item} />;
   if (item.kind === 'action') return <ActionCard action={item.action} onChange={onAction} />;

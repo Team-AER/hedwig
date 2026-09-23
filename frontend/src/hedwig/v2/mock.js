@@ -6,6 +6,9 @@
 // /work/sweep, /work/sendguard) answer with the shapes of backend/src/hedwig/work/routes.js.
 // /mock/thread/:id stands in for upstream's /mail/thread (the messages); the admin prompt list
 // has no owner in the contract yet. Stream lists page with ?limit and ?cursor like C's route.
+// The cards routes (/cards, /cards/message/:id, /cards/:id/actions, PATCH /cards/:id, dismiss,
+// /cards/ledger/:kind) follow backend/src/hedwig/cards; Ask (/context/ask as a stream through
+// mockStream, /context/ask/history, /context/ask/:id, feedback) follows backend/src/hedwig/ask2.
 
 const HOUR = 3600_000;
 const DAY = 24 * HOUR;
@@ -13,6 +16,9 @@ const DAY = 24 * HOUR;
 function at(offsetMs) { return new Date(Date.now() - offsetMs).toISOString(); }
 function todayAt(h, m) { const d = new Date(); d.setHours(h, m, 0, 0); return d.toISOString(); }
 function daysAgoAt(days, h, m) { const d = new Date(Date.now() - days * DAY); d.setHours(h, m, 0, 0); return d.toISOString(); }
+function localDay(v) { const d = new Date(v); const p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; }
+function dayOffset(days) { return localDay(Date.now() + days * DAY); }
+function daysAheadAt(days, h, m) { const d = new Date(Date.now() + days * DAY); d.setHours(h, m, 0, 0); return d.toISOString(); }
 function nextWeekday(dow) { const d = new Date(); d.setHours(17, 0, 0, 0); d.setDate(d.getDate() + ((dow - d.getDay() + 7) % 7 || 7)); return d.toISOString(); }
 
 const ACCOUNT_WORK = 'acc-work';
@@ -72,6 +78,12 @@ function seed() {
           daysAgoAt(1, 18, 5), { bundle: 'travel' }),
         item('github', { name: 'GitHub', email: 'noreply@github.example' }, '[team-aer/hedwig] CI passed on main', 'All checks have passed.',
           todayAt(5, 40), { bundle: 'notifications' }),
+        item('vipps', { name: 'Vipps', email: 'no-reply@vipps.example' }, 'Your Vipps code', 'Use 482913 to confirm. It expires in 10 minutes.',
+          at(3 * 60_000), { bundle: 'notifications', unread: true, accountId: ACCOUNT_HOME }),
+        item('spotify', { name: 'Spotify', email: 'no-reply@spotify.example' }, 'Your Spotify Premium receipt', 'NOK 129 charged for Premium Individual.',
+          daysAgoAt(6, 4, 10), { bundle: 'receipts', accountId: ACCOUNT_HOME }),
+        item('fjell', { name: 'Fjellsport', email: 'kundeservice@fjellsport.example' }, 'Order FS-20931 confirmed', 'Running shoes, NOK 1,299.',
+          daysAgoAt(4, 12, 30), { bundle: 'receipts', accountId: ACCOUNT_HOME }),
       ],
     },
     screener: [
@@ -131,7 +143,261 @@ function seed() {
     lists: { reply_later: ['t-priya', 't-jonas', 't-lena'], set_aside: ['t-stratechery', 't-hn'], snoozed: ['t-telia'] },
     reminders: [{ id: 7, note: 'Call the dentist about the crown', until: todayAt(8, 0) }],
     answers: [],
+    cards: seedCards(),
+    // F's /work/waiting rows; watches are the "remind me if no reply" requests.
+    waiting: [
+      { threadId: 't-tom', messageId: 'm-tom', who: 'Tom Ellis', whoEmail: 'tom@ellis.example', subject: 'the signed contract', askedAt: daysAgoAt(6, 10, 0), days: 6, nudgeDraftAvailable: true,
+        reason: 'You asked for the signed contract', source: 'triage', accountId: ACCOUNT_WORK },
+      { threadId: 't-nordlys', messageId: 'm-nordlys', who: 'Nordlys Travel', whoEmail: 'booking@nordlystravel.example', subject: 'Bergen invoice', askedAt: daysAgoAt(2, 10, 0), days: 2, nudgeDraftAvailable: true,
+        reason: 'They promised it within 48 hours', source: 'triage', accountId: ACCOUNT_WORK },
+      { threadId: 't-lena', messageId: 'm-lena', who: 'Lena Park', whoEmail: 'lena.park@example.org', subject: 'Photos from Saturday, and one question', askedAt: daysAgoAt(3, 18, 0), days: 3, nudgeDraftAvailable: true,
+        reason: 'No reply in 3 days, as you asked to be reminded', source: 'watch', remindAfterDays: 3, accountId: ACCOUNT_HOME },
+    ],
+    watches: [],
+    asks: seedAsks(),
   };
+}
+
+// ── G: cards ─────────────────────────────────────────────────────────────────
+function card(id, kind, messageId, fields, sources = {}, extra = {}) {
+  return {
+    id, kind, fields, sources, confidence: 0.92, layer: 'pattern', messageId, messageIds: messageId ? [messageId] : [],
+    eventAt: null, createdAt: at(DAY), updatedAt: at(HOUR), dismissedAt: null, userEdited: false,
+    provenance: { promptId: null, promptVersion: null, model: null, aiCallId: null }, ...extra,
+  };
+}
+const src = (messageId, quote, extra = {}) => ({ messageId, quote, via: 'pattern', ...extra });
+
+function seedCards() {
+  return [
+    card('c-dhl', 'delivery', 'm-dhl',
+      { carrier: 'DHL', trackingNumber: 'JD014600006251', trackingUrl: 'https://www.dhl.example/track?id=JD014600006251', status: 'out_for_delivery', expectedDate: dayOffset(0), expectedBy: '14:00', merchant: 'Fjellsport', item: 'Running shoes',
+        history: [{ status: 'shipped', at: at(2 * DAY), messageId: 'm-dhl' }, { status: 'out_for_delivery', at: at(2 * HOUR), messageId: 'm-dhl' }] },
+      { carrier: src('m-dhl', 'DHL Express: your parcel is on its way.'), status: src('m-dhl', 'Your parcel is out for delivery and arrives today between 10:00 and 14:00.'),
+        expectedDate: src('m-dhl', 'arrives today between 10:00 and 14:00'), trackingNumber: src('m-dhl', 'Tracking number JD014600006251'), item: src('m-dhl', 'Running shoes, size 43, from Fjellsport'),
+        trackingUrl: src('m-dhl', 'https://www.dhl.example/track?id=JD014600006251') }),
+    card('c-posten', 'delivery', 'm-posten',
+      { carrier: 'Posten', status: 'in_transit', expectedDate: dayOffset(0), expectedBy: '16:00', merchant: 'Adlibris', item: 'Two books' },
+      { carrier: src('m-posten', 'Posten: your parcel from Adlibris is on its way.'), expectedDate: src('m-posten', 'It arrives today by 16:00.'), item: src('m-posten', 'Two books: Kristin Lavransdatter and Sult') }),
+    card('c-fjordkraft', 'invoice', 'm-fjordkraft',
+      { issuer: 'Fjordkraft', amount: 1240, currency: 'NOK', dueDate: localDay(nextWeekday(5)), invoiceNumber: '2026-0914', status: 'due' },
+      { amount: src('m-fjordkraft', 'Amount due: NOK 1,240.00'), dueDate: src('m-fjordkraft', 'Please pay by Friday 26 September.'), invoiceNumber: src('m-fjordkraft', 'Invoice number 2026-0914'), issuer: src('m-fjordkraft', 'Fjordkraft AS, customer 88120') }),
+    card('c-telia', 'invoice', 'm-telia',
+      { issuer: 'Telia', amount: 349, currency: 'NOK', dueDate: dayOffset(8), status: 'due' },
+      { amount: src('m-telia', 'NOK 349, due 1 October.'), dueDate: src('m-telia', 'NOK 349, due 1 October.') }),
+    card('c-nordlys', 'travel', 'm-nordlys',
+      { type: 'hotel', provider: 'Nordlys Travel', reference: 'NT-44821', checkIn: dayOffset(9), checkOut: dayOffset(12), location: 'Bergen' },
+      { reference: src('m-nordlys', 'Reference NT-44821.'), checkIn: src('m-nordlys', 'Check-in Thursday, three nights.') }),
+    card('c-sas', 'travel', 'm-sas',
+      { type: 'flight', provider: 'SAS', flightNumber: 'SK 1302', from: 'Oslo', to: 'Bergen', departAt: daysAheadAt(2, 18, 5), reference: 'K7Q2LM' },
+      { flightNumber: src('m-sas', 'Check-in opens for SK 1302'), departAt: src('m-sas', 'Oslo → Bergen, Thu 18:05.'), reference: src('m-sas', 'Booking reference K7Q2LM') }),
+    card('c-kaur', 'event', 'm-kaur',
+      { title: 'Appointment with Dr. Kaur', start: daysAheadAt(7, 10, 30), end: daysAheadAt(7, 11, 0), location: 'Bergen Clinic, Strandgaten 18' },
+      { start: src('m-kaur', 'Your appointment is on 30 Sep at 10:30.', { via: 'ics', attachment: 'invite.ics' }), location: src('m-kaur', 'Bergen Clinic, Strandgaten 18') }, { layer: 'ics' }),
+    card('c-vipps', 'code', 'm-vipps',
+      { code: '482913', service: 'Vipps', purpose: 'confirm a payment', expiresAt: new Date(Date.now() + 10 * 60_000).toISOString() },
+      { code: src('m-vipps', 'Use 482913 to confirm. It expires in 10 minutes.'), service: src('m-vipps', 'From: Vipps <no-reply@vipps.example>', { via: 'header' }) }),
+    card('c-spotify', 'subscription', 'm-spotify',
+      { merchant: 'Spotify', amount: 129, currency: 'NOK', cadence: 'monthly', lastCharged: dayOffset(-6), nextRenewal: dayOffset(24), charges: 14 },
+      { amount: src('m-spotify', 'NOK 129 charged for Premium Individual.'), cadence: src('m-spotify', '14 charges from Spotify, the last one this month', { via: 'derived' }) }, { layer: 'derived' }),
+    card('c-netflix', 'subscription', 'm-netflix',
+      { merchant: 'Netflix', amount: 179, currency: 'NOK', cadence: 'monthly', lastCharged: dayOffset(-12), nextRenewal: dayOffset(18), charges: 30 }, {}, { layer: 'derived' }),
+    card('c-fastmail', 'subscription', 'm-fastmail',
+      { merchant: 'Fastmail', amount: 60, currency: 'USD', cadence: 'yearly', lastCharged: dayOffset(-200), nextRenewal: dayOffset(165), charges: 3 }, {}, { layer: 'derived' }),
+    card('c-fjell', 'receipt', 'm-fjell',
+      { merchant: 'Fjellsport', orderNumber: 'FS-20931', total: 1299, currency: 'NOK', date: dayOffset(-4) },
+      { total: src('m-fjell', 'Total NOK 1,299.00'), orderNumber: src('m-fjell', 'Order FS-20931 confirmed') }),
+    card('c-adlibris', 'receipt', 'm-adlibris',
+      { merchant: 'Adlibris', orderNumber: 'AB-99812', total: 398, currency: 'NOK', date: dayOffset(-3) }, { total: src('m-adlibris', 'Totalt: 398,00 kr') }),
+    card('c-amazon', 'receipt', 'm-amazon',
+      { merchant: 'Amazon', orderNumber: '026-5512209', total: 34.99, currency: 'GBP', date: dayOffset(-21) }, { total: src('m-amazon', 'Order Total: £34.99') }),
+  ];
+}
+
+const CARD_KEYS = {
+  receipt: ['merchant', 'orderNumber', 'total', 'currency', 'date', 'items', 'paymentMethod'],
+  invoice: ['issuer', 'invoiceNumber', 'amount', 'currency', 'issuedDate', 'dueDate', 'status'],
+  subscription: ['merchant', 'amount', 'currency', 'cadence', 'lastCharged', 'nextRenewal', 'charges'],
+  delivery: ['carrier', 'trackingNumber', 'trackingUrl', 'status', 'expectedDate', 'expectedBy', 'merchant', 'item'],
+  travel: ['type', 'provider', 'reference', 'from', 'to', 'departAt', 'arriveAt', 'flightNumber', 'checkIn', 'checkOut', 'location', 'passenger'],
+  event: ['title', 'start', 'end', 'allDay', 'location', 'organizer', 'uid', 'method', 'status'],
+  code: ['code', 'service', 'purpose', 'expiresAt'],
+  deadline: ['what', 'dueAt', 'direction', 'counterparty'],
+};
+
+function withMessage(c) {
+  const it = c.messageId ? findItem(c.messageId) : null;
+  return { ...clone(c), message: it ? { id: it.messageId, subject: it.subject, from_name: it.from?.name, from_email: it.from?.email, date: it.date, thread_key: it.threadId } : null };
+}
+
+// G's cardActions, in short: an .ics for dated cards, a reminder, tracking, copy.
+function mockActions(c) {
+  const f = c.fields;
+  const out = [];
+  const start = { event: f.start, travel: f.departAt || f.checkIn, delivery: f.expectedDate, invoice: f.dueDate, subscription: f.nextRenewal }[c.kind];
+  const summary = {
+    event: f.title, travel: [f.flightNumber || f.provider, f.from && f.to ? `${f.from} → ${f.to}` : null].filter(Boolean).join(' '),
+    delivery: `Delivery: ${f.item || 'parcel'}`, invoice: `Pay ${f.issuer || 'bill'}`, subscription: `${f.merchant} renews`,
+  }[c.kind];
+  if (start) {
+    const stamp = (d) => new Date(d).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+    out.push({
+      id: 'calendar', label: 'Add to calendar', filename: `${String(summary).replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '')}.ics`, mime: 'text/calendar',
+      ics: ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Team-AER//Hedwig cards//EN', 'BEGIN:VEVENT', `UID:${c.id}@hedwig`, `DTSTAMP:${stamp(Date.now())}`, `DTSTART:${stamp(start)}`, `SUMMARY:${summary}`, 'END:VEVENT', 'END:VCALENDAR', ''].join('\r\n'),
+    });
+    const it = findItem(c.messageId);
+    out.push({
+      id: 'reminder', label: 'Set a reminder', reminder: {
+        title: c.kind === 'invoice' ? `Pay ${f.issuer || 'bill'}` : c.kind === 'delivery' ? `Parcel: ${f.item || 'parcel'} arrives today` : summary,
+        remindAt: new Date(Math.max(Date.now() + HOUR, new Date(start).getTime() - DAY)).toISOString(),
+        note: it ? `From "${it.subject}"` : null, messageId: c.messageId || null, threadId: it?.threadId || null, source: { kind: 'card', cardId: c.id, cardKind: c.kind },
+      },
+    });
+  }
+  if (c.kind === 'delivery' && f.trackingUrl) out.push({ id: 'track', label: 'Track parcel', url: f.trackingUrl });
+  if (c.kind === 'code' && f.code) out.push({ id: 'copy', label: 'Copy code', text: f.code });
+  return out;
+}
+
+const LEDGER_ROWS = {
+  purchases: {
+    kinds: ['receipt', 'invoice'], sorts: ['date', 'merchant', 'amount', 'dueDate', 'status'], def: ['date', 'desc'],
+    row: (c) => ({
+      id: c.id, kind: c.kind, messageId: c.messageId, date: c.fields.date || c.fields.issuedDate || (findItem(c.messageId) ? localDay(findItem(c.messageId).date) : null), merchant: c.fields.merchant || c.fields.issuer || null,
+      reference: c.fields.orderNumber || c.fields.invoiceNumber || null, amount: c.fields.total ?? c.fields.amount ?? null, currency: c.fields.currency || null,
+      status: c.kind === 'invoice' ? (c.fields.status || 'due') : 'paid', dueDate: c.fields.dueDate || null, items: [],
+    }),
+  },
+  subscriptions: {
+    kinds: ['subscription'], sorts: ['nextRenewal', 'merchant', 'amount', 'lastCharged', 'cadence'], def: ['nextRenewal', 'asc'],
+    row: (c) => ({
+      id: c.id, kind: c.kind, messageId: c.messageId, merchant: c.fields.merchant, amount: c.fields.amount ?? null, currency: c.fields.currency || null,
+      cadence: c.fields.cadence || null, lastCharged: c.fields.lastCharged || null, nextRenewal: c.fields.nextRenewal || null, charges: c.fields.charges ?? null, messageIds: c.messageIds,
+    }),
+  },
+  travel: {
+    kinds: ['travel'], sorts: ['date', 'provider', 'type', 'reference'], def: ['date', 'desc'],
+    row: (c) => ({
+      id: c.id, kind: c.kind, messageId: c.messageId, type: c.fields.type || null, provider: c.fields.provider || null, reference: c.fields.reference || null,
+      flightNumber: c.fields.flightNumber || null, from: c.fields.from || null, to: c.fields.to || null, departAt: c.fields.departAt || null, arriveAt: c.fields.arriveAt || null,
+      checkIn: c.fields.checkIn || null, checkOut: c.fields.checkOut || null, location: c.fields.location || null, date: c.fields.departAt || c.fields.checkIn || null,
+    }),
+  },
+  deliveries: {
+    kinds: ['delivery'], sorts: ['updatedAt', 'expectedDate', 'status', 'carrier'], def: ['updatedAt', 'desc'],
+    row: (c) => ({
+      id: c.id, kind: c.kind, messageId: c.messageId, carrier: c.fields.carrier || null, trackingNumber: c.fields.trackingNumber || null, trackingUrl: c.fields.trackingUrl || null,
+      status: c.fields.status || null, expectedDate: c.fields.expectedDate || null, expectedBy: c.fields.expectedBy || null, merchant: c.fields.merchant || null, item: c.fields.item || null,
+      updatedAt: c.updatedAt, history: c.fields.history || [],
+    }),
+  },
+};
+const MONTHLY = { weekly: 52 / 12, monthly: 1, quarterly: 1 / 3, yearly: 1 / 12 };
+const round2 = (n) => Math.round(n * 100) / 100;
+function sortLedger(rows, field, dir) {
+  const sign = dir === 'asc' ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    const x = a[field];
+    const y = b[field];
+    if (x == null && y == null) return 0;
+    if (x == null) return 1;
+    if (y == null) return -1;
+    if (typeof x === 'number' && typeof y === 'number') return (x - y) * sign;
+    return String(x).localeCompare(String(y)) * sign;
+  });
+}
+function mockLedger(kind, params) {
+  const def = LEDGER_ROWS[kind];
+  const all = db.cards.filter((c) => !c.dismissedAt && def.kinds.includes(c.kind)).map(def.row);
+  const field = def.sorts.includes(params.get('sort')) ? params.get('sort') : def.def[0];
+  const dir = ['asc', 'desc'].includes(params.get('dir')) ? params.get('dir') : (field === def.def[0] ? def.def[1] : 'desc');
+  const rows = sortLedger(all, field, dir);
+  const by = new Map();
+  if (kind === 'purchases' || kind === 'subscriptions') {
+    for (const r of rows) {
+      if (r.amount == null) continue;
+      const t = by.get(r.currency || '?') || { currency: r.currency || null, total: 0, count: 0, ...(kind === 'subscriptions' ? { monthly: 0 } : {}) };
+      t.total += Number(r.amount);
+      t.count++;
+      if (kind === 'subscriptions' && r.cadence) t.monthly += Number(r.amount) * (MONTHLY[r.cadence] || 0);
+      by.set(r.currency || '?', t);
+    }
+  }
+  const totals = [...by.values()].map((t) => ({ ...t, total: round2(t.total), ...(t.monthly != null ? { monthly: round2(t.monthly) } : {}) })).sort((a, b) => b.count - a.count);
+  return { kind, sort: { field, dir, options: def.sorts }, count: rows.length, totals, rows };
+}
+
+// ── G: Ask ───────────────────────────────────────────────────────────────────
+function lite(id, fromName, fromEmail, subject, date, threadKey, accountId = ACCOUNT_HOME) {
+  return {
+    id, account_id: accountId, account: { id: accountId, name: accountId === ACCOUNT_HOME ? 'Home' : 'Work', color: null }, folder: 'INBOX', subject, from_name: fromName, from_email: fromEmail,
+    date, snippet: '', is_read: true, is_starred: false, has_attachments: false, thread_key: threadKey,
+  };
+}
+const DEPOSIT_SOURCES = () => [
+  { n: 1, message: lite('m-marcus', 'Marcus Oduya', 'marcus@oduya-lettings.example', 'Lease renewal, two options', daysAgoAt(1, 16, 5), 't-marcus') },
+  { n: 2, message: lite('m-marcus-0', 'Marcus Oduya', 'marcus@oduya-lettings.example', 'Move-in checklist and deposit', daysAgoAt(340, 9, 0), 't-marcus-0') },
+];
+const DEPOSIT_ANSWER = 'Marcus said the deposit stays with the deposit scheme and carries over if you renew [1]. When you moved in he confirmed it was NOK 24,000, three months of rent [2].';
+const NOTHING = "I couldn't find anything relevant in your mail about that.";
+function seedAsks() {
+  return [
+    { id: 'a-deposit', question: 'What did the landlord say about the deposit?', created_at: daysAgoAt(2, 20, 14), completed_at: daysAgoAt(2, 20, 14), status: 'done',
+      answer: DEPOSIT_ANSWER, citations: [1, 2], sources: DEPOSIT_SOURCES(), unsupported: false, notFound: false, followUpOf: null, entityId: null, topicId: null, feedback: null, plan: null },
+    { id: 'a-passport', question: 'When does my passport expire?', created_at: daysAgoAt(5, 8, 2), completed_at: daysAgoAt(5, 8, 2), status: 'done',
+      answer: NOTHING, citations: [], sources: [], unsupported: false, notFound: true, followUpOf: null, entityId: null, topicId: null, feedback: null, plan: null },
+    { id: 'a-power', question: 'How much was the electricity bill in August?', created_at: daysAgoAt(8, 19, 40), completed_at: daysAgoAt(8, 19, 40), status: 'done',
+      answer: 'Probably around NOK 1,100, like most summer months.', citations: [],
+      sources: [{ n: 1, message: lite('m-fjordkraft', 'Fjordkraft', 'faktura@fjordkraft.example', 'Invoice for September: NOK 1,240', daysAgoAt(1, 9, 0), 't-fjordkraft') }],
+      unsupported: true, notFound: false, followUpOf: null, entityId: null, topicId: null, feedback: { wrong: true, note: 'August was NOK 980', at: daysAgoAt(8, 19, 45) }, plan: null },
+  ];
+}
+let askSeq = 0;
+
+/**
+ * Answer a streaming POST like hedwigStream would: the events through onEvent, then resolve.
+ * /context/ask: "passport", "lottery" or "nothing" finds nothing (no sources, no model call);
+ * "guess" gives an answer that cites nothing (unsupported); "cite" adds a citation to a source
+ * that is not there, which the check removes; anything else answers about the deposit.
+ */
+export async function mockStream(path, body, { onEvent, signal } = {}) {
+  requestLog.push(`STREAM ${path}`);
+  if (path !== '/context/ask') throw notFound();
+  const q = String(body?.question || '').trim();
+  if (!q) throw bad('question is required');
+  const tick = async () => {
+    await new Promise((r) => setTimeout(r, 0));
+    if (signal?.aborted) { const e = new Error('aborted'); e.name = 'AbortError'; throw e; }
+  };
+  const id = `a-new-${++askSeq}`;
+  const entry = {
+    id, question: q, created_at: new Date().toISOString(), completed_at: null, status: 'running', answer: null, citations: [], sources: [], unsupported: null, notFound: null,
+    followUpOf: body.followUpOf || null, entityId: body.entityId || null, topicId: body.topicId || null, feedback: null, plan: null,
+  };
+  db.asks.unshift(entry);
+  const emit = (ev) => onEvent?.(clone(ev));
+  let answer;
+  let sources = [];
+  const flags = { unsupported: false, notFound: false, invalidCitations: [] };
+  if (/passport|lottery|nothing/i.test(q)) {
+    answer = NOTHING;
+    flags.notFound = true;
+  } else if (/guess/i.test(q)) {
+    sources = DEPOSIT_SOURCES();
+    answer = 'It is probably about three months of rent.';
+    flags.unsupported = true;
+  } else {
+    sources = DEPOSIT_SOURCES();
+    answer = body.followUpOf ? 'Yes. Renewing keeps the same deposit, so there is nothing to pay again [1].' : DEPOSIT_ANSWER;
+    if (/cite/i.test(q)) { answer += ' The scheme also sent a certificate [4].'; flags.invalidCitations = [4]; }
+  }
+  emit({ type: 'sources', sources, askLogId: id, plan: { text: q } });
+  await tick();
+  for (const word of answer.split(/(?<= )/)) { emit({ type: 'delta', text: word }); await tick(); }
+  const checked = flags.invalidCitations.length ? answer.replace(/\s?\[4\]/, '') : answer;
+  const citations = [...new Set([...checked.matchAll(/\[(\d+)\]/g)].map((m) => Number(m[1])))];
+  emit({ type: 'done', answer: checked, citations, ...flags, askLogId: id });
+  Object.assign(entry, { status: 'done', completed_at: new Date().toISOString(), answer: checked, citations, sources, unsupported: flags.unsupported, notFound: flags.notFound });
 }
 
 let db = seed();
@@ -207,17 +473,18 @@ function threadFor(threadId) {
 const WHY = {
   'm-anna': { layer: 'classifier', reason: 'In People because you reply to Anna within an hour.', confidence: 0.94,
     signals: ['You replied to 14 of her last 15 messages', 'Median reply time 42 minutes', 'Addressed to you, not a list'],
-    rule: null, promptId: null, promptVersion: null, model: null },
+    rule: null, promptId: null, promptVersion: null, model: null, senderKey: 'anna.berg@northwind.example', senderScope: 'address' },
   'm-marcus': { layer: 'reflex', reason: 'He asked you to choose between two options four days ago.', confidence: 0.81,
     signals: ['Question addressed to you', 'No reply from you yet', 'Sender is in your contacts'],
-    rule: null, promptId: 'sort.reflex', promptVersion: '2026-09-23.1', model: 'google/gemma-4-12B-it-qat-w4a16-ct' },
+    rule: null, promptId: 'sort.reflex', promptVersion: '2026-09-23.1', model: 'google/gemma-4-12B-it-qat-w4a16-ct', senderKey: 'marcus@oduya-lettings.example', senderScope: 'address' },
   'm-ben': { layer: 'rule', reason: 'A newsletter, so it waits in Reading.', confidence: 1,
     signals: [{ name: 'list', label: 'Mailing list weekly.benedict.example', weight: 0.6 }, { name: 'unsubscribe', label: 'Has an unsubscribe link', weight: 0.3 }],
     senderDecision: { key: 'weekly.benedict.example', scope: 'list', decision: 'reading', source: 'user' },
+    senderKey: 'weekly.benedict.example', senderScope: 'list',
     rule: null, promptId: null, promptVersion: null, model: null },
   'm-dhl': { layer: 'rule', reason: 'A delivery notice, bundled with Deliveries.', confidence: 1,
     signals: ['From a carrier domain', 'Tracking number in the subject'], rule: { id: 'r-1', name: 'Deliveries' },
-    promptId: null, promptVersion: null, model: null },
+    promptId: null, promptVersion: null, model: null, senderKey: 'dhl.example', senderScope: 'domain' },
 };
 
 function whyFor(id) {
@@ -229,6 +496,8 @@ function whyFor(id) {
     confidence: 0.72,
     signals: ['Sender history', 'Headers and list markers'],
     rule: null, promptId: 'sort.reflex', promptVersion: '2026-09-23.1', model: 'google/gemma-4-12B-it-qat-w4a16-ct',
+    // The key the message is grouped under: its list when it has a List-Id, else the address.
+    senderKey: it?.list || it?.from?.email || null, senderScope: it?.list ? 'list' : (it?.from?.email ? 'address' : null),
   };
 }
 
@@ -400,6 +669,22 @@ function route(method, path, body) {
       if (method === 'GET' && !seg[2]) return listCounts();
       const kind = listKind(seg[2]);
       if (kind === 'reminder' && method === 'GET') return { kind, items: db.reminders.map(reminderRow), next: null };
+      if (method === 'POST' && kind === 'reminder' && !body?.threadId) {
+        const note = body?.note ?? body?.text;
+        if (!note || !String(note).trim()) throw bad('A reminder needs text');
+        const until = body?.until ?? body?.at;
+        if (!until || Number.isNaN(new Date(until).getTime())) throw bad('A reminder needs a time (at)');
+        const r = { id: 100 + db.reminders.length, note: String(note).trim().slice(0, 500), until: new Date(until).toISOString() };
+        db.reminders.push(r);
+        return { item: reminderRow(r) };
+      }
+      if (method === 'POST' && kind === 'reminder') {
+        if (!findThread(body.threadId)) throw notFound();
+        if (!body?.until) throw bad('A reminder needs a time (until)');
+        const r = { id: 100 + db.reminders.length, note: body.note || null, until: new Date(body.until).toISOString(), threadId: body.threadId };
+        db.reminders.push(r);
+        return { item: { ...clone(findThread(body.threadId)), note: r.note, until: r.until }, counts: listCounts() };
+      }
       if (!db.lists[kind]) throw bad('list must be one of reply_later, set_aside, pin, reminder, done, snoozed');
       if (method === 'GET') {
         const items = db.lists[kind].map((t, i) => {
@@ -449,21 +734,87 @@ function route(method, path, body) {
         reply: { inReplyToMessageId: 'm-anna', to: [{ name: 'Anna Berg', email: 'anna.berg@northwind.example' }], subject: 'Re: Q3 report: can you send the final numbers?' },
       };
     }
-    if (method === 'GET' && seg[1] === 'waiting' && !seg[2]) {
-      return [
-        { threadId: 't-tom', messageId: 'm-tom', who: 'Tom Ellis', subject: 'the signed contract', askedAt: daysAgoAt(6, 10, 0), days: 6, nudgeDraftAvailable: true },
-        { threadId: 't-nordlys', messageId: 'm-nordlys', who: 'Nordlys Travel', subject: 'Bergen invoice', askedAt: daysAgoAt(2, 10, 0), days: 2, nudgeDraftAvailable: true },
-      ];
+    if (method === 'GET' && seg[1] === 'waiting' && !seg[2]) return clone(db.waiting).sort((x, y) => y.days - x.days);
+    if (method === 'POST' && seg[1] === 'waiting' && seg[3] === 'nudge') {
+      const w = db.waiting.find((x) => x.threadId === decodeURIComponent(seg[2]));
+      if (!w) throw notFound();
+      const first = String(w.who).split(' ')[0];
+      return {
+        draft: `Hi ${first}, just checking in on ${w.subject}. Could you let me know where it stands?`,
+        provenance: { promptId: 'work.nudge' },
+        reply: { inReplyToMessageId: w.messageId, to: [{ name: w.who, email: w.whoEmail }], subject: `Re: ${w.subject}` },
+      };
     }
-    if (method === 'POST' && seg[1] === 'waiting' && seg[3] === 'nudge') return { draft: 'Hi Tom, just checking in on the signed contract.', reply: null, provenance: {} };
-    if (method === 'POST' && seg[1] === 'waiting' && seg[3] === 'resolve') return { ok: true };
-    if (method === 'POST' && seg[1] === 'waiting' && !seg[2]) return { ok: true };
+    if (method === 'POST' && seg[1] === 'waiting' && seg[3] === 'resolve') {
+      const id = decodeURIComponent(seg[2]);
+      const n = db.waiting.length;
+      db.waiting = db.waiting.filter((x) => x.threadId !== id);
+      if (db.waiting.length === n) throw notFound();
+      return { ok: true, resolved: n - db.waiting.length };
+    }
+    if (method === 'POST' && seg[1] === 'waiting' && !seg[2]) {
+      if (!body?.threadId) throw bad('threadId is required');
+      const days = Math.max(1, Math.min(60, Math.round(Number(body.days) || 3)));
+      const watch = { id: db.watches.length + 1, threadId: body.threadId, messageId: null, anchorAt: new Date().toISOString(), days, dueAt: new Date(Date.now() + days * DAY).toISOString() };
+      db.watches = [...db.watches.filter((x) => x.threadId !== body.threadId), watch];
+      return { watch: clone(watch) };
+    }
     if (method === 'POST' && seg[1] === 'sweep') return { marked: 0, before: body?.before || body?.day || null, after: null };
     if (method === 'POST' && seg[1] === 'sendguard') {
       const warnings = [];
       const m = /\b(attached|attachment|enclosed)\b/i.exec(String(body?.body || ''));
       if (m && !(body?.attachments || []).length) warnings.push({ kind: 'missing_attachment', text: `You mention “${m[1].toLowerCase()}” but nothing is attached.` });
       return { warnings };
+    }
+  }
+
+  // ── G: cards ────────────────────────────────────────────────────────────
+  if (seg[0] === 'cards') {
+    if (method === 'GET' && !seg[1]) {
+      const kinds = params.get('kinds') ? params.get('kinds').split(',') : null;
+      const limit = Math.max(1, Math.min(500, Number(params.get('limit')) || 100));
+      return { cards: db.cards.filter((c) => !c.dismissedAt && (!kinds || kinds.includes(c.kind))).slice(0, limit).map(withMessage) };
+    }
+    if (method === 'GET' && seg[1] === 'ledger') {
+      if (!LEDGER_ROWS[seg[2]]) throw bad(`ledger must be one of ${Object.keys(LEDGER_ROWS).join(', ')}`);
+      return mockLedger(seg[2], params);
+    }
+    if (method === 'GET' && seg[1] === 'message' && seg[2]) {
+      const id = decodeURIComponent(seg[2]);
+      return { cards: db.cards.filter((c) => c.messageId === id || c.messageIds.includes(id)).map(withMessage) };
+    }
+    const c = db.cards.find((x) => x.id === decodeURIComponent(seg[1] || ''));
+    if (!c) throw notFound();
+    if (method === 'GET' && !seg[2]) return withMessage(c);
+    if (method === 'GET' && seg[2] === 'actions') return { cardId: c.id, actions: mockActions(withMessage(c)) };
+    if (method === 'POST' && seg[2] === 'dismiss') { c.dismissedAt = new Date().toISOString(); return { ok: true, id: c.id }; }
+    if (method === 'PATCH' && !seg[2]) {
+      const fields = body?.fields;
+      if (!fields || typeof fields !== 'object' || Array.isArray(fields)) throw bad('fields must be an object');
+      const now = new Date().toISOString();
+      for (const [k, v] of Object.entries(fields)) {
+        if (!CARD_KEYS[c.kind].includes(k)) throw bad(`${k} is not a field of a ${c.kind} card`);
+        const before = c.fields[k] ?? null;
+        if (v === null || v === '') { delete c.fields[k]; c.sources[k] = { via: 'user', at: now, before, cleared: true }; continue; }
+        c.fields[k] = typeof before === 'number' && typeof v === 'string' ? Number(v) : v;
+        c.sources[k] = { via: 'user', at: now, before };
+      }
+      c.userEdited = true;
+      c.updatedAt = now;
+      return withMessage(c);
+    }
+  }
+
+  // ── G: Ask (the stream itself is mockStream) ────────────────────────────
+  if (seg[0] === 'context' && seg[1] === 'ask') {
+    if (method === 'GET' && seg[2] === 'history') return clone(db.asks.slice(0, Number(params.get('limit')) || 50));
+    const a = db.asks.find((x) => x.id === decodeURIComponent(seg[2] || ''));
+    if (!a) throw notFound();
+    if (method === 'GET' && !seg[3]) return clone(a);
+    if (method === 'POST' && seg[3] === 'feedback') {
+      if (body?.note != null && typeof body.note !== 'string') throw bad('note must be text');
+      a.feedback = { wrong: body?.wrong !== false, note: body?.note || null, at: new Date().toISOString() };
+      return { ok: true, feedback: clone(a.feedback) };
     }
   }
 

@@ -1,208 +1,369 @@
-// hedwig.ask — ask a question across all mail; streamed, cited answer with numbered sources.
+// hedwig.ask — ask a question across all mail on the v2 backend (stream G): a streamed answer with
+// numbered citations, the sources it read, follow-ups that carry the earlier answer (followUpOf),
+// what the citation check found (unsupported, nothing found, citations that named no source), a
+// "Wrong answer" mark (POST /context/ask/:id/feedback), and the saved answers
+// (GET /context/ask/history), which open as they were (GET /context/ask/:id) instead of asking again.
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
-import { hedwigStream } from '../api.js';
 import { useHedwig } from '../store.js';
-import { useStore } from '../../store/index.js';
-import { ASK_INITIAL, followUps, formatAgo, reduceAsk, senderName, truncate } from './helpers.js';
-import { openMessage, useResource } from './hooks.js';
-import {
-  AccountDot, ActionError, Button, Chip, IconButton, Markdown, RelativeTime, SectionLabel, Spinner, T, TextInput,
-} from './ui.jsx';
-import { tr } from './i18n.js';
+import { getView } from '../registry.js';
+import { v2Api, v2Stream, listOf } from '../v2/client.js';
+import { useV2Resource } from '../v2/hooks.js';
+import { openThread } from '../v2/nav.js';
+import { ASK2_INITIAL, askStarted, fromSaved, historyMark, reduceAsk2 } from '../v2/ask.js';
+import { Btn, ErrorLine, Hair, LinkBtn, Mono, Quiet, V, ViewBody, ViewHead, Why, usePhone } from '../v2/primitives.jsx';
+import { fullTime, listTime } from '../v2/format.js';
+import { tv, tvn } from '../v2/i18n.js';
+import { Markdown } from './ui.jsx';
+
+// The answer's [n] markers in the v2 look: mono, accent, no chip.
+const ASK_CSS = `.hw-ask2 .hw-md{font-size:16px;line-height:1.6}
+.hw-ask2 .hw-md p{margin:0 0 10px}
+.hw-ask2 .hw-md .hw-cite{background:none;color:var(--hw-accent-ink);font-family:var(--hw-font-mono, 'DM Mono', monospace);font-size:11px;min-width:14px;height:auto;padding:0 2px;border-radius:3px}
+.hw-ask2 .hw-md .hw-cite:hover,.hw-ask2 .hw-md .hw-cite:focus-visible{background:var(--hw-accent-tint);color:var(--hw-accent-ink)}`;
+
+// "renew [1]." reads as "renew¹." : the space before a citation marker goes.
+const tidyCites = (text) => String(text || '').replace(/[ \t]+(\[(?:\d{1,3}(?:\s*,\s*\d{1,3})*|msg:[A-Za-z0-9_-]+)\])/g, '$1');
+
+function sourceItem(m) {
+  return { messageId: m.id, threadId: m.thread_key || undefined, subject: m.subject, from: { name: m.from_name, email: m.from_email }, date: m.date };
+}
+
+function markLabel(mark) {
+  if (mark === 'wrong') return tv('hedwig.v2.ask.markWrong', 'marked wrong');
+  if (mark === 'notFound') return tv('hedwig.v2.ask.markNotFound', 'nothing found');
+  if (mark === 'unsupported') return tv('hedwig.v2.ask.unsupported', 'Unsupported');
+  if (mark === 'unfinished') return tv('hedwig.v2.ask.markUnfinished', 'not finished');
+  return null;
+}
 
 export default function Ask({ props = {} }) {
   const inputId = useId();
-  const accounts = useStore((s) => s.accounts);
-  const openView = useHedwig((s) => s.openView);
+  const phone = Boolean(usePhone()?.phone);
   const askPrompt = useHedwig((s) => s.askPrompt);
   const setAskPrompt = useHedwig((s) => s.setAskPrompt);
+  const openView = useHedwig((s) => s.openView);
   const [question, setQuestion] = useState(props.question || '');
   const [scope, setScope] = useState({ entityId: props.entityId || null, topicId: props.topicId || null });
-  const [answer, setAnswer] = useState(ASK_INITIAL);
-  const [asked, setAsked] = useState(null);
+  const [state, setState] = useState(ASK2_INITIAL);
+  const [chain, setChain] = useState([]); // earlier answers of this follow-up conversation
   const [error, setError] = useState(null);
   const ctlRef = useRef(null);
   const inputRef = useRef(null);
+  const autoRan = useRef('');
+  const history = useV2Resource('/context/ask/history', { refreshOn: [] });
 
   useEffect(() => { setScope({ entityId: props.entityId || null, topicId: props.topicId || null }); }, [props.entityId, props.topicId]);
+  // Leaving aborts the answer in flight; a remount (StrictMode in development) may ask it again.
+  useEffect(() => () => { ctlRef.current?.abort(); autoRan.current = ''; }, []);
 
-  const entity = useResource(scope.entityId ? `/context/entities/${encodeURIComponent(scope.entityId)}` : null);
-  const topic = useResource(scope.topicId ? `/context/topics/${encodeURIComponent(scope.topicId)}` : null);
-  const history = useResource('/context/ask/history');
-  const entityName = entity.data?.entity?.display_name;
-  const topicLabel = topic.data?.topic?.label;
   const reloadHistory = history.reload;
+  const followingUp = state.status === 'done' && state.id && !state.unfinished ? state : null;
 
-  useEffect(() => () => ctlRef.current?.abort(), []);
-
-  const run = useCallback(async (raw, override) => {
+  const run = useCallback(async (raw, { followUp = null, fresh = false } = {}) => {
     const q = String(raw || '').trim();
     if (!q) return;
     ctlRef.current?.abort();
     const ctl = new AbortController();
     ctlRef.current = ctl;
-    const sc = override || scope;
-    setQuestion(q);
-    setAsked({ question: q, ...sc });
     setError(null);
-    setAnswer({ ...ASK_INITIAL, status: 'streaming' });
+    setQuestion('');
+    setChain((c) => (followUp && !fresh ? [...c, followUp] : []));
+    setState(askStarted(q, { followUpOf: followUp?.id || null }));
     const body = { question: q };
-    if (sc.entityId) body.entityId = sc.entityId;
-    if (sc.topicId) body.topicId = sc.topicId;
+    if (scope.entityId) body.entityId = scope.entityId;
+    if (scope.topicId) body.topicId = scope.topicId;
+    if (followUp?.id) body.followUpOf = followUp.id;
     try {
-      await hedwigStream('/context/ask', body, { signal: ctl.signal, onEvent: (ev) => setAnswer((s) => reduceAsk(s, ev)) });
-      setAnswer((s) => (s.status === 'streaming' ? { ...s, status: 'done' } : s));
+      await v2Stream('/context/ask', body, { signal: ctl.signal, onEvent: (ev) => setState((s) => reduceAsk2(s, ev)) });
+      setState((s) => (s.status === 'streaming' ? { ...s, status: 'done' } : s));
       reloadHistory({ quiet: true });
     } catch (err) {
-      if (ctl.signal.aborted) { setAnswer((s) => ({ ...s, status: s.answer ? 'done' : 'idle' })); return; }
+      if (ctl.signal.aborted) { setState((s) => ({ ...s, status: s.answer ? 'done' : 'idle' })); return; }
       setError(err);
-      setAnswer((s) => ({ ...s, status: 'error' }));
+      setState((s) => ({ ...s, status: 'error' }));
     }
   }, [scope, reloadHistory]);
 
   // Autorun once for a question handed over by another view or the palette.
-  const autoRan = useRef('');
+  // Deferred a tick, so a mount that is undone at once (StrictMode in development) asks nothing.
   useEffect(() => {
-    if (!props.question || autoRan.current === props.question) return;
-    autoRan.current = props.question;
-    run(props.question);
+    if (!props.question || autoRan.current === props.question) return undefined;
+    const q = props.question;
+    autoRan.current = q;
+    const t = setTimeout(() => run(q), 0);
+    return () => { clearTimeout(t); if (autoRan.current === q) autoRan.current = ''; };
   }, [props.question, run]);
   useEffect(() => {
     if (!askPrompt) return;
     setAskPrompt('');
+    // The rail and the Brief hand the question over both ways; ask it once.
+    if (askPrompt === autoRan.current) return;
     run(askPrompt);
   }, [askPrompt, setAskPrompt, run]);
   useEffect(() => { if (!props.question) inputRef.current?.focus({ preventScroll: true }); }, [props.question]);
 
-  const streaming = answer.status === 'streaming';
-  const sources = answer.sources || [];
-  const cited = new Set(answer.citations || []);
-  const suggestions = asked && answer.status === 'done' ? followUps(asked.question, { entityName, topicLabel }) : [];
-  const accountCount = accounts?.length || 0;
+  const openSaved = async (entry) => {
+    ctlRef.current?.abort();
+    setError(null);
+    setChain([]);
+    setState({ ...fromSaved(entry), status: 'loading' });
+    try {
+      const full = await v2Api.get(`/context/ask/${encodeURIComponent(entry.id)}`);
+      setState(fromSaved(full));
+    } catch (err) {
+      setState(fromSaved(entry));
+      if (err?.status !== 404) setError(err);
+    }
+  };
 
-  return (
-    <section aria-label="Ask" style={{
-      height: '100%', minHeight: 0, overflowY: 'auto', boxSizing: 'border-box', display: 'flex', flexDirection: 'column',
-      background: T.surface, color: T.ink, fontFamily: T.body, fontSize: 14, lineHeight: 1.45,
-    }}>
-      <form onSubmit={(e) => { e.preventDefault(); run(question); }} style={{ padding: '22px 24px 14px', display: 'flex', flexDirection: 'column', gap: 12 }}>
-        <h1 style={{ margin: 0, fontFamily: T.display, fontSize: 24, fontWeight: 600, letterSpacing: '-0.01em' }}>{tr('ask.askAcrossAllMail', 'Ask across all mail')}</h1>
-        <label htmlFor={inputId} style={{ fontSize: 12, color: T.muted }}>
-          Question · searches {accountCount ? `${accountCount} account${accountCount === 1 ? '' : 's'}` : 'your mail'}
-          {scope.entityId || scope.topicId ? ', scoped as below' : ''}
-        </label>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <TextInput id={inputId} ref={inputRef} value={question} onChange={(e) => setQuestion(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); run(question); } }}
-            placeholder={tr('ask.whereAreWeOnWhat', 'Where are we on…, what do I still owe…, when did…')}
-            style={{ flexGrow: 1, height: 40, fontSize: 14, background: T.ground }} />
-          {streaming
-            ? <Button variant="secondary" onClick={() => ctlRef.current?.abort()} style={{ height: 40 }}>{tr('ask.stop', 'Stop')}</Button>
-            : <Button variant="primary" type="submit" disabled={!question.trim()} style={{ height: 40, padding: '0 16px' }}>Ask</Button>}
+  const startOver = () => { ctlRef.current?.abort(); setState(ASK2_INITIAL); setChain([]); setError(null); inputRef.current?.focus(); };
+  const submit = (e) => { e.preventDefault(); run(question, { followUp: followingUp }); };
+  const streaming = state.status === 'streaming';
+  const entries = listOf(history.data, 'items').filter((h) => h && h.id);
+  const title = tv('hedwig.v2.ask.title', 'Ask');
+
+  const form = (
+    <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {followingUp && (
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap', fontSize: 13, color: V.muted }}>
+          <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: '1 1 200px' }}>
+            {tv('hedwig.v2.ask.followingUp', 'Following up on “{{question}}”', { question: followingUp.question })}
+          </span>
+          <LinkBtn hit={phone} onClick={startOver}>{tv('hedwig.v2.ask.newQuestion', 'New question')}</LinkBtn>
         </div>
-        {(scope.entityId || scope.topicId) && (
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-            {scope.topicId && (
-              <ScopeChip tone="teal" label={`topic: ${topicLabel || '…'}`} onRemove={() => setScope((s) => ({ ...s, topicId: null }))} />
-            )}
-            {scope.entityId && (
-              <ScopeChip tone="neutral" label={`person: ${entityName || '…'}`} onRemove={() => setScope((s) => ({ ...s, entityId: null }))} />
-            )}
-          </div>
-        )}
-      </form>
+      )}
+      <label htmlFor={inputId} style={{ display: 'flex', alignItems: 'center', gap: 12, height: 44, padding: '0 4px', borderBottom: `1px solid ${V.line2}`, color: V.muted, fontSize: 15 }}>
+        <span style={{ fontFamily: V.why, fontStyle: 'italic', fontSize: 18, color: V.ink }}>{tv('hedwig.v2.brief.ask', 'Ask')}</span>
+        <input
+          id={inputId}
+          ref={inputRef}
+          type="text"
+          value={question}
+          onChange={(e) => setQuestion(e.target.value)}
+          placeholder={followingUp ? tv('hedwig.v2.ask.followUpPlaceholder', 'and what about…') : tv('hedwig.v2.brief.askPlaceholder', 'what did the landlord say about the deposit?')}
+          aria-label={followingUp ? tv('hedwig.v2.ask.followUpLabel', 'Ask a follow-up') : tv('hedwig.v2.brief.askLabel', 'Ask your mail')}
+          style={{ flexGrow: 1, minWidth: 0, border: 0, background: 'transparent', font: 'inherit', color: V.ink, outline: 'none' }}
+        />
+        {streaming
+          ? <LinkBtn hit={phone} onClick={() => ctlRef.current?.abort()}>{tv('hedwig.v2.ask.stop', 'Stop')}</LinkBtn>
+          : <Btn solid type="submit" size={phone ? 'phone' : 'md'} disabled={!question.trim()}>{tv('hedwig.v2.brief.ask', 'Ask')}</Btn>}
+      </label>
+      {(scope.entityId || scope.topicId) && (
+        <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 13, color: V.muted }}>
+          {scope.topicId && <LinkBtn muted hit={phone} onClick={() => setScope((s) => ({ ...s, topicId: null }))}>{tv('hedwig.v2.ask.dropTopic', 'Ask about everything, not just this topic')}</LinkBtn>}
+          {scope.entityId && <LinkBtn muted hit={phone} onClick={() => setScope((s) => ({ ...s, entityId: null }))}>{tv('hedwig.v2.ask.dropPerson', 'Ask about everyone, not just this person')}</LinkBtn>}
+        </div>
+      )}
+    </form>
+  );
 
-      <div style={{ flexGrow: 1, padding: '4px 24px 20px', display: 'flex', flexDirection: 'column', gap: 16 }}>
-        <ActionError error={error} onDismiss={() => setError(null)} />
-        {answer.error && <ActionError error={{ message: answer.error }} />}
+  const main = (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 22, flex: '1 1 420px', minWidth: 0 }}>
+      {form}
+      <ErrorLine error={error} />
+      {chain.map((c) => <Earlier key={c.id} answer={c} />)}
+      {state.status !== 'idle' && (
+        <AnswerBlock
+          key={state.id || state.question}
+          state={state}
+          phone={phone}
+          onFeedback={(feedback) => { setState((s) => ({ ...s, feedback })); reloadHistory({ quiet: true }); }}
+          onAgain={() => run(state.question, { fresh: true })}
+          onAgent={getView('hedwig.agent') ? () => openView('hedwig.agent', { prompt: state.question }) : null}
+        />
+      )}
+      {state.status === 'idle' && (
+        <Why>{tv('hedwig.v2.ask.intro', 'Answers cite the messages they come from. Tap a number to open it.')}</Why>
+      )}
+    </div>
+  );
 
-        {asked && (answer.answer || streaming) && (
-          <div aria-live="polite" style={{ padding: '16px 18px', borderRadius: 12, background: T.ground, border: `1px solid ${T.border}`, display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {answer.answer
-              ? <Markdown text={answer.answer} resolveCite={(n) => sources.find((s) => s.n === n)?.message} />
-              : <Spinner label={sources.length ? `Reading ${sources.length} messages…` : 'Searching your mail…'} />}
-            {answer.status === 'done' && (
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', paddingTop: 6, borderTop: `1px solid ${T.border}`, fontSize: 12, color: T.muted }}>
-                <span>{sources.length} source{sources.length === 1 ? '' : 's'}{cited.size ? ` · ${cited.size} cited` : ''}</span>
-                <span style={{ flexGrow: 1 }} />
-                <Button size="sm" onClick={() => navigator.clipboard?.writeText(answer.answer)}>{tr('ask.copy', 'Copy')}</Button>
-                <Button size="sm" onClick={() => openView('hedwig.agent', { prompt: asked.question })}>{tr('ask.askTheAgentInstead', 'Ask the agent instead')}</Button>
-              </div>
-            )}
-          </div>
-        )}
+  const aside = (
+    <aside aria-label={tv('hedwig.v2.ask.history', 'Earlier questions')} style={{ display: 'flex', flexDirection: 'column', flex: '1 1 240px', maxWidth: phone ? 'none' : 340, minWidth: 0 }}>
+      <Why style={{ paddingBottom: 6 }}>{tv('hedwig.v2.ask.history', 'Earlier questions')}</Why>
+      {history.error && <ErrorLine error={history.error} onRetry={() => history.reload()} retryLabel={tv('hedwig.v2.action.retry', 'Try again')} />}
+      {history.data && !entries.length && <span style={{ fontSize: 13, color: V.muted, padding: '8px 0' }}>{tv('hedwig.v2.ask.noHistory', 'Nothing asked yet.')}</span>}
+      {entries.slice(0, 30).map((h) => {
+        const mark = markLabel(historyMark(h));
+        const on = state.id === h.id;
+        return (
+          <button
+            key={h.id}
+            type="button"
+            aria-current={on ? 'true' : undefined}
+            onClick={() => openSaved(h)}
+            className="hw-row"
+            style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: '10px 8px', minHeight: 44, border: 0, borderTop: `1px solid ${V.line}`, borderRadius: 0, background: on ? V.tint : 'none', color: V.ink, font: 'inherit', textAlign: 'left', cursor: 'pointer' }}
+          >
+            <span style={{ fontSize: 14, lineHeight: 1.35, overflowWrap: 'anywhere' }}>{h.question}</span>
+            <span style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
+              <Mono>{listTime(h.created_at)}</Mono>
+              {h.followUpOf && <span style={{ fontSize: 12, color: V.muted }}>{tv('hedwig.v2.ask.followUp', 'follow-up')}</span>}
+              {mark && <Why size={14} tone={historyMark(h) === 'wrong' ? 'accent' : 'muted'}>{mark}</Why>}
+            </span>
+          </button>
+        );
+      })}
+    </aside>
+  );
 
-        {sources.length > 0 && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <SectionLabel>{tr('ask.sources', 'Sources')}</SectionLabel>
-            <ol style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-              {sources.map((s) => (
-                <li key={s.n}>
-                  <button type="button" onClick={() => openMessage(s.message?.id, { lite: s.message })} style={{
-                    display: 'flex', gap: 10, alignItems: 'baseline', width: '100%', padding: '7px 0', border: 0, borderTop: `1px solid ${T.raised}`,
-                    background: 'transparent', color: T.ink, font: 'inherit', fontSize: 13, textAlign: 'left', cursor: 'pointer',
-                    opacity: cited.size && !cited.has(s.n) ? 0.6 : 1,
-                  }}>
-                    <span style={{ fontFamily: T.mono, fontSize: 11, color: T.tealText, minWidth: 22 }}>[{s.n}]</span>
-                    <AccountDot account={s.message?.account} size={8} />
-                    <span style={{ flexGrow: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      <strong style={{ fontWeight: 600 }}>{senderName(s.message)}</strong> · {s.message?.subject || '(no subject)'}
-                    </span>
-                    <RelativeTime value={s.message?.date} style={{ fontSize: 12, color: T.muted }} />
-                  </button>
-                </li>
-              ))}
-            </ol>
-          </div>
-        )}
+  const content = (
+    <div className="hw-ask2" style={{ display: 'flex', gap: phone ? 28 : 44, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+      <style>{ASK_CSS}</style>
+      {main}
+      {aside}
+    </div>
+  );
 
-        {suggestions.length > 0 && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <SectionLabel>{tr('ask.followUps', 'Follow-ups')}</SectionLabel>
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-              {suggestions.map((s) => (
-                <button key={s} type="button" onClick={() => run(s)} style={{
-                  padding: '6px 10px', border: `1px solid ${T.border}`, borderRadius: 999, background: T.surface, color: T.ink, font: 'inherit', fontSize: 12, cursor: 'pointer',
-                }}>{s}</button>
-              ))}
-            </div>
-          </div>
-        )}
+  if (phone) {
+    return (
+      <ViewBody phone label={title} padded={false}>
+        <ViewHead phone title={title} />
+        <div style={{ padding: '4px 16px 0' }}>{content}</div>
+      </ViewBody>
+    );
+  }
+  return (
+    <ViewBody label={title} padded={false} style={{ padding: '26px 26px 20px' }}>
+      <ViewHead title={title} sub={tv('hedwig.v2.ask.sub', 'across all your mail')} />
+      <div style={{ padding: '0 12px' }}>{content}</div>
+    </ViewBody>
+  );
+}
 
-        {!asked && (
-          <div style={{ fontSize: 13, color: T.muted, display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <span>{tr('ask.answersCiteTheMessagesThey', 'Answers cite the messages they come from; click a number to open it.')}</span>
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-              <Button size="sm" onClick={() => openView('hedwig.agent', { prompt: question })}>{tr('ask.askTheAgentInstead', 'Ask the agent instead')}</Button>
-            </div>
-          </div>
-        )}
-
-        <span style={{ flexGrow: 1 }} />
-        {history.data?.length > 0 && (
-          <div style={{ fontSize: 12, color: T.muted, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'baseline' }}>
-            <span>{tr('ask.earlier', 'Earlier:')}</span>
-            {history.data.slice(0, 6).map((h, i) => (
-              <span key={h.id || i} style={{ display: 'inline-flex', gap: 6 }}>
-                {i > 0 && <span aria-hidden="true">·</span>}
-                <button type="button" title={h.created_at ? `Asked ${formatAgo(h.created_at)}` : undefined} onClick={() => run(h.question, { entityId: null, topicId: null })}
-                  style={{ border: 0, padding: 0, background: 'none', color: T.muted, font: 'inherit', fontStyle: 'italic', cursor: 'pointer', textDecoration: 'underline', textDecorationColor: T.border }}>
-                  {truncate(h.question, 60)}
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
+function Earlier({ answer }) {
+  return (
+    <section style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingBottom: 14, borderBottom: `1px solid ${V.line}` }}>
+      <span style={{ fontFamily: V.serif, fontSize: 20, lineHeight: 1.15 }}>{answer.question}</span>
+      <div style={{ color: V.muted }}>
+        <Markdown text={tidyCites(answer.answer)} onCite={(n) => { const m = (answer.sources || []).find((x) => x.n === n)?.message; if (m?.id) openThread(sourceItem(m)); }} />
       </div>
     </section>
   );
 }
 
-function ScopeChip({ label, tone, onRemove }) {
+function AnswerBlock({ state, phone, onFeedback, onAgain, onAgent }) {
+  const [wrongOpen, setWrongOpen] = useState(false);
+  const [note, setNote] = useState('');
+  const [sending, setSending] = useState(false);
+  const [fbError, setFbError] = useState(null);
+  const streaming = state.status === 'streaming' || state.status === 'loading';
+  const done = state.status === 'done';
+  const sources = state.sources || [];
+  const cited = new Set(state.citations || []);
+  const bySource = new Map(sources.map((s) => [s.n, s.message]));
+  const openSource = (n) => { const m = bySource.get(n); if (m?.id) openThread(sourceItem(m)); };
+  // Nothing close enough to the question was found: no model was asked, and the canned sentence
+  // the server sends says less than this line does.
+  const nothing = done && state.notFound && !sources.length;
+  const wrong = state.feedback?.wrong === true;
+
+  const feedback = async (isWrong) => {
+    if (!state.id) return;
+    setSending(true);
+    setFbError(null);
+    try {
+      const res = await v2Api.post(`/context/ask/${encodeURIComponent(state.id)}/feedback`, { wrong: isWrong, ...(isWrong && note.trim() ? { note: note.trim() } : {}) });
+      onFeedback(res?.feedback || { wrong: isWrong, note: note.trim() || null });
+      setWrongOpen(false);
+      setNote('');
+    } catch (e) {
+      setFbError(e);
+    } finally {
+      setSending(false);
+    }
+  };
+
   return (
-    <Chip tone={tone} size="md" style={{ paddingRight: 4, fontWeight: 400 }}>
-      {label}
-      <IconButton label={`Remove scope ${label}`} icon="close" size={18} onClick={onRemove} style={{ color: 'inherit' }} />
-    </Chip>
+    <section aria-live="polite" aria-busy={streaming} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <h2 style={{ margin: 0, fontFamily: V.serif, fontWeight: 400, fontSize: phone ? 26 : 30, lineHeight: 1.1, letterSpacing: '-0.01em', textWrap: 'pretty' }}>{state.question}</h2>
+      {state.saved && state.createdAt && (
+        <div style={{ display: 'flex', gap: 12, alignItems: 'baseline', flexWrap: 'wrap', fontSize: 13, color: V.muted }}>
+          <span>{tv('hedwig.v2.ask.savedAt', 'Saved answer from {{when}}', { when: fullTime(state.createdAt) })}</span>
+          <LinkBtn hit={phone} onClick={onAgain}>{tv('hedwig.v2.ask.again', 'Ask again')}</LinkBtn>
+        </div>
+      )}
+      {nothing && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <Why tone="ink" size={20}>{tv('hedwig.v2.ask.notFound', 'Nothing in your mail answers this.')}</Why>
+          <span style={{ fontSize: 13, color: V.muted }}>{tv('hedwig.v2.ask.noModel', 'No message came close enough, so no model was asked.')}</span>
+        </div>
+      )}
+      {!nothing && (state.answer
+        ? <Markdown text={tidyCites(state.answer)} onCite={openSource} />
+        : streaming && <Quiet style={{ padding: 0 }}>{sources.length ? tvn(sources.length, ['hedwig.v2.ask.readingOne', 'Reading 1 message…'], ['hedwig.v2.ask.readingMany', 'Reading {{n}} messages…']) : tv('hedwig.v2.ask.searching', 'Searching your mail…')}</Quiet>)}
+      {done && !nothing && state.notFound && <Why tone="ink">{tv('hedwig.v2.ask.notFound', 'Nothing in your mail answers this.')}</Why>}
+      {done && state.unsupported && (
+        <div style={{ display: 'flex', gap: 10, alignItems: 'baseline', flexWrap: 'wrap' }}>
+          <Why tone="accent">{tv('hedwig.v2.ask.unsupported', 'Unsupported')}</Why>
+          <span style={{ fontSize: 13, color: V.muted }}>{tv('hedwig.v2.ask.unsupportedWhy', 'The answer cites none of your messages. Check it before you rely on it.')}</span>
+        </div>
+      )}
+      {done && state.invalidCitations?.length > 0 && (
+        <span style={{ fontSize: 13, color: V.muted }}>
+          {tvn(state.invalidCitations.length, ['hedwig.v2.ask.invalidOne', 'Citation {{list}} named no source and was removed.'], ['hedwig.v2.ask.invalidMany', 'Citations {{list}} named no source and were removed.'], { list: state.invalidCitations.map((n) => `[${n}]`).join(' ') })}
+        </span>
+      )}
+      {state.status === 'error' && !state.answer && <ErrorLine error={new Error(state.error || tv('hedwig.v2.ask.failed', 'The answer failed.'))} onRetry={onAgain} retryLabel={tv('hedwig.v2.action.retry', 'Try again')} />}
+
+      {done && !nothing && state.id && (
+        <div style={{ display: 'flex', gap: phone ? 8 : 18, alignItems: 'center', flexWrap: 'wrap', paddingTop: 4 }}>
+          {!wrong && !wrongOpen && <LinkBtn hit={phone} onClick={() => setWrongOpen(true)}>{tv('hedwig.v2.ask.wrong', 'Wrong answer')}</LinkBtn>}
+          {wrong && (
+            <>
+              <Why tone="accent" size={15}>{tv('hedwig.v2.ask.markedWrong', 'Marked wrong. Hedwig learns from this.')}</Why>
+              <LinkBtn muted hit={phone} disabled={sending} onClick={() => feedback(false)}>{tv('hedwig.v2.today.undo', 'Undo')}</LinkBtn>
+            </>
+          )}
+          {state.answer && <LinkBtn muted hit={phone} onClick={() => navigator.clipboard?.writeText(state.answer)}>{tv('hedwig.v2.ask.copy', 'Copy')}</LinkBtn>}
+          {onAgent && <LinkBtn muted hit={phone} onClick={onAgent}>{tv('hedwig.v2.ask.agent', 'Ask the agent instead')}</LinkBtn>}
+        </div>
+      )}
+      {wrongOpen && (
+        <form onSubmit={(e) => { e.preventDefault(); feedback(true); }} style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <input
+            type="text"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder={tv('hedwig.v2.ask.wrongNote', 'What was wrong? (optional)')}
+            aria-label={tv('hedwig.v2.ask.wrongNoteLabel', 'What was wrong with the answer')}
+            maxLength={1000}
+            style={{ flex: '1 1 220px', minWidth: 0, height: phone ? 44 : 36, border: 0, borderBottom: `1px solid ${V.line2}`, background: 'transparent', font: 'inherit', fontSize: 14, color: V.ink, outline: 'none', borderRadius: 0 }}
+          />
+          <Btn solid type="submit" size={phone ? 'lg' : 'md'} disabled={sending}>{tv('hedwig.v2.ask.markWrongBtn', 'Mark it wrong')}</Btn>
+          <LinkBtn muted hit={phone} onClick={() => setWrongOpen(false)}>{tv('hedwig.v2.action.cancel', 'Cancel')}</LinkBtn>
+        </form>
+      )}
+      {fbError && <ErrorLine error={fbError} />}
+
+      {sources.length > 0 && (
+        <section aria-label={tv('hedwig.v2.ask.sources', 'Sources')} style={{ display: 'flex', flexDirection: 'column', paddingTop: 6 }}>
+          <Why style={{ paddingBottom: 4 }}>{tv('hedwig.v2.ask.sources', 'Sources')}</Why>
+          <ol style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+            {sources.map((s, i) => {
+              const m = s.message || {};
+              const isCited = !cited.size || cited.has(s.n);
+              return (
+                <li key={s.n}>
+                  {i > 0 && <Hair />}
+                  <button
+                    type="button"
+                    onClick={() => openSource(s.n)}
+                    style={{ display: 'grid', gridTemplateColumns: '28px minmax(0, 1fr) auto', columnGap: 10, alignItems: 'baseline', width: '100%', padding: '10px 0', minHeight: 44, border: 0, background: 'none', color: isCited ? V.ink : V.muted, font: 'inherit', fontSize: 14, textAlign: 'left', cursor: 'pointer' }}
+                  >
+                    <Mono color={isCited ? V.accentInk : V.muted}>{s.n}</Mono>
+                    <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      <span style={{ fontWeight: 500 }}>{m.from_name || m.from_email || ''}</span>
+                      {m.subject ? ` · ${m.subject}` : ''}
+                    </span>
+                    <Mono>{listTime(m.date)}</Mono>
+                  </button>
+                </li>
+              );
+            })}
+          </ol>
+        </section>
+      )}
+    </section>
   );
 }

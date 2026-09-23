@@ -625,3 +625,25 @@ describe('routes', () => {
     expect(res.code).toBe(400);
   });
 });
+
+describe('why', () => {
+  it('returns the sender key and scope the message is grouped under, with the decision for it', async () => {
+    const service = await import('./service.js');
+    const MID = '00000000-0000-4000-8000-0000000000aa';
+    db.handler = (sql) => {
+      if (/FROM hedwig_sort s LEFT JOIN hedwig_rules/.test(sql)) {
+        return { rows: [{ message_id: MID, layer: 'rule', reason: 'A newsletter', confidence: 1, signals: [], stream: 'reading', sender_key: 'weekly.example.org', sender_scope: 'list' }] };
+      }
+      if (/FROM hedwig_senders/.test(sql)) return { rows: [{ key: 'weekly.example.org', scope: 'list', decision: 'reading', source: 'user' }] };
+      return null;
+    };
+    try {
+      const out = await service.why(USER, MID);
+      expect(out).toMatchObject({ senderKey: 'weekly.example.org', senderScope: 'list', senderDecision: { scope: 'list', decision: 'reading' } });
+      db.handler = (sql) => (/FROM hedwig_sort s LEFT JOIN hedwig_rules/.test(sql) ? { rows: [{ message_id: MID, layer: 'reflex', signals: [], sender_key: null, sender_scope: null }] } : null);
+      expect(await service.why(USER, MID)).toMatchObject({ senderKey: null, senderScope: null, senderDecision: null });
+    } finally {
+      db.handler = null;
+    }
+  });
+});

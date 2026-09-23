@@ -54,6 +54,50 @@ export function briefDateLine(value, time) {
   return hm ? `${day} · ${hm}` : day;
 }
 
+// A bare YYYY-MM-DD is a calendar day, not an instant: read it as local midnight so every zone
+// keeps the day.
+function toDay(v) {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(String(v || ''))) {
+    const [y, m, d] = String(v).split('-').map(Number);
+    return new Date(y, m - 1, d);
+  }
+  return toDate(v);
+}
+
+/** "Today", "Tomorrow", "Yesterday", a weekday within the coming week, otherwise "26 Sep". */
+export function relDay(value, now = new Date()) {
+  const d = toDay(value);
+  if (!d) return '';
+  const diff = dayDiff(d, now);
+  if (diff === 0) return tv('hedwig.v2.time.today', 'Today');
+  if (diff === 1) return tv('hedwig.v2.time.tomorrow', 'Tomorrow');
+  if (diff === -1) return tv('hedwig.v2.time.yesterday', 'Yesterday');
+  if (diff > 1 && diff < 7) return d.toLocaleDateString(locale(), { weekday: 'short' }).replace(/\.$/, '');
+  return shortDate(d, now);
+}
+
+/** "26 Sep", with the year when it is not this year. */
+export function shortDate(value, now = new Date()) {
+  const d = toDay(value);
+  if (!d) return '';
+  const opts = { day: 'numeric', month: 'short', ...(d.getFullYear() !== now.getFullYear() ? { year: 'numeric' } : {}) };
+  return d.toLocaleDateString(locale(), opts);
+}
+
+/** "NOK 1,240", "£89.99": an amount in its currency, in the UI language; null without an amount. */
+export function money(amount, currency) {
+  if (amount == null || amount === '') return null;
+  const n = Number(amount);
+  if (!Number.isFinite(n)) return String(amount);
+  const whole = Number.isInteger(n);
+  const digits = { minimumFractionDigits: whole ? 0 : 2, maximumFractionDigits: 2 };
+  if (currency && /^[A-Z]{3}$/.test(currency)) {
+    try { return new Intl.NumberFormat(locale(), { style: 'currency', currency, ...digits }).format(n); } catch { /* unknown code */ }
+  }
+  const num = new Intl.NumberFormat(locale(), digits).format(n);
+  return currency ? `${num} ${currency}` : num;
+}
+
 export function fullTime(value) {
   const d = toDate(value);
   if (!d) return '';

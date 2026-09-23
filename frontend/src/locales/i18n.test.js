@@ -151,6 +151,41 @@ const SAME_VALUE_ALLOWED = {
   'hedwig.v2.view.thread':          [['en', 'fr']],
   'hedwig.v2.question.no':          [['en', 'es', 'it']],
   'hedwig.v2.question.always':      [['it', 'ptBR']],
+  // Hedwig v2 cards, ledgers, Ask and Waiting on: words spelled the same in these languages.
+  // "Datum" (cs, de), "Date" (en, fr), "Data" (it, pl, pt)
+  'hedwig.v2.card.field.date':        [['cs', 'de'], ['en', 'fr'], ['it', 'pl', 'ptBR']],
+  // "Status" (de, en)
+  'hedwig.v2.card.field.status':      [['de', 'en']],
+  // "Code" (de, en, fr), "Código" (es, pt)
+  'hedwig.v2.card.field.code':        [['de', 'en', 'fr'], ['es', 'ptBR']],
+  // "Previsto" (es, it), "Termina" (es, pt), "Co" (cs, pl: what), "do" (cs, pl: by a time)
+  'hedwig.v2.card.field.expectedDate': [['es', 'it']],
+  'hedwig.v2.card.field.end':         [['es', 'ptBR']],
+  'hedwig.v2.card.field.title':       [['cs', 'pl']],
+  'hedwig.v2.card.by':                [['cs', 'pl']],
+  // "Evento" (es, it, pt), "Recibo" (es, pt), "reserva(s)", "código(s)", "compra(s)" (es, pt)
+  'hedwig.v2.card.event':             [['es', 'it', 'ptBR']],
+  'hedwig.v2.card.receipt':           [['es', 'ptBR']],
+  'hedwig.v2.card.sum.tripOne':       [['es', 'ptBR']],
+  'hedwig.v2.card.sum.tripMany':      [['es', 'ptBR']],
+  'hedwig.v2.card.sum.eventOne':      [['es', 'it', 'ptBR']],
+  'hedwig.v2.card.sum.eventMany':     [['es', 'ptBR']],
+  'hedwig.v2.card.sum.receiptOne':    [['es', 'ptBR']],
+  'hedwig.v2.card.sum.receiptMany':   [['es', 'ptBR']],
+  // "1 code" / "{{n}} codes" (en, fr)
+  'hedwig.v2.card.sum.codeOne':       [['en', 'fr'], ['es', 'ptBR']],
+  'hedwig.v2.card.sum.codeMany':      [['en', 'fr'], ['es', 'ptBR']],
+  'hedwig.v2.card.copied':            [['es', 'ptBR']],
+  'hedwig.v2.ledger.purchases':       [['es', 'ptBR']],
+  'hedwig.v2.ledger.purchasesOne':    [['es', 'ptBR']],
+  'hedwig.v2.ledger.purchasesMany':   [['es', 'ptBR']],
+  'hedwig.v2.ledger.sortBy':          [['es', 'ptBR']],
+  // "Trasa" (cs, pl: route)
+  'hedwig.v2.ledger.route':           [['cs', 'pl']],
+  'hedwig.v2.waiting.resolve':        [['es', 'ptBR']],
+  'hedwig.v2.ask.copy':               [['es', 'ptBR']],
+  // "Sources" (en, fr)
+  'hedwig.v2.ask.sources':            [['en', 'fr']],
   // "Version" — same spelling in de, en, fr
   'admin.about.version': [['de', 'en', 'fr']],
   // "via" (on-behalf-of sender, #366) — identical preposition in en and fr

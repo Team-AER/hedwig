@@ -16,6 +16,8 @@ import Brief from './Brief.jsx';
 import Today from './Today.jsx';
 import Rail from './Rail.jsx';
 import ListView from './ListView.jsx';
+import Ledger, { LEDGER_KINDS, ledgerTitle } from './Ledger.jsx';
+import Waiting from './Waiting.jsx';
 import { tv } from './i18n.js';
 
 const stream = (name) => function StreamPane(p) {
@@ -43,6 +45,10 @@ export function v2Views() {
       description: tv('hedwig.v2.view.todayDesc', 'Everything Hedwig decided on its own today, with undo.') },
     { id: VIEW.list, title: tv('hedwig.v2.rail.replyLater', 'Reply Later'), icon: 'inbox', group: 'mail', chrome: true, component: ListView,
       description: tv('hedwig.v2.view.listDesc', 'Reply Later, Set Aside and Snoozed.') },
+    { id: VIEW.ledger, title: tv('hedwig.v2.view.ledger', 'Ledger'), icon: 'receipt', group: 'mail', chrome: true, wide: true, component: Ledger,
+      description: tv('hedwig.v2.view.ledgerDesc', 'Purchases, subscriptions, travel and deliveries from your Records, with totals.') },
+    { id: VIEW.waiting, title: tv('hedwig.v2.waiting.title', 'Waiting on'), icon: 'timeline', group: 'mail', chrome: true, component: Waiting,
+      description: tv('hedwig.v2.view.waitingDesc', 'What you asked and have not heard back about, with Nudge.') },
   ];
 }
 
@@ -56,6 +62,8 @@ function v2Commands() {
     { id: 'hedwig.v2.brief', title: tv('hedwig.v2.cmd.brief', 'Open the Daily Brief'), keys: 'g b', run: go(VIEW.brief) },
     { id: 'hedwig.v2.today', title: tv('hedwig.v2.cmd.today', 'Review what Hedwig did today'), keys: 'g h', run: go(VIEW.today) },
     { id: 'hedwig.v2.replyLater', title: tv('hedwig.v2.cmd.replyLater', 'Open Reply Later'), when: () => useV2.getState().caps.work === true, run: go(VIEW.list, { list: 'replyLater' }) },
+    { id: 'hedwig.v2.waiting', title: tv('hedwig.v2.cmd.waiting', 'Open Waiting on'), when: () => useV2.getState().caps.work === true, run: go(VIEW.waiting) },
+    ...LEDGER_KINDS.map((kind) => ({ id: `hedwig.v2.ledger.${kind}`, title: tv('hedwig.v2.cmd.ledger', 'Ledger: {{name}}', { name: ledgerTitle(kind) }), run: go(VIEW.ledger, { kind }) })),
     { id: 'hedwig.v2.power', title: tv('hedwig.v2.cmd.power', 'Power mode: on or off'), run: () => useV2.getState().togglePower() },
     { id: 'hedwig.v2.scheme.auto', title: tv('hedwig.v2.cmd.schemeAuto', 'Colour scheme: follow the system'), run: () => useV2.getState().setScheme('auto') },
     { id: 'hedwig.v2.scheme.light', title: tv('hedwig.v2.cmd.schemeLight', 'Colour scheme: light'), run: () => useV2.getState().setScheme('light') },
