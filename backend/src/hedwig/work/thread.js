@@ -1,15 +1,18 @@
 // GET /work/thread/:threadId — the story so far ("since you last looked", cited), a timeline line
-// per message, quick replies when a short answer fits, and the thread's nearest open deadline.
-// Story and quick replies come from the reflex tier and are cached in hedwig_work_stories until the
-// thread grows; the timeline falls back to plain heuristics whenever the model has nothing.
+// per message, quick replies when a short answer fits, each message's TL;DR, and the thread's
+// nearest open deadline. The story comes from the summarise family (work.summarise, work/summaries.js):
+// normally written eagerly when the mail arrived, computed here only when the cache has nothing for
+// the thread's current latest message. Quick replies are computed on open and cached with it. The
+// timeline falls back to plain heuristics whenever the model has nothing.
 import { query } from '../../services/db.js';
 import { getConfig } from '../config.js';
 import { runPrompt } from '../prompts/index.js';
 import { splitBody } from '../indexer/parse.js';
+import { summariseThreads, saveStory, tldrFor } from './summaries.js';
 import { mapCitations } from '../context/summaries.js';
 import { analyseText, senderKind } from '../triage/signals.js';
 import {
-  httpError, threadKeyOf, loadThreadMessages, ownerOf, todayLine, attachmentNames, senderLabel, shortDate, clampInt, timeZoneOf,
+  httpError, threadKeyOf, loadThreadMessages, ownerOf, attachmentNames, senderLabel, shortDate, clampInt, timeZoneOf,
 } from './util.js';
 import { voiceWith } from './voice.js';
 
@@ -36,7 +39,7 @@ export function sinceIndex(messages) {
   return last + 1 < messages.length ? last + 1 : -1;
 }
 
-/** Variables for work.story from the thread's most recent `max` messages. Pure. */
+/** Variables for one work.summarise thread item from the thread's most recent `max` messages. Pure. */
 export function buildStoryVars({ messages, owner, subject, today, max = 20, chars = 1500, cfg = {} }) {
   const window = messages.slice(-max);
   const since = sinceIndex(messages);
@@ -55,7 +58,7 @@ export function buildStoryVars({ messages, owner, subject, today, max = 20, char
 }
 
 /**
- * work.story output → { text, citations: [{ n, messageId }] }. Every sentence must cite a message
+ * A work.summarise thread item → { text, citations: [{ n, messageId }] }. Every sentence must cite a message
  * in the window; sentences that cite nothing valid are dropped. Numbers are renumbered in order of
  * first use (context/summaries.js mapCitations). Pure.
  */
@@ -170,13 +173,8 @@ async function compute(userId, threadKey, messages, cfg) {
   const owner = await ownerOf(userId);
   const latest = messages[messages.length - 1];
   const subject = latest.subject || messages[0].subject || '';
-  const { window, vars } = buildStoryVars({
-    messages, owner, subject, today: todayLine(cfg), cfg,
-    max: clampInt(cfg['work.storyMaxMessages'], 20, 2, 100), chars: clampInt(cfg['work.storyMessageChars'], 1500, 200, 10000),
-  });
-  const { data, provenance } = await runPrompt('work.story', vars, { userId, feature: 'work', lane: 'interactive' });
-  const story = assembleStory(data, window.map((m) => m.id));
-  const timeline = assembleTimeline(data?.timeline, window);
+  const [res] = await summariseThreads(userId, [{ threadKey, messages }], { cfg, owner, lane: 'interactive', source: 'open' });
+  if (!res?.ok) throw new Error(res?.error || 'no story');
   let quick;
   try {
     quick = await computeQuickReplies(userId, { cfg, owner, messages, subject });
@@ -184,15 +182,9 @@ async function compute(userId, threadKey, messages, cfg) {
     console.warn(`[hedwig] work: quick replies failed for ${threadKey}:`, err.message);
     quick = { replies: null, provenance: null, error: err.message };
   }
-  const entry = { story, timeline, quickReplies: quick.replies, quickReplyGate: quick.gate ?? null };
-  const prov = { story: provenance, quickReplies: quick.provenance };
-  await query(
-    `INSERT INTO hedwig_work_stories (user_id, thread_key, up_to_message_id, message_count, story, provenance)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     ON CONFLICT (user_id, thread_key) DO UPDATE SET up_to_message_id = EXCLUDED.up_to_message_id, message_count = EXCLUDED.message_count,
-       story = EXCLUDED.story, provenance = EXCLUDED.provenance, updated_at = NOW()`,
-    [userId, threadKey, latest.id, messages.length, JSON.stringify(entry), JSON.stringify(prov)],
-  );
+  const entry = { ...res.entry, quickReplies: quick.replies, quickReplyGate: quick.gate ?? null };
+  const prov = { story: res.provenance, quickReplies: quick.provenance };
+  await saveStory(userId, threadKey, messages, entry, prov, { source: 'open', lighter: res.lighter });
   return { entry, provenance: prov, cached: false };
 }
 
@@ -203,7 +195,8 @@ export function cacheValid(cached, messages) {
 }
 
 /**
- * @returns {{ threadId, story: { text, citations } | null, timeline, quickReplies: string[], deadline?,
+ * @returns {{ threadId, upToMessageId, story: { text, citations } | null, storyMeta: { source, tier, model, lighter, … } | null,
+ *             tldr: string | null, messageTldrs: { [messageId]: string }, timeline, quickReplies: string[], deadline?,
  *             provenance: { story, quickReplies }, cached: boolean, storyError?: string }}
  */
 export async function threadStory(userId, threadId, { refresh = false } = {}) {
@@ -214,12 +207,15 @@ export async function threadStory(userId, threadId, { refresh = false } = {}) {
   const deadline = await threadDeadline(userId, threadKey, messages.map((m) => m.id), cfg).catch(() => null);
   const base = { threadId: threadKey, upToMessageId: messages[messages.length - 1].id, ...(deadline ? { deadline } : {}) };
 
+  const tldrs = await tldrFor(userId, messages.map((m) => m.id)).catch(() => new Map());
+  base.messageTldrs = Object.fromEntries([...tldrs].map(([id, t]) => [id, t.text]));
+
   const { rows: [cached] } = await query('SELECT * FROM hedwig_work_stories WHERE user_id = $1 AND thread_key = $2', [userId, threadKey]);
   let result;
-  if (!refresh && cacheValid(cached, messages)) {
+  if (!refresh && cacheValid(cached, messages) && !cached.error) {
     result = { entry: cached.story, provenance: cached.provenance || {}, cached: true };
-    if (result.entry.quickReplies === null) {
-      // The story is fine but quick replies failed last time: try them alone.
+    if (result.entry.quickReplies == null) {
+      // The story was written eagerly (no quick replies yet), or quick replies failed last time: compute them alone.
       try {
         const owner = await ownerOf(userId);
         const q = await computeQuickReplies(userId, { cfg, owner, messages, subject: messages[messages.length - 1].subject || '' });
@@ -240,13 +236,15 @@ export async function threadStory(userId, threadId, { refresh = false } = {}) {
       // Loud but not fatal: the thread still opens, with the heuristic timeline and no story.
       console.warn(`[hedwig] work: story failed for ${threadKey}:`, err.message);
       const window = messages.slice(-clampInt(cfg['work.storyMaxMessages'], 20, 2, 100));
-      return { ...base, story: null, storyError: err.status === 429 || /budget/i.test(err.message) ? 'budget' : err.message, timeline: assembleTimeline([], window), quickReplies: [], provenance: {}, cached: false };
+      return { ...base, story: null, storyMeta: null, tldr: null, storyError: err.status === 429 || /budget/i.test(err.message) ? 'budget' : err.message, timeline: assembleTimeline([], window), quickReplies: [], provenance: {}, cached: false };
     }
   }
   const { entry } = result;
   return {
     ...base,
     story: entry.story || null,
+    storyMeta: entry.storyMeta || null,
+    tldr: entry.tldr || null,
     timeline: entry.timeline || [],
     quickReplies: entry.quickReplies || [],
     provenance: result.provenance,

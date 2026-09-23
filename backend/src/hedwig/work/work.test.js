@@ -5,10 +5,10 @@ import { mockGateway } from '../testing/mockGateway.js';
 const USER = '11111111-1111-4111-8111-111111111111';
 const ACC = '22222222-2222-4222-8222-222222222222';
 const clock = { now: new Date('2026-09-23T12:00:00Z') };
-const db = { calls: [], items: [], stories: new Map(), thread: [], sent: [], parts: null, attach: [], commitments: [], nextId: 1, aiId: 1 };
+const db = { calls: [], items: [], stories: new Map(), thread: [], sent: [], parts: null, attach: [], commitments: [], nextId: 1, aiId: 1, jobs: [], tldr: new Map(), failures: [], needs: [] };
 
 function resetDb() {
-  Object.assign(db, { calls: [], items: [], stories: new Map(), thread: [], sent: [], parts: null, attach: [], commitments: [], nextId: 1, aiId: 1 });
+  Object.assign(db, { calls: [], items: [], stories: new Map(), thread: [], sent: [], parts: null, attach: [], commitments: [], nextId: 1, aiId: 1, jobs: [], tldr: new Map(), failures: [], needs: [] });
 }
 
 const openItems = (userId) => db.items.filter((i) => i.user_id === userId && !i.done_at);
@@ -21,6 +21,30 @@ async function fakeQuery(sql, params = []) {
   if (/lower\(a\.email_address\)/.test(sql)) return { rows: [{ user_id: USER, email: 'me@prafiles.example' }] };
   if (/AS name/.test(sql) && /display_name/.test(sql)) return { rows: [{ name: 'Prakhar' }] };
   if (/to_regclass/.test(sql)) return { rows: [{ t: null }] };
+
+  // Eager summaries, TL;DRs, derived needs, jobs
+  if (/INSERT INTO hedwig_jobs/.test(sql)) {
+    if (db.jobs.some((j) => j.dedupeKey && j.dedupeKey === params[3])) return { rows: [] };
+    db.jobs.push({ kind: params[0], payload: JSON.parse(params[1]), userId: params[2], dedupeKey: params[3] });
+    return { rows: [{ id: db.jobs.length }] };
+  }
+  if (/INSERT INTO hedwig_work_tldr/.test(sql)) {
+    const [messageId, , text, promptId, promptVersion, model, aiCallId, tier, error] = params;
+    const old = db.tldr.get(messageId);
+    db.tldr.set(messageId, text ? { text, promptId, promptVersion, model, aiCallId, tier, error: null } : { ...(old || { text: null }), error });
+    return { rows: [], rowCount: 1 };
+  }
+  if (/JOIN hedwig_work_tldr x/.test(sql)) {
+    return { rows: params[1].filter((id) => db.tldr.get(id)?.text).map((id) => {
+      const t = db.tldr.get(id);
+      return { id, text: t.text, model: t.model, tier: t.tier, lighter: false, prompt_id: t.promptId, prompt_version: t.promptVersion, ai_call_id: t.aiCallId, updated_at: now };
+    }) };
+  }
+  if (/FROM hedwig_work_needs/.test(sql)) return { rows: db.needs.filter((n) => params[1].includes(n.thread_key)) };
+  if (/INSERT INTO hedwig_work_stories/.test(sql) && /"story":null/.test(sql)) {
+    db.failures.push({ threadKey: params[1], count: params[3], error: params[5] });
+    return { rows: [], rowCount: 1 };
+  }
 
   // hedwig_work_items
   if (/UPDATE hedwig_work_items SET done_at = NOW\(\), done_reason = 'done'/.test(sql)) {
@@ -94,8 +118,11 @@ async function fakeQuery(sql, params = []) {
     return { rows: s ? [JSON.parse(JSON.stringify(s))] : [] };
   }
   if (/INSERT INTO hedwig_work_stories/.test(sql)) {
-    const [userId, key, upTo, count, story, provenance] = params;
-    db.stories.set(`${userId}|${key}`, { user_id: userId, thread_key: key, up_to_message_id: upTo, message_count: count, story: JSON.parse(story), provenance: JSON.parse(provenance) });
+    const [userId, key, upTo, count, story, provenance, promptId, promptVersion, model, aiCallId, tier, lighter, source] = params;
+    db.stories.set(`${userId}|${key}`, {
+      user_id: userId, thread_key: key, up_to_message_id: upTo, message_count: count, story: JSON.parse(story), provenance: JSON.parse(provenance),
+      prompt_id: promptId, prompt_version: promptVersion, model, ai_call_id: aiCallId, tier, lighter, source, error: null,
+    });
     return { rows: [], rowCount: 1 };
   }
   if (/UPDATE hedwig_work_stories/.test(sql)) {
@@ -130,7 +157,7 @@ const { SCHEMA } = await import('../config.js');
 const DEFAULTS = Object.fromEntries(SCHEMA.map((f) => [f.key, f.default]));
 function resetConfig(over = {}) {
   cfg = {
-    ...DEFAULTS, 'llm.baseUrl': gw.baseUrl, 'llm.catalogUrl': gw.catalogUrl, 'llm.models.fast': GEMMA, 'llm.models.long': QWEN,
+    ...DEFAULTS, 'llm.baseUrl': gw.baseUrl, 'llm.catalogUrl': gw.catalogUrl, 'llm.probe.enabled': false, 'llm.models.fast': GEMMA, 'llm.models.long': QWEN,
     'llm.fallbackModel': '', 'llm.timeoutMs': 5000, 'insights.timezone': 'Europe/London', ...over,
   };
 }
@@ -138,6 +165,8 @@ resetConfig();
 
 const lists = await import('./lists.js');
 const thread = await import('./thread.js');
+const summaries = await import('./summaries.js');
+const needsMod = await import('./needs.js');
 const draftMod = await import('./draft.js');
 const guard = await import('./sendguard.js');
 const voice = await import('./voice.js');
@@ -269,6 +298,9 @@ describe('lists state machine', () => {
 
 // ── Story ───────────────────────────────────────────────────────────────────
 
+// work.summarise replies with one entry per item; a thread opened alone is item t1.
+const story = ({ sentences, timeline, tldr = 'Anna waits on your numbers' }) => ({ items: [{ id: 't1', tldr, sentences, timeline }] });
+
 describe('thread story', () => {
   const ids = ['a1', 'a2', 'a3', 'a4'];
 
@@ -306,7 +338,7 @@ describe('thread story', () => {
   it('caches the story until the thread grows, and cites real message ids', async () => {
     db.thread = [...ANNA];
     const grew = (req) => req.messages[1].content.includes('[5] From');
-    gw.on('work.story', (req) => ({
+    gw.on('work.summarise', (req) => story({
       sentences: [{ text: grew(req) ? 'A fifth message arrived.' : 'Anna needs the final numbers by Thursday.', cites: [grew(req) ? 5 : 4] }],
       timeline: [{ n: 4, kind: 'ask', line: 'Final numbers by Thursday evening' }],
     }));
@@ -316,14 +348,16 @@ describe('thread story', () => {
     expect(first.story).toEqual({ text: 'Anna needs the final numbers by Thursday [1].', citations: [{ n: 1, messageId: 'a4' }] });
     expect(first.quickReplies).toHaveLength(3);
     expect(first.cached).toBe(false);
-    expect(first.provenance.story).toMatchObject({ promptId: 'work.story', model: GEMMA, tier: 'reflex' });
+    expect(first.provenance.story).toMatchObject({ promptId: 'work.summarise', model: GEMMA, tier: 'reflex' });
+    expect(first.storyMeta).toMatchObject({ source: 'open', tier: 'reflex', model: GEMMA, lighter: false });
+    expect(first.tldr).toBe('Anna waits on your numbers');
     expect(first.provenance.quickReplies).toMatchObject({ promptId: 'work.quickReplies', model: GEMMA });
-    expect(gw.callsFor('work.story')[0].text).toContain('emails [3] to [4] are new to them');
+    expect(gw.callsFor('work.summarise')[0].text).toContain('emails [3] to [4] are new to them');
 
     const again = await thread.threadStory(USER, 't-anna');
     expect(again.cached).toBe(true);
     expect(again.story).toEqual(first.story);
-    expect(gw.callsFor('work.story')).toHaveLength(1);
+    expect(gw.callsFor('work.summarise')).toHaveLength(1);
 
     // Reading a message is not growth; a new message is.
     db.thread = db.thread.map((m) => ({ ...m, is_read: true }));
@@ -332,14 +366,14 @@ describe('thread story', () => {
     const grown = await thread.threadStory(USER, 't-anna');
     expect(grown.cached).toBe(false);
     expect(grown.story.citations).toEqual([{ n: 1, messageId: 'a5' }]);
-    expect(gw.callsFor('work.story')).toHaveLength(2);
+    expect(gw.callsFor('work.summarise')).toHaveLength(2);
     expect(thread.cacheValid({ up_to_message_id: 'a5' }, db.thread)).toBe(true);
     expect(thread.cacheValid({ up_to_message_id: 'a4' }, db.thread)).toBe(false);
   });
 
   it('opens the thread without a story when the model fails, and caches nothing', async () => {
     db.thread = [...ANNA];
-    gw.on('work.story', gw.error(500, 'boom'));
+    gw.on('work.summarise', gw.error(500, 'boom'));
     const out = await thread.threadStory(USER, 't-anna');
     expect(out.story).toBeNull();
     expect(out.storyError).toBeTruthy();
@@ -350,10 +384,148 @@ describe('thread story', () => {
   it('reports the nearest open deadline from commitments', async () => {
     db.thread = [...ANNA];
     db.commitments = [{ id: 'c1', what: 'Final Q3 numbers', due_at: at('2026-09-24T17:00:00Z'), direction: 'i_owe', counterparty: 'Anna', source_message_id: 'a4' }];
-    gw.on('work.story', { sentences: [{ text: 'Anna asks.', cites: [4] }], timeline: [] });
+    gw.on('work.summarise', story({ sentences: [{ text: 'Anna asks.', cites: [4] }], timeline: [] }));
     gw.on('work.quickReplies', { fits: false, replies: [] });
     const out = await thread.threadStory(USER, 't-anna');
     expect(out.deadline).toMatchObject({ figure: 'Thu 24 Sept', messageId: 'a4', caption: 'Final Q3 numbers · You owe this' });
+  });
+});
+
+// ── Eager summaries (work.summarise) ────────────────────────────────────────
+
+describe('eager summaries', () => {
+  const threadOf = (key, n, over = {}) => Array.from({ length: n }, (_, i) => message({
+    id: `${key}-${i + 1}`, thread_key: key, body_text: `Message ${i + 1} of ${key}. Can you confirm?`, date: at(`2026-09-2${Math.min(2, Math.floor(i / 10))}T${String(8 + (i % 10)).padStart(2, '0')}:00:00Z`), is_read: false, ...over,
+  }));
+  // Answer every item of a work.summarise call: a thread gets one sentence citing its last email.
+  const answer = (req) => {
+    const text = req.messages[1].content;
+    const items = [...text.matchAll(/=== Item (\w+) · kind: (\w+)/g)].map((m) => ({ id: m[1], kind: m[2] }));
+    const counts = text.split('=== Item ').slice(1).map((part) => [...part.matchAll(/^\[(\d+)\] From/gm)].length);
+    return { items: items.map((it, i) => (it.kind === 'thread'
+      ? { id: it.id, tldr: `Thread ${it.id} waits on you`, sentences: [{ text: `Someone asked you in ${it.id}.`, cites: [counts[i]] }], timeline: [] }
+      : { id: it.id, tldr: `  "TL;DR of ${it.id}"  `, sentences: [], timeline: [] })) };
+  };
+
+  it('knows a real person from lists, notifications and the owner', () => {
+    expect(summaries.isPersonRow({ from_email: 'anna@northwind.example' })).toBe(true);
+    expect(summaries.isPersonRow({ from_email: 'noreply@github.com' })).toBe(false);
+    expect(summaries.isPersonRow({ from_email: 'info@the-ken.com', list_unsubscribe: '<mailto:u@x>' })).toBe(false);
+    expect(summaries.isPersonRow({ from_email: 'anna@northwind.example', is_outgoing: true })).toBe(false);
+    expect(summaries.cleanTldr('  "Anna needs\nthe numbers"  ')).toBe('Anna needs the numbers');
+    expect(summaries.cleanTldr('x'.repeat(200))).toHaveLength(140);
+    expect(summaries.cleanTldr('   ')).toBeNull();
+  });
+
+  it('batches four threads per Tier 1 call, cites each thread\'s own messages, and stores provenance', async () => {
+    gw.on('work.summarise', answer);
+    const threads = ['t1', 't2', 't3', 't4', 't5'].map((k) => ({ threadKey: k, messages: threadOf(k, 3) }));
+    const out = await summaries.summariseThreads(USER, threads, { save: true, owner: { name: 'Prakhar', addresses: ['me@prafiles.example'] } });
+    expect(gw.callsFor('work.summarise')).toHaveLength(2);
+    expect(gw.callsFor('work.summarise').every((c) => c.model === GEMMA)).toBe(true);
+    expect(out.every((r) => r.ok && !r.lighter)).toBe(true);
+    const t5 = db.stories.get(`${USER}|t5`);
+    expect(t5.story.story).toEqual({ text: 'Someone asked you in t1 [1].', citations: [{ n: 1, messageId: 't5-3' }] });
+    expect(t5.story.tldr).toBe('Thread t1 waits on you');
+    expect(t5).toMatchObject({ up_to_message_id: 't5-3', message_count: 3, prompt_id: 'work.summarise', model: GEMMA, tier: 'reflex', lighter: false, source: 'eager', ai_call_id: expect.any(Number) });
+    expect(db.stories.get(`${USER}|t2`).story.story.citations).toEqual([{ n: 1, messageId: 't2-3' }]);
+  });
+
+  it('sends long threads to Tier 2, and to Tier 1 marked lighter while Tier 2 is degraded', async () => {
+    resetConfig({ 'llm.fallbackModel': GEMMA, 'llm.fallbackCooldownSec': 600 });
+    let qwenUp = true;
+    gw.on('work.summarise', (req) => (req.model === QWEN && !qwenUp ? gw.error(503, 'overloaded') : answer(req)));
+    const long = { threadKey: 'long', messages: threadOf('long', 10) };
+    const [ok] = await summaries.summariseThreads(USER, [long], {});
+    expect(ok).toMatchObject({ ok: true, lighter: false, provenance: { tier: 'reasoning', model: QWEN } });
+
+    qwenUp = false; // Qwen fails: the call falls back to Gemma and Qwen is marked degraded
+    const [fell] = await summaries.summariseThreads(USER, [long], {});
+    expect(fell).toMatchObject({ ok: true, lighter: true });
+    expect(fell.entry.storyMeta).toMatchObject({ lighter: true, model: GEMMA });
+    const before = gw.callsFor('work.summarise').length;
+    const [light] = await summaries.summariseThreads(USER, [long], {});
+    expect(light).toMatchObject({ ok: true, lighter: true, provenance: { tier: 'reflex', model: GEMMA } });
+    expect(gw.callsFor('work.summarise').slice(before).map((c) => c.model)).toEqual([GEMMA]); // degraded: Qwen not even tried
+    // Short threads never escalate.
+    const [short] = await summaries.summariseThreads(USER, [{ threadKey: 's', messages: threadOf('s', 3) }], {});
+    expect(short).toMatchObject({ lighter: false, provenance: { tier: 'reflex' } });
+    expect(await summaries.tierPlan(USER, { 'work.storyEscalateAbove': 8, 'routing.work.tier': 'reflex' }, 12)).toMatchObject({ escalate: false, lighter: true });
+  });
+
+  it('remembers a failed batch so the sweep waits before trying again', async () => {
+    gw.on('work.summarise', { items: 'not a list' });
+    const out = await summaries.summariseThreads(USER, [{ threadKey: 'bad', messages: threadOf('bad', 2) }], { save: true });
+    expect(out).toEqual([expect.objectContaining({ threadKey: 'bad', ok: false })]);
+    expect(db.failures).toEqual([expect.objectContaining({ threadKey: 'bad', count: 2 })]);
+    expect(db.stories.size).toBe(0);
+  });
+
+  it('writes one-line TL;DRs six messages per call and serves them on People rows', async () => {
+    gw.on('work.summarise', answer);
+    const uid = (i) => `00000000-0000-4000-8000-00000000000${i}`;
+    const rows = Array.from({ length: 7 }, (_, i) => message({ id: uid(i + 1), body_text: `Please review item ${i + 1}.` }));
+    const res = await summaries.summariseMessages(USER, rows, { owner: { name: 'Prakhar', addresses: [] } });
+    expect(res).toEqual({ written: 7, failed: 0 });
+    expect(gw.callsFor('work.summarise')).toHaveLength(2);
+    expect(gw.callsFor('work.summarise')[0].text).toContain('kind: message');
+    expect(db.tldr.get(uid(7))).toMatchObject({ text: 'TL;DR of m1', model: GEMMA, promptId: 'work.summarise', tier: 'reflex' });
+    const page = [{ threadId: 'x', messageId: uid(1), needsYou: false, reason: 'A person writing to you directly' }, { threadId: 'y', messageId: 'zz', needsYou: false }];
+    db.needs = [{ thread_key: 'y', kind: 'reply_overdue', reason: 'Waiting 3 days for your reply', due_at: null }];
+    const rowsOut = await lists.withWorkRows(USER, page, { first: false, now: clock.now });
+    expect(rowsOut[0]).toMatchObject({ tldr: { text: 'TL;DR of m1', model: GEMMA, lighter: false }, workNeeds: null, needsYou: false });
+    expect(rowsOut[1]).toMatchObject({ tldr: null, workNeeds: { kind: 'reply_overdue', reason: 'Waiting 3 days for your reply' }, needsYou: false });
+    const flipped = await lists.withWorkRows(USER, page, { first: false, now: clock.now, derivedNeedsYou: true });
+    expect(flipped[1]).toMatchObject({ needsYou: true, reason: 'Waiting 3 days for your reply' });
+  });
+
+  it('queues the summarise job once per user when mail from a person arrives, not for lists or your own mail', async () => {
+    await lists.applyMail([
+      { user_id: USER, thread_key: 'k1', date: clock.now, is_outgoing: false, from_email: 'info@the-ken.com', list_unsubscribe: '<mailto:x>' },
+      { user_id: USER, thread_key: 'k2', date: clock.now, is_outgoing: true, from_email: 'me@prafiles.example' },
+    ]);
+    expect(db.jobs).toHaveLength(0);
+    await lists.applyMail([
+      { user_id: USER, thread_key: 'k3', date: clock.now, is_outgoing: false, from_email: 'anna@northwind.example' },
+      { user_id: USER, thread_key: 'k4', date: clock.now, is_outgoing: false, from_email: 'jo@example.org' },
+    ]);
+    expect(db.jobs).toEqual([{ kind: 'work.summarise', payload: { userId: USER }, userId: USER, dedupeKey: `work.summarise:${USER}` }]);
+    resetConfig({ 'work.summariesEager': false });
+    db.jobs = [];
+    await lists.applyMail([{ user_id: USER, thread_key: 'k5', date: clock.now, is_outgoing: false, from_email: 'anna@northwind.example' }]);
+    expect(db.jobs).toHaveLength(0);
+  });
+
+  it('opens a thread with an eagerly written story without a story call, and adds quick replies once', async () => {
+    db.thread = [...ANNA];
+    gw.on('work.summarise', answer);
+    const [r] = await summaries.summariseThreads(USER, [{ threadKey: 't-anna', messages: ANNA }], { save: true });
+    expect(r.ok).toBe(true);
+    gw.on('work.quickReplies', { fits: true, replies: ['Yes, by Thursday evening.', 'Sending them now.'] });
+    const opened = await thread.threadStory(USER, 't-anna');
+    expect(opened).toMatchObject({ cached: true, quickReplies: ['Yes, by Thursday evening.', 'Sending them now.'], storyMeta: { source: 'eager', lighter: false } });
+    expect(opened.story.citations).toEqual([{ n: 1, messageId: 'a4' }]);
+    expect(gw.callsFor('work.summarise')).toHaveLength(1);
+    await thread.threadStory(USER, 't-anna');
+    expect(gw.callsFor('work.quickReplies')).toHaveLength(1); // cached with the story from now on
+  });
+});
+
+// ── Needs You reasons ───────────────────────────────────────────────────────
+
+describe('derived needs you', () => {
+  const now = new Date('2026-09-23T12:00:00Z');
+  const row = { from_email: 'anna@northwind.example', to_addresses: [{ address: 'me@prafiles.example' }], date: new Date('2026-09-20T09:00:00Z'), stream: 'people' };
+  it('flags a direct message from a person that has waited too long, and nothing else', () => {
+    expect(needsMod.overdue(row, { ownerAddresses: ['me@prafiles.example'], now, days: 2 })).toEqual({ days: 3 });
+    expect(needsMod.overdueReason(3)).toBe('Waiting 3 days for your reply');
+    expect(needsMod.overdue(row, { ownerAddresses: ['me@prafiles.example'], now, days: 4 })).toBeNull();
+    expect(needsMod.overdue({ ...row, to_addresses: [{ address: 'team@list.example' }] }, { ownerAddresses: ['me@prafiles.example'], now })).toBeNull();
+    expect(needsMod.overdue({ ...row, stream: 'reading' }, { ownerAddresses: ['me@prafiles.example'], now })).toBeNull();
+    expect(needsMod.overdue({ ...row, from_email: 'orders@shop.example' }, { ownerAddresses: ['me@prafiles.example'], now })).toBeNull();
+    expect(needsMod.overdue({ ...row, mine: true }, { ownerAddresses: ['me@prafiles.example'], now })).toBeNull();
+    expect(needsMod.deadlineReason('Send the signed form', '2026-09-25T17:00:00Z', 'Europe/London')).toBe('Due Fri 25 Sept: Send the signed form');
+    expect(needsMod.workNeedsYouSql('m', 's')).toContain('hedwig_work_needs');
   });
 });
 
@@ -383,7 +555,7 @@ describe('quick replies', () => {
 
   it('never call the model when the gate is closed', async () => {
     db.thread = [...ANNA.slice(0, 3)]; // last word: "Corrected both lines, new version attached." (asks nothing)
-    gw.on('work.story', { sentences: [{ text: 'Anna corrected the lines.', cites: [3] }], timeline: [] });
+    gw.on('work.summarise', story({ sentences: [{ text: 'Anna corrected the lines.', cites: [3] }], timeline: [] }));
     const out = await thread.threadStory(USER, 't-anna');
     expect(out.quickReplies).toEqual([]);
     expect(gw.callsFor('work.quickReplies')).toHaveLength(0);

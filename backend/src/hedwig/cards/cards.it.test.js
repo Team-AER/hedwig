@@ -156,6 +156,75 @@ describe.skipIf(!process.env.HEDWIG_IT)('cards over the demo mailbox', () => {
     expect((await store.listCards(userId, { kinds: ['receipt'] })).some((c) => c.id === uber.id)).toBe(false);
   });
 
+  it('reads production-shaped mail: pattern cards first, the Reflex fill for what they miss, wherever it was sorted', async () => {
+    const shape = (f) => ({ subject: f.subject, from: f.from_email, fromName: f.from_name, body: f.body_text });
+    await addMessage('shopOrder', { ...shape(F.SHOPIFY_ORDER), bundle: null, minutesAgo: 6 * 1440 });
+    await addMessage('shopShip', { ...shape(F.SHOPIFY_SHIPPED), bundle: null, minutesAgo: 5 * 1440 });
+    await addMessage('indigo', { ...shape(F.INDIGO_TAX_INVOICE), bundle: null, stream: 'people', minutesAgo: 20 * 1440 });
+    await addMessage('mmt', { ...shape(F.MMT_ETICKET), bundle: 'travel', minutesAgo: 60 * 1440 }); // older than the old 45-day Reflex window
+    await addMessage('ken', { ...shape(F.NEWSLETTER_ORDER_WORDS), bundle: null, stream: 'reading', minutesAgo: 1440 });
+    const tomorrow = new Date(Date.now() + 86400_000);
+    const departAt = new Date(Date.UTC(tomorrow.getUTCFullYear(), tomorrow.getUTCMonth(), tomorrow.getUTCDate(), 4, 0)).toISOString();
+    gw.reset().install();
+    gw.on('cards.extract', (req) => {
+      const idFor = (subject) => (req.text.match(new RegExp(`### (m\\d+)\\nFrom: [^\\n]*\\nDate: [^\\n]*\\nSubject: ${subject.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`)) || [])[1];
+      const items = [];
+      const mmt = idFor(F.MMT_ETICKET.subject);
+      if (mmt) {
+        items.push({ id: mmt, cards: [{ kind: 'travel', confidence: 0.9,
+          fields: { type: 'flight', provider: 'IndiGo', reference: 'HCYP2A', from: 'Kochi', to: 'Bagdogra', departAt, arriveAt: null, flightNumber: '6E 539', checkIn: null, checkOut: null, location: null },
+          quotes: [{ field: 'reference', quote: 'PNR: HCYP2A' }, { field: 'from', quote: 'Kochi - Bagdogra' }, { field: 'to', quote: 'Kochi - Bagdogra' },
+            { field: 'departAt', quote: 'Kochi COK 09:30 hrs' }, { field: 'flightNumber', quote: 'IndiGo 6E 539' }] }] });
+      }
+      const ship = idFor(F.SHOPIFY_SHIPPED.subject);
+      if (ship) items.push({ id: ship, cards: [] });
+      return { items };
+    });
+    const mine = ['shopOrder', 'shopShip', 'indigo', 'mmt', 'ken'].map((k) => ids[k]);
+    const res = await extract.runCardsJob({ userId, messageIds: mine });
+    expect(res.status).toBe('done');
+    const asked = gw.callsFor('cards.extract').map((c) => c.text).join('\n');
+    expect(asked).toContain(F.MMT_ETICKET.subject);          // a partial travel card: departure left to the model
+    expect(asked).toContain(F.SHOPIFY_SHIPPED.subject);      // records without a bundle, order with no total
+    expect(asked).toContain(F.INDIGO_TAX_INVOICE.subject);   // People mail with a data signal
+    expect(asked).not.toContain(F.SHOPIFY_ORDER.subject);    // the pattern card is complete
+    expect(asked).not.toContain(F.NEWSLETTER_ORDER_WORDS.subject); // Reading is never asked
+
+    const receipt = (await store.listCards(userId, { messageId: ids.shopOrder })).find((c) => c.kind === 'receipt');
+    expect(receipt).toMatchObject({ layer: 'pattern', fields: { merchant: 'REES52', orderNumber: '24176', total: 1240, currency: 'INR' } });
+    expect(receipt.messageIds.sort()).toEqual([ids.shopOrder, ids.shopShip].sort()); // the shipment notice is the same order
+    for (const k of Object.keys(receipt.fields)) expect(receipt.sources[k]).toMatchObject({ messageId: expect.any(String), quote: expect.any(String) });
+    const parcel = (await store.listCards(userId, { messageId: ids.shopShip })).find((c) => c.kind === 'delivery');
+    expect(parcel.fields).toMatchObject({ carrier: 'Blue Dart', trackingNumber: '90667948000' });
+    const invoice = (await store.listCards(userId, { messageId: ids.indigo })).find((c) => c.kind === 'invoice');
+    expect(invoice).toMatchObject({ layer: 'pattern', fields: { invoiceNumber: 'KL1262707AI06924' } });
+    const trips = (await store.listCards(userId, { messageId: ids.mmt })).filter((c) => c.kind === 'travel');
+    expect(trips).toHaveLength(1); // the model filled the pattern card instead of making a second one
+    expect(trips[0]).toMatchObject({ fields: { reference: 'HCYP2A', type: 'flight', departAt, from: 'Kochi', to: 'Bagdogra' }, provenance: { promptId: 'cards.extract' } });
+    expect(trips[0].sources.departAt).toMatchObject({ messageId: ids.mmt, quote: 'Kochi COK 09:30 hrs', via: 'reflex' });
+    expect(trips[0].sources.reference.via).toBe('pattern');
+    expect(await store.listCards(userId, { messageId: ids.ken })).toEqual([]);
+    const { rows: scans } = await query('SELECT DISTINCT version FROM hedwig_cards_scan WHERE message_id = ANY($1::uuid[])', [mine]);
+    expect(scans).toEqual([{ version: 'cards-v2' }]);
+
+    // Ledgers and Today return the rows the views need.
+    const purchases = await ledgerMod.ledger(userId, 'purchases');
+    expect(purchases.rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ merchant: 'REES52', reference: '24176', amount: 1240, currency: 'INR', status: 'paid' }),
+      expect.objectContaining({ kind: 'invoice', reference: 'KL1262707AI06924' }),
+    ]));
+    expect(purchases.totals.find((t) => t.currency === 'INR')).toMatchObject({ total: 1240 });
+    expect((await ledgerMod.ledger(userId, 'travel')).rows).toEqual(expect.arrayContaining([expect.objectContaining({ reference: 'HCYP2A', departAt, from: 'Kochi', to: 'Bagdogra' })]));
+    expect((await ledgerMod.ledger(userId, 'deliveries')).rows).toEqual(expect.arrayContaining([expect.objectContaining({ carrier: 'Blue Dart', trackingNumber: '90667948000' })]));
+    const figs = await todayMod.cardsToday(userId);
+    expect(figs.find((f) => f.kind === 'travel')).toMatchObject({ caption: expect.stringMatching(/^Tomorrow · HCYP2A/), messageId: ids.mmt });
+    // List and bundle rows fetch their cards in one call (GET /cards/messages?ids=…).
+    const byMsg = await store.cardsForMessages(userId, [ids.shopShip, ids.ken, ids.mmt]);
+    expect(byMsg.get(ids.shopShip).map((c) => c.kind).sort()).toEqual(['delivery', 'receipt']);
+    expect(byMsg.get(ids.mmt).map((c) => c.kind)).toEqual(['travel']);
+    expect(byMsg.has(ids.ken)).toBe(false);
+  });
+
   it('shows open commitments with a due date as deadline cards (a view, not a copy)', async () => {
     const { rows } = await query(
       `INSERT INTO hedwig_commitments (user_id, direction, counterparty, what, due_at, source_message_id)

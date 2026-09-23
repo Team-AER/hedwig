@@ -14,6 +14,8 @@ import { zonedParts, addDays, zonedToUtc } from '../insights/time.js';
 import {
   httpError, threadKeyOf, latestOfThreads, streamRow, clampInt, parseDate, timeZoneOf, isUuid,
 } from './util.js';
+import { tldrFor, enqueueForRows } from './summaries.js';
+import { needsFor, resolveReplied } from './needs.js';
 
 export const KINDS = Object.freeze(['reply_later', 'set_aside', 'pin', 'reminder', 'done', 'snoozed']);
 const POSTABLE = new Set(['reply_later', 'set_aside', 'pin', 'reminder', 'done']);
@@ -326,9 +328,12 @@ export async function syntheticRows(userId, { now = new Date() } = {}) {
 
 /**
  * What C's People list calls on its page: due reminders on the first page (a thread already on the
- * page is replaced by its reminder row) and "Back from snooze" on threads whose snooze just ended.
+ * page is replaced by its reminder row), "Back from snooze" on threads whose snooze just ended, each
+ * row's one-line TL;DR (`tldr`: { text, lighter, model } or null) and work's own Needs You reason
+ * (`workNeeds`: { kind, reason, dueAt } or null). With `derivedNeedsYou` (the caller's needsYou=1
+ * query includes workNeedsYouSql) a row with a derived reason also gets needsYou and that reason.
  */
-export async function withWorkRows(userId, items, { first = true, now = new Date() } = {}) {
+export async function withWorkRows(userId, items, { first = true, now = new Date(), derivedNeedsYou = false } = {}) {
   const cfg = await getConfig(userId);
   if (cfg['work.enabled'] === false) return items;
   let out = items;
@@ -344,11 +349,30 @@ export async function withWorkRows(userId, items, { first = true, now = new Date
     const woke = new Set(rows.map((r) => r.thread_key));
     if (woke.size) out = out.map((i) => (woke.has(i.threadId) ? { ...i, needsYou: true, reason: 'Back from snooze', backFromSnooze: true } : i));
   }
-  if (!first) return out;
-  const synthetic = await syntheticRows(userId, { now });
-  if (!synthetic.length) return out;
-  const replaced = new Set(synthetic.map((r) => r.threadId));
-  return [...synthetic, ...out.filter((i) => !replaced.has(i.threadId))];
+  if (first) {
+    const synthetic = await syntheticRows(userId, { now });
+    if (synthetic.length) {
+      const replaced = new Set(synthetic.map((r) => r.threadId));
+      out = [...synthetic, ...out.filter((i) => !replaced.has(i.threadId))];
+    }
+  }
+  return decorateRows(userId, out, { derivedNeedsYou });
+}
+
+/** Add `tldr` and `workNeeds` to stream rows (People here; Screener and others through GET /work/tldr). */
+export async function decorateRows(userId, items, { derivedNeedsYou = false } = {}) {
+  if (!items.length) return items;
+  const [tldrs, needs] = await Promise.all([
+    tldrFor(userId, items.map((i) => i.messageId).filter(Boolean)).catch(() => new Map()),
+    needsFor(userId, items.map((i) => (i.synthetic ? null : i.threadId))).catch(() => new Map()),
+  ]);
+  return items.map((i) => {
+    const t = i.messageId ? tldrs.get(i.messageId) : null;
+    const n = i.synthetic ? null : needs.get(i.threadId) || null;
+    const row = { ...i, tldr: t ? { text: t.text, lighter: t.lighter, model: t.model } : null, workNeeds: n };
+    if (n && derivedNeedsYou && !i.needsYou) { row.needsYou = true; row.reason = n.reason; }
+    return row;
+  });
 }
 
 // ── Pipeline step: mail arriving changes list state ─────────────────────────
@@ -385,6 +409,7 @@ export async function applyMail(rows) {
       );
     }
     if (outgoing.length) {
+      await resolveReplied(userId, outgoing.map((r) => r.thread_key));
       await query(
         `UPDATE hedwig_work_items w SET done_at = NOW(), done_reason = 'replied'
            FROM UNNEST($2::text[], $3::timestamptz[]) AS x(thread_key, at)
@@ -394,6 +419,8 @@ export async function applyMail(rows) {
       );
     }
   }
-  return { reopened };
+  // Summaries are written eagerly: new mail from a person (or a reply) queues the user's summarise job.
+  const summaries = await enqueueForRows(rows).catch((err) => { console.warn('[hedwig] work: could not queue summaries:', err.message); return 0; });
+  return { reopened, summaries };
 }
 

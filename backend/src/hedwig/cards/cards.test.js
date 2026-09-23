@@ -8,7 +8,8 @@ const { findTrackingNumbers, s10Valid, deliveryStatusOf } = await import('./dete
 const { parseIcs, icsDate } = await import('./detect/ics.js');
 const { findSubscriptions, cadenceOf } = await import('./subscriptions.js');
 const { mergeCards, validateEdit } = await import('./store.js');
-const { verifyModelCard, locateQuote, quoteSupports } = await import('./extract.js');
+const { verifyModelCard, locateQuote, quoteSupports, reflexEligible, twinOf } = await import('./extract.js');
+const { detectOrders, dataSignal, needsFill, findTotal, senderName } = await import('./detect/orders.js');
 const { todayFigures, formatMoney } = await import('./today.js');
 const { sortRows, totalsByCurrency } = await import('./ledger.js');
 const { cardIcs, reminderFor, cardActions, foldIcs } = await import('./actions.js');
@@ -126,6 +127,86 @@ describe('tracking numbers', () => {
     expect(deliveryStatusOf('Your parcel will be delivered tomorrow. It has left the depot.').status).toBe('in_transit');
     expect(deliveryStatusOf('We missed you: delivery attempt failed').status).toBe('exception');
     expect(deliveryStatusOf('Your order has been dispatched').status).toBe('shipped');
+  });
+});
+
+describe('orders, bookings and invoices in plain mail (production shapes)', () => {
+  it('reads a Shopify order with its total, citing the sentence for every field', () => {
+    const [c] = detectOrders(row(F.SHOPIFY_ORDER));
+    expect(c).toMatchObject({ kind: 'receipt', layer: 'pattern', fields: { merchant: 'REES52', orderNumber: '24176', total: 1240, currency: 'INR' } });
+    expect(Object.keys(c.sources).sort()).toEqual(Object.keys(c.fields).sort());
+    expect(c.sources.orderNumber.quote).toContain('Order #24176');
+    expect(c.sources.total.quote).toContain('1,240.00');
+    expect(c.sources.merchant).toMatchObject({ via: 'header' });
+    expect(needsFill([c])).toBe(false);
+  });
+
+  it('makes the shipment notice fill the same order, and a tax invoice an invoice card', () => {
+    const [ship] = detectOrders(row(F.SHOPIFY_SHIPPED));
+    expect(ship).toMatchObject({ kind: 'receipt', fields: { orderNumber: '24176', merchant: 'REES52' } });
+    expect(dedupeKey(ship)).toBe(dedupeKey({ ...detectOrders(row(F.SHOPIFY_ORDER))[0] }));
+    expect(needsFill([ship])).toBe(true); // no total: the Reflex model fills it
+    const [inv] = detectOrders(row(F.INDIGO_TAX_INVOICE));
+    expect(inv).toMatchObject({ kind: 'invoice', fields: { invoiceNumber: 'KL1262707AI06924', issuer: 'Goindigo' } });
+    expect(needsFill([inv])).toBe(true);
+  });
+
+  it('reads flight bookings (PNR first) and ticket purchases', () => {
+    const cards = detectOrders(row(F.MMT_ETICKET));
+    expect(cards).toEqual([expect.objectContaining({ kind: 'travel', fields: expect.objectContaining({ type: 'flight', reference: 'HCYP2A', provider: 'MakeMyTrip' }) })]);
+    expect(needsFill(cards)).toBe(true); // departure time left to the model
+    const [tix] = detectOrders(row(F.BOOKMYSHOW_TICKETS));
+    expect(tix).toMatchObject({ kind: 'receipt', fields: { merchant: 'BookMyShow', orderNumber: 'TGAMAVT', total: 1322.84, currency: 'INR' } });
+    expect(detectOrders(row(F.SHOP_PAYMENT_RECEIVED))[0]).toMatchObject({ kind: 'receipt', fields: { orderNumber: '1530876', merchant: 'MD Computers' } });
+  });
+
+  it('leaves newsletters, purchase-order threads and plain notifications alone', () => {
+    expect(detectOrders(row(F.NEWSLETTER_ORDER_WORDS))).toEqual([]);
+    expect(detectOrders(row(F.SUPPLIER_PO))).toEqual([]);
+    expect(detectOrders(row({ subject: 'Your Dependabot alerts for the week', from_email: 'noreply@github.com', body_text: 'Order 2026 of alerts' }))).toEqual([]);
+    expect(detectDeterministic(row(F.NEWSLETTER_ORDER_WORDS))).toEqual([]);
+  });
+
+  it('knows which mail carries data, and which the Reflex model reads', () => {
+    for (const m of [F.SHOPIFY_ORDER, F.SHOPIFY_SHIPPED, F.INDIGO_TAX_INVOICE, F.MMT_ETICKET, F.BOOKMYSHOW_TICKETS, F.SHOP_PAYMENT_RECEIVED]) expect(dataSignal(m)).toBe(true);
+    expect(dataSignal({ subject: 'Aramex Shipment Information', from_email: 'kapildev@aramex.example' })).toBe(true);
+    expect(dataSignal(F.NEWSLETTER_ORDER_WORDS)).toBe(true); // subject says "order"; stream decides (Reading is never read)
+    expect(dataSignal({ subject: 'Lunch on Friday?', from_email: 'jo@example.org' })).toBe(false);
+    const bundles = new Set(['purchases', 'travel']);
+    expect(reflexEligible({ stream: 'records', bundle: 'travel', subject: 'x' }, { bundles })).toBe(true);
+    expect(reflexEligible({ stream: 'records', bundle: null, ...F.SHOPIFY_ORDER }, { bundles })).toBe(true);
+    expect(reflexEligible({ stream: 'people', bundle: null, ...F.INDIGO_TAX_INVOICE }, { bundles })).toBe(true);
+    expect(reflexEligible({ stream: 'people', bundle: null, subject: 'Lunch?' }, { bundles })).toBe(false);
+    expect(reflexEligible({ stream: 'reading', bundle: null, ...F.NEWSLETTER_ORDER_WORDS }, { bundles })).toBe(false);
+    expect(reflexEligible({ stream: 'spam', bundle: 'purchases' }, { bundles })).toBe(false);
+    expect(reflexEligible({ stream: 'people', ...F.INDIGO_TAX_INVOICE }, { bundles, signalReflex: false })).toBe(false);
+  });
+
+  it('pairs a model card with the pattern card it fills', () => {
+    const pattern = detectOrders(row(F.SHOPIFY_SHIPPED));
+    expect(twinOf({ kind: 'receipt', fields: { total: 1240 } }, pattern)).toBe(pattern[0]);
+    expect(twinOf({ kind: 'receipt', fields: { orderNumber: '#24176'.slice(1) } }, pattern)).toBe(pattern[0]);
+    expect(twinOf({ kind: 'receipt', fields: { orderNumber: '99999' } }, pattern)).toBeNull();
+    expect(twinOf({ kind: 'travel', fields: {} }, pattern)).toBeNull();
+  });
+
+  it('reads totals and sender names the way these senders write them', () => {
+    expect(findTotal('AMOUNT PAID Rs.1322.84')).toMatchObject({ amount: 1322.84, currency: 'INR' });
+    expect(findTotal('Grand Total: £48.00')).toMatchObject({ amount: 48, currency: 'GBP' });
+    expect(findTotal('Total 0.00')).toBeNull();
+    expect(senderName({ from_name: 'Amazon.in via Shop', from_email: 'x@amazon.in' })).toBe('Amazon.in');
+    expect(senderName({ from_name: '', from_email: 'noreply@notify.cloudflare.com' })).toBe('Cloudflare');
+  });
+
+  it('takes the waybill, not a store id inside a link', () => {
+    const cards = detectDeterministic(row(F.SHOPIFY_SHIPPED));
+    expect(cards.filter((c) => c.kind === 'delivery').map((c) => [c.fields.carrier, c.fields.trackingNumber])).toEqual([['Blue Dart', '90667948000']]);
+    expect(cards.map((c) => c.kind).sort()).toEqual(['delivery', 'receipt']);
+  });
+
+  it('recognises Indian carriers and India Post', () => {
+    expect(findTrackingNumbers('Your Blue Dart shipment AWB 12345678901 is in transit.', { from: 'Blue Dart' })).toEqual([expect.objectContaining({ carrier: 'Blue Dart', number: '12345678901' })]);
+    expect(findTrackingNumbers('Track your Delhivery parcel: waybill 1234567890123', { from: 'Delhivery' })[0]).toMatchObject({ carrier: 'Delhivery' });
   });
 });
 

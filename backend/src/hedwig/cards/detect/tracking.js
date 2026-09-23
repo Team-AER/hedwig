@@ -16,10 +16,17 @@ const PATTERNS = [
   { carrier: 'GLS', re: /\b\d{11,12}\b/g, needs: /\bgls\b/i },
   { carrier: 'PostNord', re: /\b(?:00370\d{13,15}|\d{18,20})\b/g, needs: /postnord/i },
   { carrier: 'Posten/Bring', re: /\b(?:70\d{15,18}|37\d{16}|\d{17,20})\b/g, needs: /\b(posten|bring)\b/i },
+  // India (audit 2026-09-24: the production mailbox is Indian; none of these were recognised).
+  { carrier: 'Blue Dart', re: /\b\d{11}\b/g, needs: /\bblue ?dart\b/i },
+  { carrier: 'Delhivery', re: /\b\d{13,14}\b/g, needs: /\bdelhivery\b/i },
+  { carrier: 'DTDC', re: /\b[A-Z]\d{8}\b/g, needs: /\bdtdc\b/i },
+  { carrier: 'Aramex', re: /\b\d{11,12}\b/g, needs: /\baramex\b/i },
+  { carrier: 'Ekart', re: /\b[A-Z]{2,4}[A-Z0-9]\d{9,10}\b/g, needs: /\bekart\b/i },
+  { carrier: 'Shiprocket', re: /\b\d{10,15}\b/g, needs: /\bshiprocket\b/i },
 ];
 
 const S10_RE = /\b([A-Z]{2})(\d{8})(\d)([A-Z]{2})\b/g;
-const S10_COUNTRY = { GB: 'Royal Mail', NO: 'Posten/Bring', SE: 'PostNord', DK: 'PostNord', FI: 'Posti', US: 'USPS', DE: 'DHL', NL: 'PostNL', FR: 'La Poste', CN: 'China Post', IE: 'An Post' };
+const S10_COUNTRY = { GB: 'Royal Mail', NO: 'Posten/Bring', SE: 'PostNord', DK: 'PostNord', FI: 'Posti', US: 'USPS', DE: 'DHL', NL: 'PostNL', FR: 'La Poste', CN: 'China Post', IE: 'An Post', IN: 'India Post' };
 
 /** UPU S10 check digit (weights 8 6 4 2 3 5 9 7). Pure. */
 export function s10Valid(digits8, check) {
@@ -56,6 +63,7 @@ export function findTrackingNumbers(text, { from = '' } = {}) {
         if (!TRACK_WORD.test(around)) continue;
         const before = s.slice(Math.max(0, m.index - 12), m.index);
         if (/(tel|phone|call|fax|ring|\+)\W*$/i.test(before) || /[£€$]\s*$/.test(before)) continue;
+        if (/[/=+?&#]$/.test(before) || /https?:\/\/\S*$/i.test(s.slice(Math.max(0, m.index - 200), m.index))) continue; // part of a link (a store id), not a waybill
       }
       add(m[0], p.carrier, m.index);
     }

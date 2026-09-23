@@ -174,6 +174,32 @@ export async function listCards(userId, { kinds = null, since = null, limit = 10
   return rows.map(toCard);
 }
 
+/**
+ * Cards for many messages at once (list and bundle rows): Map messageId → cards, each card listed
+ * under every requested message that contributed to it. Dismissed cards are left out.
+ */
+export async function cardsForMessages(userId, messageIds) {
+  const ids = [...new Set((messageIds || []).filter(Boolean))].slice(0, 200);
+  if (!ids.length) return new Map();
+  const { rows } = await query(
+    `SELECT ${CARD_COLS} ${CARD_FROM}
+      WHERE c.user_id = $1 AND c.dismissed_at IS NULL AND (c.message_id = ANY($2::uuid[]) OR c.message_ids && $2::uuid[])
+        AND (c.message_id IS NULL OR m.id IS NULL OR m.is_deleted = false)
+      ORDER BY c.event_at NULLS LAST, c.id LIMIT 1000`,
+    [userId, ids],
+  );
+  const out = new Map();
+  for (const r of rows) {
+    const card = toCard(r);
+    for (const id of new Set([card.messageId, ...card.messageIds])) {
+      if (!ids.includes(id)) continue;
+      if (!out.has(id)) out.set(id, []);
+      out.get(id).push(card);
+    }
+  }
+  return out;
+}
+
 export async function getCard(userId, id) {
   const { rows } = await query(`SELECT ${CARD_COLS} ${CARD_FROM} WHERE c.user_id = $1 AND c.id = $2`, [userId, id]);
   return rows[0] ? toCard(rows[0]) : null;

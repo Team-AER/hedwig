@@ -4,8 +4,9 @@ import { detectSchemaOrg } from './schemaOrg.js';
 import { detectIcs } from './ics.js';
 import { detectTracking } from './tracking.js';
 import { detectCodes } from './codes.js';
+import { detectOrders, dataSignal, needsFill } from './orders.js';
 
-export { detectSchemaOrg, detectIcs, detectTracking, detectCodes };
+export { detectSchemaOrg, detectIcs, detectTracking, detectCodes, detectOrders, dataSignal, needsFill };
 
 /** Calendar attachments listed on a message (text/calendar, application/ics, *.ics). Pure. */
 export function calendarAttachments(attachments, { maxBytes = 262144 } = {}) {
@@ -30,5 +31,8 @@ export function detectDeterministic(row, { icsParts = [], tz = 'UTC' } = {}) {
   const tracked = new Set(cards.filter((c) => c.kind === 'delivery').map((c) => String(c.fields.trackingNumber || '').toUpperCase()));
   for (const c of detectTracking(row, { tz })) if (!tracked.has(c.fields.trackingNumber)) cards.push(c);
   cards.push(...detectCodes(row));
+  // Order / booking / invoice references in plain mail, for kinds the markup did not already give.
+  const have = new Set(cards.map((c) => c.kind));
+  for (const c of detectOrders(row)) if (!have.has(c.kind)) cards.push(c);
   return cards;
 }

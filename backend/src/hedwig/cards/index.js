@@ -8,7 +8,7 @@ import { defineSchedule } from '../schedule.js';
 import { validTimezone } from '../insights/time.js';
 import { isUuid } from '../context/util.js';
 import { CARD_KINDS } from './kinds.js';
-import { listCards, getCard, patchCard, dismissCard } from './store.js';
+import { listCards, getCard, patchCard, dismissCard, cardsForMessages } from './store.js';
 import { ledger, LEDGERS } from './ledger.js';
 import { cardsToday } from './today.js';
 import { cardActions } from './actions.js';
@@ -67,6 +67,12 @@ export default {
     r.get('/cards/ledger/:kind', handle(async (req, res) => {
       if (!LEDGERS[req.params.kind]) return res.status(400).json({ error: `ledger must be one of ${Object.keys(LEDGERS).join(', ')}` });
       return ledger(req.session.userId, req.params.kind, { sort: req.query.sort, dir: req.query.dir, since: req.query.since, limit: req.query.limit });
+    }));
+
+    // --- v2 cards audit --- cards for list and bundle rows in one call: GET /cards/messages?ids=<uuid>,<uuid>
+    r.get('/cards/messages', handle(async (req) => {
+      const ids = String(req.query.ids || '').split(',').map((s) => s.trim()).filter(isUuid);
+      return { cards: Object.fromEntries(await cardsForMessages(req.session.userId, ids)) };
     }));
 
     r.get('/cards/message/:id', handle(async (req) => ({

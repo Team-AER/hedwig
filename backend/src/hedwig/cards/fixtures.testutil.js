@@ -111,3 +111,54 @@ export const BOOKING_CONFIRMATION = {
   from_name: 'Norwegian', from_email: 'booking@norwegian.example',
   body_text: 'Your booking is confirmed. Your confirmation code is XK7P2Q for flight DY604 on 2 October.',
 };
+
+// ── Shapes from the production mailbox (audit 2026-09-24): no schema.org markup anywhere. Names,
+// numbers and wording are paraphrased; the structure is what these senders send. ──
+
+export const SHOPIFY_ORDER = {
+  subject: 'Order #24176 confirmed',
+  from_name: 'REES52', from_email: 'store+61890429095@t.shopifyemail.com',
+  body_text: 'Thank you for your purchase!\nREES52 Order #24176\n\nWe\'re getting your order ready to be shipped. We will notify you when it has been sent.\n\nView your order ( https://rees52.example/61890429095/orders/14e59f43b3691e3cfaac0d401a0d8bca/authenticate?key=abc )\n\nOrder summary\nESP32 dev board × 2\nSubtotal ₹1,180.00\nShipping ₹60.00\nTotal ₹1,240.00 INR',
+};
+
+export const SHOPIFY_SHIPPED = {
+  subject: 'A shipment from order #24176 is on the way',
+  from_name: 'REES52', from_email: 'store+61890429095@t.shopifyemail.com',
+  body_text: 'Your order is on the way\nREES52 Order #24176\n\nYour order is on the way. Track your shipment to see the delivery status.\nView your order ( https://rees52.example/61890429095/orders/14e59f43 )\n\nBluedart tracking number: 90667948000\n( https://www.bluedart.example/trackdart?trackNo=90667948000 )',
+};
+
+export const INDIGO_TAX_INVOICE = {
+  subject: 'TaxInvoice - KL1262707AI06924',
+  from_name: '6EGSTInvoice@goindigo.in', from_email: '6egstinvoice@goindigo.in',
+  body_text: 'Dear IndiGo Customer, Please find attached the Tax Invoice/GST Credit Note for your booking. For more details on fare, change/cancellation charges, refunds, please refer to your IndiGo Itinerary also. Regards, Team IndiGo',
+};
+
+export const MMT_ETICKET = {
+  subject: 'E-Ticket for Your Flight Booking ID: NF2AMMAN26756695696',
+  from_name: 'MakeMyTrip', from_email: 'noreply@makemytrip.com',
+  body_text: 'Flight Confirmation Hi Prakhar, thank you for booking with us. Booking Confirmed Kochi - Bagdogra Round Trip, Fri, 31 Jul Booking ID:NF2AMMAN26756695696, (Booked on 27 Jul 2026) Booking Details Kochi-Bagdogra Fri, 31 Jul 2026 IndiGo 6E 539 PNR: HCYP2A Kochi COK 09:30 hrs Fri, Jul 31 Cochin International Airport Terminal 1',
+};
+
+export const BOOKMYSHOW_TICKETS = {
+  subject: 'Your Tickets',
+  from_name: 'BookMyShow', from_email: 'tickets@bookmyshow.email',
+  body_text: 'Your booking is confirmed! Booking ID TGAMAVT Spider-Man (4DX 3D) 07:50pm | Wed, 5 Aug, 2026 PVR: Lulu, Kochi ORDER SUMMARY TICKET AMOUNT Rs.1260.00 2 tickets Convenience fees Rs.162.84 DISCOUNT Rs.100.00 AMOUNT PAID Rs.1322.84 Booking Date & Time Sun, 12 Jul, 2026',
+};
+
+export const SHOP_PAYMENT_RECEIVED = {
+  subject: 'Order Payment Received',
+  from_name: 'MD Computers', from_email: 'info@mdcomputers.in',
+  body_text: 'Dear Customer, Order ID: 1530876 Thank you for placing the order with us. Please note that in order to process this order, there is a requirement for both side copies of your PAN card.',
+};
+
+export const NEWSLETTER_ORDER_WORDS = {
+  subject: 'How a dead IT company walked into the defence boom and an order from Reliance',
+  from_name: 'The Ken', from_email: 'info@the-ken.com',
+  body_text: 'In 2019 the company had 40 employees. Then came an order from a large conglomerate worth Rs 450 crore, and the order book grew 2026 times over the decade.',
+};
+
+export const SUPPLIER_PO = {
+  subject: 'RE: PO: 40496953 // PL: 282069315',
+  from_name: 'Pradeesha V', from_email: 'pradeesha.v@mouser.example',
+  body_text: 'Dear customer, please share the KYC documents for this purchase order so we can release the shipment.',
+};

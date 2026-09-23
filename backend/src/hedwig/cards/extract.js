@@ -8,12 +8,14 @@ import { guardedFetch, ATTACHMENT_JOB } from '../core/mailYield.js';
 import { runPrompt } from '../prompts/index.js';
 import { messageText } from '../text.js';
 import { validTimezone } from '../insights/time.js';
-import { detectDeterministic, calendarAttachments } from './detect/index.js';
+import { detectDeterministic, calendarAttachments, dataSignal, needsFill } from './detect/index.js';
 import { findSubscriptions } from './subscriptions.js';
 import { upsertCard } from './store.js';
-import { normFields, normField } from './kinds.js';
+import { normFields, normField, dedupeKey } from './kinds.js';
 
-export const CARDS_VERSION = 'cards-v1';
+// v2 (audit 2026-09-24): order/booking/invoice patterns, the Reflex fill for partial pattern cards and
+// for People/Records mail with data signals whatever its bundle. Bumping it rescans sorted mail.
+export const CARDS_VERSION = 'cards-v2';
 export const ICS_JOB = 'cards.fetchIcs';
 export const CARDS_JOB = 'cards.extract';
 
@@ -85,6 +87,26 @@ export function verifyModelCard(raw, { messageId, text, attachments, provenance,
   if (!REQUIRED[kind](fields)) return null;
   const confidence = Math.max(0, Math.min(1, Number(raw.confidence) || 0.6));
   return { kind, messageId, fields, sources, confidence, layer, provenance };
+}
+
+/** Which mail the Reflex model reads when the detectors found nothing (or only a partial pattern card). Pure. */
+export function reflexEligible(row, { bundles, signalReflex = true }) {
+  if (!row || row.stream === 'spam') return false;
+  if (row.stream === 'records' && row.bundle && bundles.has(row.bundle)) return true;
+  return signalReflex && ['records', 'people', 'screener'].includes(row.stream) && dataSignal(row);
+}
+
+const REF_FIELD = { receipt: 'orderNumber', invoice: 'invoiceNumber', travel: 'reference', delivery: 'trackingNumber' };
+
+/** The pattern card a model card is about: same kind, and the same reference when both state one. Pure. */
+export function twinOf(card, patternCards = []) {
+  const key = REF_FIELD[card.kind];
+  return (patternCards || []).find((p) => {
+    if (p.kind !== card.kind) return false;
+    const a = key ? String(p.fields?.[key] || '').replace(/\s+/g, '').toUpperCase() : '';
+    const b = key ? String(card.fields?.[key] || '').replace(/\s+/g, '').toUpperCase() : '';
+    return !a || !b || a === b;
+  }) || null;
 }
 
 // ── The job ─────────────────────────────────────────────────────────────────
@@ -166,14 +188,16 @@ export async function runCardsJob({ userId, messageIds = [] }, { now = new Date(
       if (await upsertCard(userId, c, { messageDate: row.date })) { stored++; if (c.kind === 'receipt' || c.kind === 'invoice') money = true; }
     }
     found.set(row.id, cards.length);
-    if (!cards.length) candidates.push(row);
+    // The model reads mail with nothing deterministic, and fills pattern cards missing their figure.
+    if (!cards.length || needsFill(cards)) { row.patternCards = cards; candidates.push(row); }
   }
 
-  // Reflex for sorted Records mail with nothing deterministic, newest first, rate-limited per job.
+  // Reflex, newest first, rate-limited per job: Records mail in a data bundle, and People/Records/
+  // Screener mail whose subject or sender says it is an order, booking, invoice, ticket or delivery.
   const bundles = new Set(Array.isArray(cfg['cards.reflexBundles']) ? cfg['cards.reflexBundles'] : []);
   const maxAge = cfg['cards.reflexMaxAgeDays'] * 86400_000;
   const eligible = candidates
-    .filter((r) => r.bundle && bundles.has(r.bundle) && r.stream !== 'spam' && (!maxAge || new Date(now) - new Date(r.date) <= maxAge))
+    .filter((r) => reflexEligible(r, { bundles, signalReflex: cfg['cards.signalReflex'] !== false }) && (!maxAge || new Date(now) - new Date(r.date) <= maxAge))
     .sort((a, b) => new Date(b.date) - new Date(a.date));
   const size = cfg['cards.batchSize'];
   const allowed = cfg['llm.baseUrl'] ? cfg['cards.reflexPerJob'] * size : 0;
@@ -221,12 +245,14 @@ export async function runCardsJob({ userId, messageIds = [] }, { now = new Date(
       for (const raw of item.cards || []) {
         const card = verifyModelCard(raw, {
           messageId: v.row.id, text: `${v.row.subject || ''}\n${v.text}`, attachments: v.attachments, provenance,
-          layer: res.provenance.escalated ? 'reasoning' : 'reflex',
+          layer: (res.provenance.servedTier || (res.provenance.escalated ? 'reasoning' : 'reflex')) === 'reasoning' ? 'reasoning' : 'reflex',
         });
         if (!card) continue;
+        const twin = twinOf(card, v.row.patternCards);
+        if (twin) card.dedupeKey = dedupeKey(twin); // fill the pattern card rather than make a second one
         if (await upsertCard(userId, card, { messageDate: v.row.date })) { n++; stored++; if (card.kind === 'receipt' || card.kind === 'invoice') money = true; }
       }
-      found.set(v.row.id, n);
+      found.set(v.row.id, (found.get(v.row.id) || 0) + n);
     }
     batch.forEach((r) => reflexed.add(r.id));
   }

@@ -17,8 +17,12 @@ describe.skipIf(!process.env.HEDWIG_IT)('working the seeded demo mailbox', () =>
   const gw = mockGateway();
   const THREAD = `<work-it-${randomUUID()}@hedwig.test>`;
   const WAIT_THREAD = `<work-it-wait-${randomUUID()}@hedwig.test>`;
+  const OLD_THREAD = `<work-it-old-${randomUUID()}@hedwig.test>`;
+  const EAGER_THREAD = `<work-it-eager-${randomUUID()}@hedwig.test>`;
+  const LATE_THREAD = `<work-it-late-${randomUUID()}@hedwig.test>`;
+  const ASK_THREAD = `<work-it-ask-${randomUUID()}@hedwig.test>`;
   const inserted = [];
-  let query; let pool; let pipeline; let lists; let thread; let draft; let waiting; let guard; let sortService; let workModule;
+  let query; let pool; let pipeline; let lists; let thread; let draft; let waiting; let guard; let sortService; let workModule; let summaries; let needs;
   let userId; let account; let server; let base;
 
   async function addMessage(over) {
@@ -41,6 +45,9 @@ describe.skipIf(!process.env.HEDWIG_IT)('working the seeded demo mailbox', () =>
   }
 
   async function clean() {
+    await query('DELETE FROM hedwig_work_tldr WHERE user_id = $1', [userId]);
+    await query('DELETE FROM hedwig_work_needs WHERE user_id = $1', [userId]);
+    await query("DELETE FROM hedwig_jobs WHERE kind = 'work.summarise' AND user_id = $1", [userId]);
     await query('DELETE FROM hedwig_work_items WHERE user_id = $1', [userId]);
     await query('DELETE FROM hedwig_work_stories WHERE user_id = $1', [userId]);
     await query('DELETE FROM hedwig_work_waiting WHERE user_id = $1', [userId]);
@@ -55,9 +62,16 @@ describe.skipIf(!process.env.HEDWIG_IT)('working the seeded demo mailbox', () =>
     process.env.HEDWIG_LLM_MODELS_LONG = QWEN;
     process.env.HEDWIG_LLM_FALLBACK_MODEL = '';
     gw.install();
-    gw.on('work.story', (req) => {
-      const n = [...req.messages[1].content.matchAll(/^\[(\d+)\] From/gm)].map((m) => Number(m[1]));
-      return { sentences: [{ text: 'Jo wants you to confirm Thursday.', cites: [n[n.length - 1]] }], timeline: [{ n: n[n.length - 1], kind: 'ask', line: 'Jo asks about Thursday' }] };
+    // work.summarise: every item answered; a thread cites its own last email.
+    gw.on('work.summarise', (req) => {
+      const parts = req.messages[1].content.split('=== Item ').slice(1);
+      return { items: parts.map((part) => {
+        const [, id, kind] = /^(\w+) · kind: (\w+)/.exec(part);
+        const n = [...part.matchAll(/^\[(\d+)\] From/gm)].map((m) => Number(m[1]));
+        return kind === 'thread'
+          ? { id, tldr: 'Jo is waiting on Thursday', sentences: [{ text: 'Jo wants you to confirm Thursday.', cites: [n[n.length - 1]] }], timeline: [{ n: n[n.length - 1], kind: 'ask', line: 'Jo asks about Thursday' }] }
+          : { id, tldr: `One line about ${/subject: (.*)/.exec(part)[1].slice(0, 40)}`, sentences: [], timeline: [] };
+      }) };
     });
     gw.on('work.quickReplies', { fits: true, replies: ['Thursday works.', 'Can we do Friday instead?'] });
     gw.on('work.draft', { draft: 'Hi Jo,\n\nThursday works for me.\n\nCheers,\nPrakhar' });
@@ -70,6 +84,8 @@ describe.skipIf(!process.env.HEDWIG_IT)('working the seeded demo mailbox', () =>
     draft = await import('./draft.js');
     waiting = await import('./waiting.js');
     guard = await import('./sendguard.js');
+    summaries = await import('./summaries.js');
+    needs = await import('./needs.js');
     sortService = await import('../sort/service.js');
     workModule = (await import('./index.js')).default;
     const { invalidateConfigCache } = await import('../config.js');
@@ -88,6 +104,11 @@ describe.skipIf(!process.env.HEDWIG_IT)('working the seeded demo mailbox', () =>
     await addMessage({ subject: 'Thursday?', fromName: 'Jo Park', fromEmail: 'jo@example.org', to: ['prakhar.demo@gmail.com'], date: new Date(now - 2 * DAY), body: 'Hi! Are we still on for Thursday at 7? Can you confirm?', thread: THREAD, stream: 'people', needsYou: true });
     // A thread the owner is waiting on: they asked five days ago, nobody answered.
     await addMessage({ folder: 'Sent', subject: 'Trip photos', fromName: 'Prakhar', fromEmail: 'prakhar.demo@gmail.com', to: ['jo@example.org'], date: new Date(now - 5 * DAY), body: 'Hi Jo, could you send me the trip photos when you have a moment?', read: true, thread: WAIT_THREAD, stream: 'people', own: true });
+
+    // An older People thread, so sweeping "before yesterday" has something to mark without depending on other suites' sort rows.
+    await addMessage({ subject: 'Book club', fromName: 'Nina Das', fromEmail: 'nina@example.org', to: ['prakhar.demo@gmail.com'], date: new Date(now - 2 * 3600_000), body: 'Book club moves to the café this month.', thread: `<work-it-nina-${randomUUID()}>`, stream: 'people', read: true });
+    await addMessage({ subject: 'Parking permit', fromName: 'Omar Haddad', fromEmail: 'omar@example.org', to: ['prakhar.demo@gmail.com'], date: new Date(now - 5 * 3600_000), body: 'Your parking permit renewal went through.', thread: `<work-it-omar-${randomUUID()}>`, stream: 'people', read: true });
+    await addMessage({ subject: 'Hall booking', fromName: 'Sam Lee', fromEmail: 'sam@example.org', to: ['prakhar.demo@gmail.com', 'club@example.org'], date: new Date(now - 4 * DAY), body: 'FYI, the hall is booked for the club night.', thread: OLD_THREAD, stream: 'people', read: true });
 
     const app = express();
     app.use(express.json());
@@ -176,10 +197,11 @@ describe.skipIf(!process.env.HEDWIG_IT)('working the seeded demo mailbox', () =>
     expect(first.story).toEqual({ text: 'Jo wants you to confirm Thursday [1].', citations: [{ n: 1, messageId: msgs[msgs.length - 1].id }] });
     expect(first.quickReplies).toEqual(['Thursday works.', 'Can we do Friday instead?']);
     expect(first.timeline.map((e) => e.messageId)).toEqual(msgs.map((m) => m.id));
-    expect(first.provenance.story).toMatchObject({ promptId: 'work.story', model: GEMMA, aiCallId: expect.anything() });
+    expect(first.provenance.story).toMatchObject({ promptId: 'work.summarise', model: GEMMA, aiCallId: expect.anything() });
+    expect(first.storyMeta).toMatchObject({ source: 'open', lighter: false, model: GEMMA });
     const again = await thread.threadStory(userId, THREAD);
     expect(again.cached).toBe(true);
-    expect(gw.callsFor('work.story')).toHaveLength(1);
+    expect(gw.callsFor('work.summarise')).toHaveLength(1);
     const { rows: [row] } = await query('SELECT up_to_message_id, message_count FROM hedwig_work_stories WHERE user_id = $1 AND thread_key = $2', [userId, THREAD]);
     expect(row).toEqual({ up_to_message_id: msgs[msgs.length - 1].id, message_count: msgs.length });
   });
@@ -220,6 +242,92 @@ describe.skipIf(!process.env.HEDWIG_IT)('working the seeded demo mailbox', () =>
     expect(out.warnings.map((w) => w.kind)).toEqual(['missing_attachment', 'wrong_recipient']);
   });
 
+  it('writes stories and TL;DRs eagerly: the pipeline queues the job, the job fills the gaps with provenance', async () => {
+    const now = Date.now();
+    await addMessage({ subject: 'Venue for the offsite', fromName: 'Maya Rao', fromEmail: 'maya@example.org', to: ['prakhar.demo@gmail.com'], date: new Date(now - 3 * 3600_000), body: 'Two options for the offsite venue: the boathouse or the old library. Which do you prefer?', thread: EAGER_THREAD, stream: 'people' });
+    const secondId = await addMessage({ subject: 'Re: Venue for the offsite', fromName: 'Maya Rao', fromEmail: 'maya@example.org', to: ['prakhar.demo@gmail.com'], date: new Date(now - 3600_000), body: 'The library quoted 400 for the day. Can you decide by Friday?', thread: EAGER_THREAD, stream: 'people' });
+    const { rows } = await query(
+      `SELECT ${pipeline.MESSAGE_COLUMNS} FROM messages m JOIN email_accounts a ON a.id = m.account_id
+         LEFT JOIN folders f ON f.account_id = m.account_id AND f.path = m.folder WHERE m.id = $1`,
+      [secondId],
+    );
+    await pipeline.runSteps(rows);
+    const { rows: jobs } = await query("SELECT payload FROM hedwig_jobs WHERE kind = 'work.summarise' AND dedupe_key = $1 AND done_at IS NULL", [`work.summarise:${userId}`]);
+    expect(jobs).toEqual([{ payload: { userId } }]);
+
+    const status0 = await summaries.summaryStatus(userId);
+    expect(status0.stories.missing).toBeGreaterThan(0);
+    expect(status0.tldrs.missing).toBeGreaterThan(0);
+    const res = await summaries.runSummariseJob({ userId }, { id: 1 });
+    expect(res.status).toBe('done');
+    const { rows: [story] } = await query('SELECT story, message_count, prompt_id, prompt_version, model, ai_call_id, tier, lighter, source FROM hedwig_work_stories WHERE user_id = $1 AND thread_key = $2', [userId, EAGER_THREAD]);
+    expect(story).toMatchObject({ message_count: 2, prompt_id: 'work.summarise', model: GEMMA, tier: 'reflex', lighter: false, source: 'eager', ai_call_id: expect.anything() });
+    expect(story.story.story.citations).toEqual([{ n: 1, messageId: secondId }]);
+    expect(story.story.tldr).toBe('Jo is waiting on Thursday');
+    const { rows: [tl] } = await query('SELECT text, prompt_id, model, tier, ai_call_id FROM hedwig_work_tldr WHERE message_id = $1', [secondId]);
+    expect(tl).toMatchObject({ text: 'One line about Re: Venue for the offsite', prompt_id: 'work.summarise', model: GEMMA, tier: 'reflex', ai_call_id: expect.anything() });
+    // Four threads per call at most, six messages per call at most.
+    for (const c of gw.callsFor('work.summarise')) {
+      const kinds = [...c.text.matchAll(/kind: (\w+)/g)].map((m) => m[1]);
+      expect(kinds.filter((k) => k === 'thread').length).toBeLessThanOrEqual(4);
+      expect(kinds.filter((k) => k === 'message').length).toBeLessThanOrEqual(6);
+    }
+    const status1 = await summaries.summaryStatus(userId);
+    expect(status1.stories.missing).toBe(0);
+    expect(status1.tldrs.missing).toBe(0);
+
+    // People rows carry the TL;DR; the opened thread reuses the eager story and adds quick replies.
+    expect((await people()).find((i) => i.threadId === EAGER_THREAD).tldr).toMatchObject({ text: 'One line about Re: Venue for the offsite', model: GEMMA });
+    const calls = gw.callsFor('work.summarise').length;
+    const opened = await thread.threadStory(userId, EAGER_THREAD);
+    expect(opened).toMatchObject({ cached: true, storyMeta: { source: 'eager' }, quickReplies: ['Thursday works.', 'Can we do Friday instead?'] });
+    expect(opened.messageTldrs[secondId]).toBe('One line about Re: Venue for the offsite');
+    expect(gw.callsFor('work.summarise')).toHaveLength(calls);
+    // A second run finds nothing to do.
+    expect((await summaries.runSummariseJob({ userId })).note).toMatch(/^0 stories .*0 TL;DRs/);
+  });
+
+  it('gives no TL;DR to list mail that sorting (not the user) left in People', async () => {
+    const id = await addMessage({ subject: 'The daily issue', fromName: 'The Ken', fromEmail: 'info@the-ken.example', to: ['prakhar.demo@gmail.com'], date: new Date(Date.now() - 3600_000), body: 'Today: a long read about retail.', thread: `<work-it-list-${randomUUID()}>`, stream: 'people' });
+    await query("UPDATE messages SET list_unsubscribe = '<mailto:u@the-ken.example>' WHERE id = $1", [id]);
+    const { getConfig } = await import('../config.js');
+    const cfg = await getConfig(userId);
+    const gapIds = async () => (await summaries.tldrGaps(userId, cfg, 2000, { promptVersion: 'none' })).map((r) => r.id);
+    expect(await gapIds()).not.toContain(id);
+    // The user kept this list in People themselves: then it gets one.
+    await query("UPDATE hedwig_sort SET layer = 'user' WHERE message_id = $1", [id]);
+    expect(await gapIds()).toContain(id);
+  });
+
+  it('derives "waiting for your reply" and settles it when the owner replies', async () => {
+    const lateId = await addMessage({ subject: 'Invoice question', fromName: 'Ravi Menon', fromEmail: 'ravi@example.org', to: ['prakhar.demo@gmail.com'], date: new Date(Date.now() - 3 * DAY - 3600_000), body: 'Could you check the amount on the September invoice?', thread: LATE_THREAD, stream: 'people' });
+    const out = await needs.deriveNeeds(userId);
+    expect(out.open).toBeGreaterThanOrEqual(1);
+    const { rows } = await query('SELECT kind, reason, message_id FROM hedwig_work_needs WHERE user_id = $1 AND thread_key = $2 AND resolved_at IS NULL', [userId, LATE_THREAD]);
+    expect(rows).toEqual([{ kind: 'reply_overdue', reason: 'Waiting 3 days for your reply', message_id: lateId }]);
+    // Jo's thread (answered today) and the owner's own ask are not overdue.
+    const { rows: others } = await query('SELECT thread_key FROM hedwig_work_needs WHERE user_id = $1 AND resolved_at IS NULL AND thread_key = ANY($2::text[])', [userId, [THREAD, WAIT_THREAD]]);
+    expect(others).toEqual([]);
+    expect((await people()).find((i) => i.threadId === LATE_THREAD).workNeeds).toMatchObject({ kind: 'reply_overdue', reason: 'Waiting 3 days for your reply' });
+    await lists.applyMail([{ user_id: userId, thread_key: LATE_THREAD, date: new Date(), is_outgoing: true, from_email: 'prakhar.demo@gmail.com' }]);
+    const { rows: after } = await query('SELECT resolved_reason FROM hedwig_work_needs WHERE user_id = $1 AND thread_key = $2', [userId, LATE_THREAD]);
+    expect(after).toEqual([{ resolved_reason: 'replied' }]);
+  });
+
+  it('finds Waiting On from sent mail through the triage sweep', async () => {
+    await addMessage({ folder: 'Sent', subject: 'Contract', fromName: 'Prakhar', fromEmail: 'prakhar.demo@gmail.com', to: ['lee@example.org'], date: new Date(Date.now() - 6 * DAY), body: 'Hi Lee, can you send the signed contract?', read: true, thread: ASK_THREAD });
+    // The worker's triage.waitingOn schedule (every 15 min) runs this for users with an enabled account;
+    // the seeded demo accounts are disabled (no IMAP), so call the scan it runs directly.
+    const { scanWaitingOn } = await import('../triage/resolution.js');
+    const owner = await (await import('./util.js')).ownerOf(userId);
+    const { rows: before } = await query("SELECT message_id FROM hedwig_triage WHERE user_id = $1 AND category = 'waiting_on'", [userId]);
+    expect(await scanWaitingOn(userId, new Set(owner.addresses))).toBeGreaterThan(0);
+    const list = await waiting.listWaiting(userId);
+    expect(list.find((w) => w.threadId === ASK_THREAD)).toMatchObject({ source: 'triage', who: 'lee@example.org', subject: 'Contract', days: 6 });
+    // Leave the shared database as other suites expect it.
+    await query("DELETE FROM hedwig_triage WHERE user_id = $1 AND category = 'waiting_on' AND NOT (message_id = ANY($2::uuid[]))", [userId, before.map((r) => r.message_id)]);
+  });
+
   it('serves the routes the frontend calls', async () => {
     const get = async (p) => { const r = await fetch(`${base}${p}`); return { status: r.status, body: await r.json() }; };
     const post = async (p, body, method = 'POST') => {
@@ -239,5 +347,12 @@ describe.skipIf(!process.env.HEDWIG_IT)('working the seeded demo mailbox', () =>
     expect(Array.isArray((await get('/work/waiting')).body)).toBe(true);
     expect((await post('/work/draft', { tone: 'loud', text: 'x' })).status).toBe(400);
     expect((await post('/work/sweep', {})).status).toBe(400);
+    const { rows: [m] } = await query('SELECT message_id FROM hedwig_work_tldr WHERE user_id = $1 AND text IS NOT NULL LIMIT 1', [userId]);
+    const t = await get(`/work/tldr?ids=${m.message_id},not-a-uuid`);
+    expect(t.body.tldr[m.message_id]).toMatchObject({ text: expect.any(String), promptId: 'work.summarise' });
+    expect((await get(`/work/message/${m.message_id}/tldr`)).body).toMatchObject({ messageId: m.message_id, tldr: { text: expect.any(String) }, computed: false });
+    expect((await get('/work/message/nope/tldr')).status).toBe(400);
+    expect((await get('/work/summaries/status')).body).toMatchObject({ eager: true, stories: { stories: expect.any(Number) }, tldrs: { tldrs: expect.any(Number) } });
+    expect(Array.isArray((await get('/work/needs')).body.items)).toBe(true);
   });
 });

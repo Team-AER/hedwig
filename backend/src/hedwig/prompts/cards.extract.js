@@ -1,5 +1,7 @@
 // cards.extract — Reflex extraction of Records cards (stream G, cards/extract.js) for mail sorted into
-// Purchases, Finance, Travel, Deliveries or Calendar that no deterministic detector understood.
+// Purchases, Finance, Travel, Deliveries or Calendar, and People/Records mail whose subject or sender
+// says it is an order, booking, invoice, ticket or delivery, that no deterministic detector fully
+// understood (a partial pattern card is filled, not duplicated).
 // Batched (cards.batchSize messages per call); every field must come with the sentence it was read
 // from, and cards/extract.js drops any field whose quote is not found in the message.
 const str = { type: ['string', 'null'], maxLength: 300 };
