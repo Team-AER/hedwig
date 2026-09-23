@@ -5,7 +5,7 @@ import { defineJob, enqueue } from '../jobs.js';
 import { defineSchedule } from '../schedule.js';
 import { getState, setState } from '../state.js';
 import { overview, listCards, generateCards, latestBriefing, listBriefings, generateBriefing, dismissCard } from './service.js';
-import { generateBriefing as generateStored, hasScheduled } from './briefing.js';
+import { generateBriefing as generateStored, hasScheduled, compileBrief } from './briefing.js';
 import { validTimezone, zonedParts, localDay, parseClock } from './time.js';
 import { recentAutomationResults } from './store.js';
 
@@ -110,6 +110,11 @@ export default {
 
     r.post('/insights/briefing/generate', handle(async (req, res) => {
       res.json(await generateBriefing(req.session.userId));
+    }));
+
+    // The Brief screen (v2): stored data only, never a model call on this path.
+    r.get('/insights/brief/today', handle(async (req, res) => {
+      res.json(await compileBrief(req.session.userId));
     }));
   },
 };

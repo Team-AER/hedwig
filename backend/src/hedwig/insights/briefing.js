@@ -5,6 +5,7 @@
 import { query } from '../../services/db.js';
 import { getConfig } from '../config.js';
 import { chat } from '../llm.js';
+import { stripThinking } from '../prompts/think.js';
 import { ADDRS_CTE, userMessagesCte } from './scope.js';
 import { listCards } from './cards.js';
 import { responseRows } from './overview.js';
@@ -41,13 +42,17 @@ function liteFromTriageItem(item) {
   if (!m?.id) return null;
   return {
     id: m.id, from_name: m.from_name, from_email: m.from_email, subject: m.subject, date: m.date,
-    snippet: m.snippet, to: m.to || null, reason: item?.triage?.reason_label || null,
+    snippet: m.snippet, to: m.to || null, reason: item?.triage?.reason_label || null, thread_key: m.thread_key || null,
   };
 }
 
+// One shared import: the Brief asks for needs-you and waiting-on concurrently.
+let triageService = null;
+
 async function fromTriage(userId, view, limit) {
   try {
-    const svc = await import('../triage/service.js');
+    triageService ||= import('../triage/service.js').catch((err) => { triageService = null; throw err; });
+    const svc = await triageService;
     if (typeof svc.listTriage !== 'function') return null;
     const res = await svc.listTriage(userId, { view, limit });
     const items = Array.isArray(res) ? res : res?.items;
@@ -61,7 +66,7 @@ async function fromTriage(userId, view, limit) {
 async function needsYouFallback(userId, limit) {
   const { rows } = await query(
     `WITH ${ADDRS_CTE}, ${userMessagesCte("NOW() - INTERVAL '7 days'", { extraColumns: ', m.snippet' })}
-     SELECT id, from_name, from_email, subject, date, snippet FROM um
+     SELECT id, from_name, from_email, subject, date, snippet, thread_key FROM um
       WHERE NOT outgoing AND NOT bulk AND NOT is_read
         AND EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(to_addresses, '[]'::jsonb)) t
                      WHERE lower(COALESCE(t->>'address', t->>'email', t #>> '{}')) IN (SELECT e FROM addrs))
@@ -75,7 +80,7 @@ async function waitingOnFallback(userId, limit, minDays) {
   const { rows } = await query(
     `WITH ${ADDRS_CTE}, ${userMessagesCte("NOW() - INTERVAL '30 days'", { extraColumns: ', m.snippet' })},
      latest AS (SELECT DISTINCT ON (account_id, thread_key) * FROM um WHERE thread_key IS NOT NULL ORDER BY account_id, thread_key, date DESC)
-     SELECT id, from_name, from_email, subject, date, snippet, to_addresses FROM latest
+     SELECT id, from_name, from_email, subject, date, snippet, to_addresses, thread_key FROM latest
       WHERE outgoing AND date < NOW() - make_interval(days => $3::int) AND (subject LIKE '%?%' OR snippet LIKE '%?%')
       ORDER BY date DESC LIMIT $2`,
     [userId, limit, minDays],
@@ -297,9 +302,7 @@ export function sanitizeCitations(text, count) {
   return { text: cleaned.replace(/[ \t]+\n/g, '\n').trim(), cited: [...cited].sort((a, b) => a - b) };
 }
 
-export function stripThinking(text) {
-  return String(text || '').replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/^\s*<think>[\s\S]*$/i, '').trim();
-}
+export { stripThinking };
 
 async function writeWithModel(userId, g) {
   const res = await chat({
@@ -408,3 +411,192 @@ export async function hasScheduled(userId, kind, day) {
   return rows.length > 0;
 }
 
+
+// ── Brief screen (v2) ─────────────────────────────────────────────────────────
+// GET /insights/brief/today. Compiled from stored data only: no model call on the request path.
+// The headline is a template, or the opening line of today's model-written briefing when the
+// nightly run produced one in the last 12 hours.
+
+const NUMBER_WORDS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
+const numberWord = (n) => (n >= 0 && n < NUMBER_WORDS.length ? NUMBER_WORDS[n] : String(n));
+const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+
+/** "Three things need you. One deadline today." Pure. */
+export function briefHeadline({ needsYou = 0, deadlinesToday = 0, waitingOn = 0 } = {}) {
+  const first = needsYou === 0 ? 'Nothing needs you.'
+    : needsYou === 1 ? 'One thing needs you.' : `${cap(numberWord(needsYou))} things need you.`;
+  let second = '';
+  if (deadlinesToday > 0) second = `${cap(numberWord(deadlinesToday))} deadline${deadlinesToday === 1 ? '' : 's'} today.`;
+  else if (waitingOn > 0) second = `You're waiting on ${numberWord(waitingOn)} ${waitingOn === 1 ? 'reply' : 'replies'}.`;
+  return second ? `${first} ${second}` : first;
+}
+
+/** The opening line of a model-written briefing, cleaned for use as a headline. Pure. */
+export function headlineFromBriefing(body) {
+  const line = String(body || '').split('\n').map((l) => l.trim()).find((l) => l && !l.startsWith('#'));
+  if (!line) return null;
+  const clean = line.replace(/\[\d+\]/g, '').replace(/[*_`#]/g, '').replace(/^[-•]\s*/, '').replace(/\s+/g, ' ').trim();
+  return clean.length >= 10 && clean.length <= 160 ? clean : null;
+}
+
+/** "Today", "Tomorrow", "Fri 26", "Overdue" in the user's timezone. Pure. */
+export function dueFigure(date, tz, now = Date.now()) {
+  const day = (t) => new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(t));
+  const due = new Date(date).getTime();
+  if (day(due) === day(now)) return 'Today';
+  if (due < now) return 'Overdue';
+  if (day(due) === day(now + DAY)) return 'Tomorrow';
+  return new Intl.DateTimeFormat('en-GB', { timeZone: tz, weekday: 'short', day: 'numeric' }).format(new Date(due));
+}
+
+async function relationExists(name) {
+  const { rows } = await query('SELECT to_regclass($1) AS t', [name]);
+  return Boolean(rows[0]?.t);
+}
+
+const firstSentence = (s, max = 140) => {
+  const one = oneLine(s, 400);
+  const m = one.match(/^(.{20,}?[.!?])\s/);
+  return (m ? m[1] : one).slice(0, max);
+};
+
+async function briefNeedsYou(userId, hasSort) {
+  if (hasSort) {
+    const { rows } = await query(
+      `SELECT s.message_id AS id, m.thread_key, m.from_name, m.from_email, m.subject, m.date, COALESCE(s.needs_you_reason, s.reason) AS reason
+         FROM hedwig_sort s JOIN messages m ON m.id = s.message_id JOIN email_accounts a ON a.id = m.account_id AND a.user_id = $1
+        WHERE s.user_id = $1 AND s.needs_you AND NOT m.is_deleted AND m.date > NOW() - INTERVAL '14 days'
+        ORDER BY m.date DESC LIMIT 8`,
+      [userId],
+    );
+    return rows;
+  }
+  return (await fromTriage(userId, 'needs_you', 8)) ?? needsYouFallback(userId, 8);
+}
+
+async function recipientsOf(userId, ids) {
+  if (!ids.length) return new Map();
+  const { rows } = await query(
+    `SELECT m.id, m.to_addresses FROM messages m JOIN email_accounts a ON a.id = m.account_id AND a.user_id = $1 WHERE m.id = ANY($2::uuid[])`,
+    [userId, ids],
+  );
+  return new Map(rows.map((r) => {
+    const first = Array.isArray(r.to_addresses) ? r.to_addresses[0] : null;
+    return [r.id, first ? (first.name || first.address || first.email || null) : null];
+  }));
+}
+
+async function briefReading(userId, hasSort) {
+  const { rows } = await query(
+    `SELECT m.id, m.subject, m.snippet, m.from_name, m.from_email,
+            COALESCE(ss.opened::real / NULLIF(ss.received, 0), 0) AS open_rate
+       FROM messages m
+       JOIN email_accounts a ON a.id = m.account_id AND a.user_id = $1
+       LEFT JOIN hedwig_sender_stats ss ON ss.user_id = $1 AND ss.sender_email = lower(m.from_email)
+       ${hasSort ? 'JOIN hedwig_sort s ON s.message_id = m.id AND s.user_id = $1' : ''}
+      WHERE NOT m.is_deleted AND NOT m.is_read AND m.date > NOW() - INTERVAL '36 hours'
+        AND ${hasSort ? "s.stream = 'reading'" : '(COALESCE(m.is_bulk, false) OR m.list_unsubscribe IS NOT NULL)'}
+      ORDER BY open_rate DESC, m.date DESC LIMIT 3`,
+    [userId],
+  );
+  return rows.map((r) => ({ title: oneLine(r.subject || '(no subject)', 120), line: firstSentence(r.snippet), messageId: r.id }));
+}
+
+// The index's own attachment cards (indexer/retrieve.js), which leave out spam and trash.
+async function briefAttachments(userId) {
+  const { attachmentCards } = await import('../indexer/retrieve.js');
+  const cards = await attachmentCards(userId, { days: 2, limit: 3 });
+  return cards.map((c) => ({ kind: 'attachment', figure: oneLine(c.filename || 'Attachment', 40), caption: firstSentence(c.excerpt, 100), messageId: c.messageId }));
+}
+
+/** Sorting's "Hedwig today" counts: its own today() when installed, else the same counts from its log. */
+async function briefToday(userId) {
+  try {
+    const sort = await import('../sort/service.js');
+    if (typeof sort.today === 'function') {
+      const t = await sort.today(userId);
+      return { screened: t.screened, bundled: t.bundled, rescued: t.rescued, blocked: t.blocked };
+    }
+  } catch (err) {
+    if (err?.code !== 'ERR_MODULE_NOT_FOUND') console.warn('[hedwig] brief: sort today() unavailable:', err.message);
+  }
+  const { rows } = await query(
+    `SELECT COUNT(*) FILTER (WHERE action ILIKE 'screen%' OR action ILIKE 'auto_screen%')::int AS screened,
+            COUNT(*) FILTER (WHERE action ILIKE 'bundle%')::int AS bundled,
+            COUNT(*) FILTER (WHERE action ILIKE 'rescue%')::int AS rescued,
+            COUNT(*) FILTER (WHERE action ILIKE 'block%')::int AS blocked
+       FROM hedwig_sort_log WHERE user_id = $1 AND undone_at IS NULL AND created_at >= date_trunc('day', NOW())`,
+    [userId],
+  );
+  return rows[0] || { screened: 0, bundled: 0, rescued: 0, blocked: 0 };
+}
+
+/** "Today, from your Records" (cards module): parcels, bills, events, codes. Empty when cards are not installed. */
+async function briefRecords(userId, now) {
+  try {
+    const { cardsToday } = await import('../cards/service.js');
+    return await cardsToday(userId, { now });
+  } catch (err) {
+    if (err?.code !== 'ERR_MODULE_NOT_FOUND') console.warn('[hedwig] brief: record cards unavailable:', err.message);
+    return [];
+  }
+}
+
+async function briefQuestions(userId) {
+  try {
+    const { listOpenQuestions } = await import('../labels/questions.js');
+    return await listOpenQuestions(userId);
+  } catch (err) {
+    console.warn('[hedwig] brief: questions unavailable:', err.message);
+    return [];
+  }
+}
+
+/** Everything the Brief screen shows, from stored data. */
+export async function compileBrief(userId, { now = Date.now() } = {}) {
+  const cfg = await getConfig(userId);
+  const tz = validTimezone(cfg['insights.timezone']);
+  const [hasSort, hasSortLog, hasAttachments] = await Promise.all(['hedwig_sort', 'hedwig_sort_log', 'hedwig_attachment_text'].map(relationExists));
+  const [needs, waiting, commitments, reading, attachments, today, questions, latest, records] = await Promise.all([
+    briefNeedsYou(userId, hasSort),
+    fromTriage(userId, 'waiting_on', 6).then((r) => r ?? waitingOnFallback(userId, 6, cfg['triage.waitingOnDays'])),
+    commitmentsDue(userId, 7, cfg['context.extractMinConfidence']),
+    briefReading(userId, hasSort),
+    hasAttachments ? briefAttachments(userId) : [],
+    hasSortLog ? briefToday(userId) : { screened: 0, bundled: 0, rescued: 0, blocked: 0 },
+    briefQuestions(userId),
+    latestBriefing(userId),
+    briefRecords(userId, now),
+  ]);
+  const recipients = await recipientsOf(userId, waiting.filter((m) => !m.to).map((m) => m.id));
+  const nudge = Boolean(cfg['features.agent'] && cfg['llm.baseUrl']);
+  const deadlineCards = commitments.map((c) => ({
+    kind: 'deadline',
+    figure: dueFigure(c.due_at, tz, now),
+    caption: oneLine(`${c.what}${c.counterparty ? ` · ${c.counterparty}` : ''}`, 120),
+    messageId: c.source_message_id || null,
+    dueAt: c.due_at,
+  }));
+  const todayKey = (t) => new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(new Date(t));
+  const deadlinesToday = commitments.filter((c) => todayKey(c.due_at) === todayKey(now)).length;
+  const counts = { needsYou: needs.length, deadlinesToday, waitingOn: waiting.length };
+  const template = briefHeadline(counts);
+  const fresh = latest && latest.data?.generated_by === 'model' && now - new Date(latest.created_at).getTime() < 12 * HOUR;
+  const cached = fresh ? headlineFromBriefing(latest.body) : null;
+  return {
+    headline: cached || template,
+    headlineSource: cached ? 'briefing' : 'template',
+    generatedAt: new Date(now).toISOString(),
+    needsYou: needs.map((m) => ({
+      threadId: m.thread_key || null, messageId: m.id, who: person(m), subject: m.subject || '(no subject)', reason: m.reason || null, at: m.date,
+    })),
+    waitingOn: waiting.map((m) => ({
+      threadId: m.thread_key || null, messageId: m.id, who: m.to || recipients.get(m.id) || null, subject: m.subject || '(no subject)',
+      reason: m.reason || null, at: m.date, askedAt: m.date, nudgeDraftAvailable: nudge,
+    })),
+    cards: [...deadlineCards, ...records, ...attachments],
+    reading,
+    questions,
+    today,
+  };
+}
