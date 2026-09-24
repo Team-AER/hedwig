@@ -1716,7 +1716,8 @@
         "records": "Heute, aus deinen Belegen",
         "waiting": "Du wartest auf andere",
         "file": "Datei",
-        "seeAll": "Alle ansehen"
+        "seeAll": "Alle ansehen",
+        "summary": "Heute in Kürze"
       },
       "cmd": {
         "allMail": "Alle Mails (die klassische Liste)",
@@ -1762,10 +1763,7 @@
         "empty": "Niemand wartet auf dich.",
         "filter": "Anzeigen",
         "focusReply": "Konzentriert antworten",
-        "needYouMany": "{{n}} brauchen dich",
-        "needYouOne": "{{n}} braucht dich",
-        "needsYou": "Braucht dich",
-        "today": "{{n}} heute"
+        "needsYou": "Braucht dich"
       },
       "power": {
         "dryRun": "Probelauf",
@@ -1784,9 +1782,7 @@
         "prompts": "Prompt-Versionen",
         "readOnly": "nur lesen",
         "routing": "Modell-Routing",
-        "rules": "Regeln",
-        "toPower": "Power einschalten",
-        "toSimple": "Zurück zu Einfach"
+        "rules": "Regeln"
       },
       "question": {
         "count": "Frage {{i}} von {{n}} heute. Antworten bringen Hedwig etwas bei.",
@@ -1890,8 +1886,6 @@
         "records": "Belege",
         "sweep": "Aufräumen",
         "sweepFailed": "Konnte sie nicht als gelesen markieren",
-        "sweepHint": "Alles, was dich nicht braucht, als gelesen markieren",
-        "unread": "{{n}} ungelesen",
         "more": "Mehr anzeigen"
       },
       "tab": {
@@ -1914,11 +1908,9 @@
         "earlierOne": "Eine frühere Nachricht",
         "empty": "Wähle einen Verlauf, um ihn hier zu lesen.",
         "gone": "Dieser Verlauf ist nicht mehr da.",
-        "imagesBlocked": "Externe Bilder blockiert",
         "messagesMany": "{{n}} Nachrichten",
         "messagesOne": "1 Nachricht",
         "more": "Mehr",
-        "myVoice": "Mein Ton",
         "original": "Original anzeigen",
         "remind": "Erinnere mich",
         "remindOn": "Erinnere mich am {{day}}",
@@ -1929,8 +1921,6 @@
         "setAside": "Beiseitelegen",
         "snooze": "Zurückstellen",
         "story": "Was bisher geschah",
-        "toName": "an {{name}}",
-        "toYou": "an dich",
         "trackerMany": "Tracker blockiert: {{n}}",
         "trackerOne": "1 Tracker blockiert",
         "wrong": "Falsch?",

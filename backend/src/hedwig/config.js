@@ -235,7 +235,7 @@ export const SCHEMA = [
   // --- v2 frontend ---
   { key: 'ui.powerMode', type: 'boolean', default: false, group: 'ui', label: 'Power mode (rules, routing, prompts and index status in Settings)', scope: 'user' },
   { key: 'ui.blur', type: 'number', default: 24, min: 0, max: 48, group: 'ui', label: 'Glass blur (px)', scope: 'user' },
-  { key: 'ui.accent', type: 'string', default: '#E0561A', group: 'ui', label: 'Accent colour (hex)', scope: 'user' },
+  { key: 'ui.accent', type: 'string', default: '#007AFF', group: 'ui', label: 'Accent colour (hex)', scope: 'user' },
   { key: 'ui.notifications', type: 'boolean', default: true, group: 'ui', label: 'Tell me when something new needs me', scope: 'user' },
   { key: 'ui.helpMeWrite', type: 'boolean', default: true, group: 'ui', label: 'Help me write (quick replies, draft in my voice)', scope: 'user' },
   // --- end v2 frontend ---

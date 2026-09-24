@@ -1,7 +1,9 @@
 // Shared UI primitives for the v1 Hedwig views. Inline styles over the shell's --hw-* tokens, each
 // with a fallback to the light "Hedwig" value so views render before the theme is installed. They
-// follow the v2 look where it is cheap to: serif titles, italic serif labels (no uppercase
-// eyebrows), hairline cards. The v2 views use ../v2/primitives.jsx.
+// follow the v2 look (DESIGN-AUDIT-2026-09-24): the system face at 400/500/600, titles at 600,
+// 11px/600 sentence-case section labels, figures in tabular body digits (T.num), mono only for
+// codes and ids (T.mono), hairline boxes at radius 10, controls at 8, small buttons at 6. No serif,
+// no italic, no uppercase eyebrows. The v2 views use ../v2/primitives.jsx.
 import { forwardRef, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
@@ -11,27 +13,39 @@ import {
 import { openMessage, openSettings, useDismiss } from './hooks.js';
 import { tr } from './i18n.js';
 
+const SYSTEM = "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI', InterVariable, Inter, Roboto, 'Helvetica Neue', Arial, sans-serif";
+
 export const T = {
-  ground: 'var(--hw-ground, #F3EEE4)',
-  surface: 'var(--hw-surface, #FFFDF9)',
-  raised: 'var(--hw-raised, #EFE8DB)',
-  border: 'var(--hw-border, #E2DACB)',
-  ink: 'var(--hw-ink, #1B1A17)',
-  muted: 'var(--hw-muted, #6B665C)',
-  teal: 'var(--hw-teal, #1F6B66)',
-  tealTint: 'var(--hw-teal-tint, #D7E8E5)',
-  tealText: 'var(--hw-teal-text, #155450)',
+  ground: 'var(--hw-ground, #EEF0F3)',
+  surface: 'var(--hw-surface, #FFFFFF)',
+  raised: 'var(--hw-raised, #F2F2F4)',
+  border: 'var(--hw-border, rgba(0,0,0,0.12))',
+  ink: 'var(--hw-ink, #1D1D1F)',
+  muted: 'var(--hw-muted, #5E5E63)',
+  teal: 'var(--hw-teal, #007AFF)',
+  tealTint: 'var(--hw-teal-tint, rgba(0,122,255,0.12))',
+  tealText: 'var(--hw-teal-text, #0062CC)',
   amber: 'var(--hw-amber, #B56E1A)',
   amberTint: 'var(--hw-amber-tint, #F5E3C8)',
   amberText: 'var(--hw-amber-text, #7A4A0E)',
   red: 'var(--hw-red, #A8432E)',
   redTint: 'color-mix(in srgb, var(--hw-red, #A8432E) 14%, transparent)',
-  display: "var(--hw-font-display, 'Instrument Serif', Georgia, serif)",
-  body: "var(--hw-font-body, 'Instrument Sans', system-ui, sans-serif)",
-  mono: "var(--hw-font-mono, 'DM Mono', ui-monospace, monospace)",
-  why: "var(--hw-font-why, 'Instrument Serif', Georgia, serif)",
-  line: 'var(--hw-line, rgba(23,24,26,0.09))',
+  // Titles are the body face at 600 (no display serif); reasons are the body face too.
+  display: `var(--hw-font-body, ${SYSTEM})`,
+  body: `var(--hw-font-body, ${SYSTEM})`,
+  // Figures (counts, times, percentages): the body face; pair with fontVariantNumeric tabular-nums.
+  num: `var(--hw-font-body, ${SYSTEM})`,
+  // Real monospace, for codes, ids, keys and schedule strings only.
+  mono: 'var(--hw-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace)',
+  why: `var(--hw-font-body, ${SYSTEM})`,
+  line: 'var(--hw-line, rgba(0,0,0,0.08))',
+  field: 'var(--hw-field, rgba(0,0,0,0.045))',
+  accent: 'var(--hw-accent, #007AFF)',
+  onAccent: 'var(--hw-on-accent, #FFFFFF)',
 };
+
+/** Tabular body digits: the style for counts, times and percentages. */
+export const NUM = { fontFamily: T.num, fontVariantNumeric: 'tabular-nums' };
 
 export const TONES = {
   amber: { bg: T.amberTint, fg: T.amberText, dot: T.amber },
@@ -92,7 +106,7 @@ export function Title({ children, sub, right, level = 1, style }) {
   const H = level === 1 ? 'h1' : 'h2';
   return (
     <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap', ...style }}>
-      <H style={{ margin: 0, fontFamily: T.display, fontSize: level === 1 ? 32 : 22, fontWeight: 400, letterSpacing: '-0.015em', lineHeight: 1.05 }}>{children}</H>
+      <H style={{ margin: 0, fontFamily: T.display, fontSize: level === 1 ? 22 : 17, fontWeight: 600, letterSpacing: '-0.01em', lineHeight: 1.2 }}>{children}</H>
       {sub != null && <span style={{ fontSize: 12, color: T.muted }}>{sub}</span>}
       {right && <><span style={{ flexGrow: 1 }} />{right}</>}
     </div>
@@ -102,7 +116,7 @@ export function Title({ children, sub, right, level = 1, style }) {
 export function SectionLabel({ children, right, style }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, ...style }}>
-      <div style={{ fontFamily: T.why, fontStyle: 'italic', fontSize: 16, lineHeight: 1.25, color: T.muted }}>{children}</div>
+      <div style={{ fontFamily: T.body, fontStyle: 'normal', fontSize: 11, fontWeight: 600, lineHeight: '14px', color: T.muted }}>{children}</div>
       {right && <><span style={{ flexGrow: 1 }} />{right}</>}
     </div>
   );
@@ -112,7 +126,7 @@ export function Card({ children, style, tone, as: As = 'div', ...rest }) {
   const dark = tone === 'ink';
   return (
     <As {...rest} style={{
-      padding: '14px 16px', borderRadius: 16, boxSizing: 'border-box',
+      padding: '12px 14px', borderRadius: 10, boxSizing: 'border-box',
       background: dark ? T.ink : 'transparent', color: dark ? T.surface : T.ink,
       border: dark ? 'none' : `1px solid ${T.line}`, display: 'flex', flexDirection: 'column', gap: 8, ...style,
     }}>
@@ -127,7 +141,7 @@ export function Chip({ children, tone = 'neutral', size = 'sm', style, title }) 
   return (
     <span title={title} style={{
       display: 'inline-flex', alignItems: 'center', gap: 5, padding: size === 'md' ? '4px 10px' : '2px 8px',
-      borderRadius: 999, background: t.bg, color: t.fg, fontSize: size === 'md' ? 12 : 11, fontWeight: 500,
+      borderRadius: 6, background: t.bg, color: t.fg, fontSize: size === 'md' ? 12 : 11, fontWeight: 500,
       whiteSpace: 'nowrap', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', ...style,
     }}>
       {children}
@@ -150,12 +164,12 @@ export function Dot({ color, size = 8, style }) {
 export function Pill({ active, children, onClick, count, ...rest }) {
   return (
     <button type="button" onClick={onClick} aria-pressed={active} {...rest} style={{
-      display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 10px', borderRadius: 999,
+      display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 10px', borderRadius: 8,
       border: `1px solid ${active ? T.ink : T.border}`, background: active ? T.ink : 'transparent',
       color: active ? T.surface : T.ink, font: 'inherit', fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap',
     }}>
       {children}
-      {count != null && <span style={{ fontFamily: T.mono, fontSize: 11, opacity: 0.75 }}>{formatCount(count)}</span>}
+      {count != null && <span style={{ ...NUM, fontSize: 11, opacity: 0.75 }}>{formatCount(count)}</span>}
     </button>
   );
 }
@@ -163,18 +177,20 @@ export function Pill({ active, children, onClick, count, ...rest }) {
 // ── Buttons ──────────────────────────────────────────────────────────────────
 export function Button({ variant = 'secondary', size = 'md', children, style, busy, disabled, type = 'button', ...rest }) {
   const v = {
-    primary: { background: T.ink, color: T.surface, border: `1px solid ${T.ink}` },
+    primary: { background: T.accent, color: T.onAccent, border: '1px solid transparent' },
     secondary: { background: T.surface, color: T.ink, border: `1px solid ${T.border}` },
     ghost: { background: 'transparent', color: T.ink, border: '1px solid transparent' },
     danger: { background: 'transparent', color: T.red, border: `1px solid ${T.border}` },
     inverse: { background: T.surface, color: T.ink, border: `1px solid ${T.surface}` },
     inverseGhost: { background: 'transparent', color: T.surface, border: `1px solid ${T.muted}` },
   }[variant];
-  const pad = size === 'sm' ? '4px 10px' : '7px 12px';
+  // Controls are 28px at radius 8; small buttons 24px at radius 6.
+  const sm = size === 'sm';
   return (
     <button type={type} disabled={disabled || busy} aria-busy={busy || undefined} {...rest} style={{
-      display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: pad, borderRadius: 7,
-      font: 'inherit', fontSize: size === 'sm' ? 12 : 13, fontWeight: variant === 'primary' ? 500 : 400,
+      display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, boxSizing: 'border-box',
+      minHeight: sm ? 24 : 28, padding: sm ? '2px 8px' : '4px 12px', borderRadius: sm ? 6 : 8,
+      font: 'inherit', fontSize: sm ? 12 : 13, fontWeight: variant === 'primary' ? 600 : 500,
       cursor: disabled || busy ? 'default' : 'pointer', opacity: disabled ? 0.5 : 1, whiteSpace: 'nowrap', ...v, ...style,
     }}>
       {busy && <Spinner size={12} />}
@@ -186,7 +202,7 @@ export function Button({ variant = 'secondary', size = 'md', children, style, bu
 export function IconButton({ label, icon, onClick, size = 28, style, active, ...rest }) {
   return (
     <button type="button" aria-label={label} title={label} onClick={onClick} {...rest} style={{
-      width: size, height: size, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', borderRadius: 7,
+      width: size, height: size, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', borderRadius: 6,
       border: `1px solid ${active ? T.border : 'transparent'}`, background: active ? T.raised : 'transparent',
       color: T.muted, cursor: 'pointer', padding: 0, flexShrink: 0, ...style,
     }}>
@@ -311,13 +327,13 @@ export function Avatar({ name, email, size = 36 }) {
 // ── Markdown with citations ──────────────────────────────────────────────────
 const CITE_CSS = `
 .hw-md p{margin:0 0 8px}.hw-md p:last-child{margin-bottom:0}.hw-md ul,.hw-md ol{margin:0 0 8px;padding-left:20px}
-.hw-md h1,.hw-md h2,.hw-md h3{font-family:var(--hw-font-display, Georgia, serif);font-weight:400;margin:12px 0 6px;font-size:19px;line-height:1.2}
-.hw-md code{font-family:var(--hw-font-mono, ui-monospace, monospace);font-size:12px;background:var(--hw-raised, #EFE8DB);padding:1px 4px;border-radius:4px}
-.hw-md a{color:var(--hw-teal, #1F6B66)}
-.hw-md .hw-cite{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;padding:0 3px;margin:0 1px;
-  vertical-align:super;font:500 10px/1 var(--hw-font-mono, ui-monospace, monospace);color:var(--hw-teal-text, #155450);
-  background:var(--hw-teal-tint, #D7E8E5);border:0;border-radius:4px;cursor:pointer}
-.hw-md .hw-cite:hover,.hw-md .hw-cite:focus-visible{background:var(--hw-teal, #1F6B66);color:var(--hw-surface, #FFFDF9)}`;
+.hw-md h1,.hw-md h2,.hw-md h3{font-family:var(--hw-font-body, system-ui, sans-serif);font-weight:600;margin:12px 0 6px;font-size:15px;line-height:1.3}
+.hw-md code{font-family:var(--hw-font-mono, ui-monospace, monospace);font-size:12px;background:var(--hw-field, rgba(0,0,0,0.045));padding:1px 4px;border-radius:4px}
+.hw-md a{color:var(--hw-accent-ink, #0062CC)}
+.hw-md .hw-cite{display:inline-flex;align-items:center;justify-content:center;min-width:12px;height:auto;padding:0 2px;margin:0 1px;
+  vertical-align:super;font:600 10px/1 var(--hw-font-body, system-ui, sans-serif);font-variant-numeric:tabular-nums;color:var(--hw-accent-ink, #0062CC);
+  background:none;border:0;border-radius:4px;cursor:pointer}
+.hw-md .hw-cite:hover,.hw-md .hw-cite:focus-visible{background:var(--hw-accent-tint, rgba(0,122,255,0.12));color:var(--hw-accent-ink, #0062CC)}`;
 
 /**
  * Render markdown (marked + DOMPurify). `[n]` citations become buttons: `resolveCite(n)` returns a
@@ -359,7 +375,7 @@ export function StatTile({ label, value, sub, tone, children }) {
   return (
     <Card style={{ gap: 2, padding: '12px 14px', minWidth: 0 }}>
       <span style={{ fontSize: 12, color: T.muted }}>{label}</span>
-      <span style={{ fontFamily: T.mono, fontSize: 24, fontWeight: 500, color }}>{value ?? '–'}</span>
+      <span style={{ ...NUM, fontSize: 20, fontWeight: 600, lineHeight: 1.15, color }}>{value ?? '–'}</span>
       {sub && <span style={{ fontSize: 12, color: T.muted }}>{sub}</span>}
       {children}
     </Card>
@@ -417,7 +433,7 @@ export function ColumnChart({ rows, series, height = 160, label, formatLabel = (
           return (
             <g key={t}>
               <line x1={padL} x2={W} y1={y} y2={y} stroke={T.border} strokeWidth="1" />
-              <text x={padL - 6} y={y + 3} textAnchor="end" fontSize="10" fill={T.muted} fontFamily="var(--hw-font-mono, monospace)">{formatCount(t)}</text>
+              <text x={padL - 6} y={y + 3} textAnchor="end" fontSize="10" fill={T.muted} fontFamily={T.num} style={{ fontVariantNumeric: 'tabular-nums' }}>{formatCount(t)}</text>
             </g>
           );
         })}
@@ -447,7 +463,7 @@ export function ColumnChart({ rows, series, height = 160, label, formatLabel = (
           <div style={{ fontWeight: 600 }}>{formatLabel(rows[hover].label)}</div>
           {series.map((sr, k) => (
             <div key={sr.name} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <Dot color={sr.color} /> {sr.name}: <span style={{ fontFamily: T.mono }}>{formatCount(rows[hover].values[k])}</span>
+              <Dot color={sr.color} /> {sr.name}: <span style={NUM}>{formatCount(rows[hover].values[k])}</span>
             </div>
           ))}
         </div>
@@ -491,14 +507,14 @@ export function Table({ columns, rows, rowKey = (r, i) => r.id ?? i, onRowClick,
   const template = columns.map((c) => c.width || 'minmax(0, 1fr)').join(' ');
   const cell = (c) => ({
     minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-    fontFamily: c.mono ? T.mono : undefined, fontSize: c.mono ? 12 : 13, textAlign: c.align || 'left',
+    fontFamily: c.mono ? T.num : undefined, fontVariantNumeric: c.mono ? 'tabular-nums' : undefined, fontSize: c.mono ? 12 : 13, textAlign: c.align || 'left',
     color: c.muted ? T.muted : undefined,
   });
   return (
     <div role="table" aria-label={label} style={{ borderRadius: 10, background: T.surface, border: `1px solid ${T.border}`, overflow: 'hidden' }}>
       <div role="row" style={{ display: 'grid', gridTemplateColumns: template, gap: 10, padding: '8px 14px', borderBottom: `1px solid ${T.border}` }}>
         {columns.map((c) => (
-          <span role="columnheader" key={c.key} style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: T.muted, textAlign: c.align || 'left' }}>{c.label}</span>
+          <span role="columnheader" key={c.key} style={{ fontSize: 11, fontWeight: 600, color: T.muted, textAlign: c.align || 'left' }}>{c.label}</span>
         ))}
       </div>
       {!rows?.length && <div style={{ padding: '14px', fontSize: 13, color: T.muted }}>{empty}</div>}
@@ -542,11 +558,11 @@ export function Popover({ open, onClose, children, align = 'right', width = 320,
 export function MenuItem({ children, onClick, active, danger, hint }) {
   return (
     <button type="button" role="menuitem" onClick={onClick} style={{
-      display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '7px 10px', border: 0, borderRadius: 7,
+      display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '7px 10px', border: 0, borderRadius: 6,
       background: active ? T.raised : 'transparent', color: danger ? T.red : T.ink, font: 'inherit', fontSize: 13, textAlign: 'left', cursor: 'pointer',
     }}>
       <span style={{ flexGrow: 1 }}>{children}</span>
-      {hint && <span style={{ fontFamily: T.mono, fontSize: 11, color: T.muted }}>{hint}</span>}
+      {hint && <span style={{ fontSize: 11, color: T.muted }}>{hint}</span>}
     </button>
   );
 }
@@ -568,7 +584,7 @@ export function Dialog({ open, onClose, title, subtitle, icon, children, footer,
           {icon}
           <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flexGrow: 1 }}>
             <h2 id={id} style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>{title}</h2>
-            {subtitle && <span style={{ fontSize: 12, color: T.muted, fontFamily: T.mono }}>{subtitle}</span>}
+            {subtitle && <span style={{ fontSize: 12, color: T.muted }}>{subtitle}</span>}
           </div>
           <IconButton label="Close" icon="close" onClick={onClose} />
         </div>
@@ -600,9 +616,10 @@ export function MessageLiteRow({ message, prefix, dense }) {
 }
 
 // ── Form bits ────────────────────────────────────────────────────────────────
+// A field: 30px, radius 8, the --hw-field fill with a hairline, 13px text.
 export const inputStyle = {
-  height: 34, boxSizing: 'border-box', padding: '0 10px', border: `1px solid ${T.border}`, borderRadius: 8,
-  background: T.surface, color: T.ink, font: 'inherit', fontSize: 13, minWidth: 0,
+  height: 30, boxSizing: 'border-box', padding: '0 10px', border: `1px solid ${T.line}`, borderRadius: 8,
+  background: T.field, color: T.ink, font: 'inherit', fontSize: 13, minWidth: 0,
 };
 
 export const TextInput = forwardRef(function TextInput({ style, ...rest }, ref) {
@@ -620,7 +637,7 @@ export const TextArea = forwardRef(function TextArea({ style, ...rest }, ref) {
 export function Checkbox({ checked, onChange, label, sub, mono, disabled }) {
   return (
     <label style={{ display: 'flex', gap: 10, alignItems: 'flex-start', fontSize: 13, cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.6 : 1 }}>
-      <input type="checkbox" checked={Boolean(checked)} disabled={disabled} onChange={(e) => onChange(e.target.checked)} style={{ width: 16, height: 16, marginTop: 2, accentColor: 'var(--hw-ink, #1B1A17)' }} />
+      <input type="checkbox" checked={Boolean(checked)} disabled={disabled} onChange={(e) => onChange(e.target.checked)} style={{ width: 16, height: 16, marginTop: 2, accentColor: 'var(--hw-accent, #007AFF)' }} />
       <span>
         <span style={mono ? { fontFamily: T.mono, fontWeight: 500 } : undefined}>{label}</span>
         {sub && <><br /><span style={{ color: T.muted, fontSize: 12 }}>{sub}</span></>}
@@ -635,10 +652,10 @@ export function Tabs({ tabs, value, onChange, label }) {
     <div role="tablist" aria-label={label} style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
       {tabs.map((t) => (
         <button key={t.id} type="button" role="tab" aria-selected={value === t.id} onClick={() => onChange(t.id)} style={{
-          padding: '3px 10px', borderRadius: 999, border: `1px solid ${value === t.id ? T.ink : T.border}`,
+          padding: '3px 10px', borderRadius: 8, border: `1px solid ${value === t.id ? T.ink : T.border}`,
           background: value === t.id ? T.ink : 'transparent', color: value === t.id ? T.surface : T.ink, font: 'inherit', fontSize: 12, cursor: 'pointer',
         }}>
-          {t.label}{t.count != null && <span style={{ fontFamily: T.mono, marginLeft: 6, opacity: 0.75 }}>{t.count}</span>}
+          {t.label}{t.count != null && <span style={{ ...NUM, marginLeft: 6, opacity: 0.75 }}>{t.count}</span>}
         </button>
       ))}
     </div>
@@ -648,7 +665,7 @@ export function Tabs({ tabs, value, onChange, label }) {
 /** Key-hint footer ("e archive · x not for me"). */
 export function KeyHints({ hints }) {
   return (
-    <div aria-hidden="true" style={{ display: 'flex', gap: 12, flexWrap: 'wrap', padding: '8px 16px', borderTop: `1px solid ${T.border}`, fontSize: 11, color: T.muted, fontFamily: T.mono }}>
+    <div aria-hidden="true" style={{ display: 'flex', gap: 12, flexWrap: 'wrap', padding: '8px 16px', borderTop: `1px solid ${T.border}`, fontSize: 11, color: T.muted }}>
       {hints.map(([k, v]) => <span key={k}><strong style={{ fontWeight: 500, color: T.ink }}>{k}</strong> {v}</span>)}
     </div>
   );

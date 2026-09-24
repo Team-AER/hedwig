@@ -1,14 +1,19 @@
-// The Screener (GET /sort/screener): each new sender with Hedwig's proposed stream and the reason.
-// Pick another stream or keep the proposal, accept it, or accept every proposal at once. Mail
-// found in the server's spam folder that looks real is tinted and says so.
+// The Screener (GET /sort/screener, DESIGN-AUDIT-2026-09-24 keep list): each new sender as a list
+// row with a dashed avatar, what they wrote, and Hedwig's proposed stream with the reason as the
+// reason line. Under it, four 32px buttons (People, Reading, Records, Block) with the proposal
+// filled, and Accept; "Accept all" in the list header takes every proposal at once. Mail found in
+// the server's spam folder that looks real is tinted and says so.
 import { useMemo, useState } from 'react';
 import { useStore } from '../../store/index.js';
 import { useV2Resource, useWork } from './hooks.js';
 import { useTldrs, withTldrs } from './tldrs.js';
 import { v2Api, listOf, announceSortChange } from './client.js';
-import { Btn, ErrorLine, Glyph, Hair, Mono, Pick, Quiet, V, ViewBody, ViewHead, Why, usePhone } from './primitives.jsx';
+import { Avatar, Btn, ErrorLine, Hair, IconButton, Quiet, Reason, V, ViewBody, ViewHead, Why, usePhone } from './primitives.jsx';
+import { Icon } from '../icons.jsx';
 import { tv, tvn } from './i18n.js';
 import { tldrOf } from './format.js';
+
+const DECISION_ICONS = { people: 'users', reading: 'book-open', records: 'receipt', block: 'ban' };
 
 export function decisionOptions() {
   return [
@@ -23,58 +28,122 @@ function decisionLabel(id) {
   return decisionOptions().find((o) => o.id === id)?.label || id;
 }
 
+/** The proposal as the row's reason line: "Proposed: Records. Booking confirmations." */
+export function proposalLine(proposed, reason) {
+  const r = String(reason || '').trim();
+  const where = decisionLabel(proposed || 'people');
+  return r
+    ? tv('hedwig.v2.screener.proposedWhy', 'Proposed: {{stream}}. {{reason}}', { stream: where, reason: r })
+    : tv('hedwig.v2.screener.proposed', 'Proposed: {{stream}}', { stream: where });
+}
+
+/**
+ * The four decisions as 32px icon buttons with labels, the chosen one filled. A radio group: one
+ * Tab stop (the chosen option), arrow keys move the choice, Home / End jump to the ends.
+ */
+function DecisionPicker({ value, onChange, label, phone }) {
+  const options = decisionOptions();
+  const current = options.some((o) => o.id === value) ? value : options[0].id;
+  const onKeyDown = (e) => {
+    const keys = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
+    const i = options.findIndex((o) => o.id === current);
+    let j = null;
+    if (keys[e.key]) j = (i + keys[e.key] + options.length) % options.length;
+    else if (e.key === 'Home') j = 0;
+    else if (e.key === 'End') j = options.length - 1;
+    if (j === null) return;
+    e.preventDefault();
+    onChange(options[j].id);
+    e.currentTarget.querySelectorAll('[role="radio"]')[j]?.focus();
+  };
+  return (
+    <div role="radiogroup" aria-label={label} onKeyDown={onKeyDown} style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 4 }}>
+      {options.map((o) => {
+        const on = o.id === current;
+        return (
+          <IconButton
+            key={o.id}
+            icon={DECISION_ICONS[o.id]}
+            label={o.label}
+            showLabel
+            primary={on}
+            size={32}
+            role="radio"
+            aria-checked={on}
+            tabIndex={on ? 0 : -1}
+            onClick={() => onChange(o.id)}
+            style={{ width: '100%', minWidth: 0, height: phone ? 44 : 32, overflow: 'hidden', padding: '0 5px', gap: 4, ...(on ? {} : { color: V.ink, boxShadow: `inset 0 0 0 1px ${V.line2}` }) }}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
 function SenderRow({ sender, choice, onChoose, onAccept, busy, phone }) {
   const block = choice === 'block';
   const rescue = Boolean(sender.inSpam);
+  const name = sender.display || sender.address;
   const acceptLabel = rescue && !block
     ? tv('hedwig.v2.screener.acceptRescue', 'Accept: {{stream}}, rescue from spam', { stream: decisionLabel(choice) })
     : tv('hedwig.v2.screener.accept', 'Accept: {{stream}}', { stream: decisionLabel(choice) });
-  const meta = [sender.address, sender.count ? String(sender.count) : null, rescue ? tv('hedwig.v2.screener.inSpam', 'in spam') : null].filter(Boolean).join(' · ');
+  const meta = [sender.count ? tvn(sender.count, ['hedwig.v2.screener.messagesOne', '1 message'], ['hedwig.v2.screener.messagesMany', '{{n}} messages'], { n: sender.count }) : null, rescue ? tv('hedwig.v2.screener.inSpam', 'in spam') : null].filter(Boolean).join(' · ');
   // What they wrote: Hedwig's one-line TL;DR of the latest message when there is one, else its subject.
   const latestSubject = Array.isArray(sender.subjects) ? sender.subjects.find((x) => typeof x === 'string' && x.trim()) : null;
-  const summary = tldrOf(sender) || (latestSubject ? latestSubject.trim() : null);
+  const tldr = tldrOf(sender);
+  const summary = tldr || (latestSubject ? latestSubject.trim() : null);
+  const av = phone ? 40 : 36;
+  const email = /@/.test(String(sender.address || '')) ? sender.address : null;
   return (
     <article
-      aria-label={sender.display || sender.address}
+      aria-label={name}
       style={{
-        display: 'flex', flexDirection: 'column', gap: 10,
-        padding: rescue ? '16px 12px' : '16px 4px',
-        margin: rescue ? '0 -8px' : 0,
-        borderRadius: rescue ? 16 : 0,
+        display: 'flex', flexDirection: 'column', gap: 10, boxSizing: 'border-box', minHeight: phone ? 88 : 76,
+        padding: phone ? '12px 8px' : '10px 14px 12px 8px', borderRadius: 8,
         background: rescue ? V.accentTint : undefined,
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        <div style={{ flexGrow: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <span style={{ fontWeight: 600, fontSize: 17, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sender.display || sender.address}</span>
-          <Mono color={rescue ? V.inkSoft : V.muted} style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{meta}</Mono>
+      <div style={{ display: 'grid', gridTemplateColumns: `8px ${av}px minmax(0, 1fr)`, columnGap: 10, alignItems: 'start' }}>
+        <span aria-hidden="true" />
+        <Avatar name={name} email={email} size={av} dashed />
+        <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, minHeight: phone ? 20 : 16 }}>
+            <span style={{ flex: '1 1 auto', minWidth: 0, fontWeight: 600, fontSize: phone ? 15 : 13, lineHeight: phone ? '20px' : '16px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
+            <IconButton
+              icon="check"
+              label={acceptLabel}
+              disabled={busy}
+              onClick={onAccept}
+              size={28}
+              style={{ width: 'auto', height: phone ? 44 : 28, padding: '0 10px 0 8px', margin: phone ? '-12px 0' : '-6px 0', color: V.accentInk, boxShadow: `inset 0 0 0 1px ${V.line2}` }}
+            >
+              <span>{tv('hedwig.v2.screener.acceptShort', 'Accept')}</span>
+            </IconButton>
+          </span>
+          {(sender.address && sender.address !== name) || meta ? (
+            <span style={{ fontSize: phone ? 14 : 12, lineHeight: phone ? '19px' : '16px', color: rescue ? V.inkSoft : V.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+              {[sender.address !== name ? sender.address : null, meta].filter(Boolean).join(' · ')}
+            </span>
+          ) : null}
+          {summary && (
+            <span style={{ fontSize: phone ? 15 : 13, lineHeight: phone ? '20px' : '18px', color: V.ink, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflowWrap: 'anywhere' }}>
+              {tldr && <Icon name="sparkles" size={11} strokeWidth={1.75} style={{ display: 'inline-block', verticalAlign: '-1px', marginRight: 4, color: V.muted }} />}
+              <span data-tldr="">{summary}</span>
+            </span>
+          )}
+          <Reason
+            glyph={rescue ? 'alert' : 'info'}
+            tone={rescue ? 'attention' : 'muted'}
+            size={phone ? 13 : 12}
+            style={{ paddingTop: 2 }}
+          >
+            {rescue ? rescueLine(sender.reason) : proposalLine(sender.proposed, sender.reason)}
+          </Reason>
         </div>
-        <button
-          type="button"
-          aria-label={acceptLabel}
-          title={acceptLabel}
-          disabled={busy}
-          onClick={onAccept}
-          className="hw-btn-solid"
-          style={{
-            width: 44, height: 44, borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', border: 0, padding: 0, flexShrink: 0, cursor: 'pointer',
-            background: block ? V.ink : V.accent, color: block ? V.paper : V.onAccent,
-          }}
-        >
-          <Glyph name={block ? 'close' : 'check'} stroke={1.8} />
-        </button>
       </div>
-      {summary && (
-        <span data-tldr="" style={{ fontSize: 14, lineHeight: 1.4, color: rescue ? V.inkSoft : V.ink, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
-          {summary}
-        </span>
-      )}
-      {(rescue || sender.reason) && (
-        <Why tone={rescue ? 'accent' : 'muted'}>
-          {rescue ? rescueLine(sender.reason) : sender.reason}
-        </Why>
-      )}
-      <Pick label={tv('hedwig.v2.screener.streamFor', 'Stream for {{name}}', { name: sender.display || sender.address })} options={decisionOptions()} value={choice} onChange={onChoose} size={phone ? 44 : 40} />
+      <div style={{ paddingLeft: 18 }}>
+        <DecisionPicker label={tv('hedwig.v2.screener.streamFor', 'Stream for {{name}}', { name })} value={choice} onChange={onChoose} phone={phone} />
+      </div>
     </article>
   );
 }
@@ -151,15 +220,19 @@ export default function Screener() {
   const title = tv('hedwig.v2.rail.screener', 'Screener');
   const sub = senders.length ? tv('hedwig.v2.screener.waiting', '{{n}} waiting', { n: senders.length }) : null;
   const acceptAllBtn = senders.length > 1
-    ? <Btn solid size={phone ? 'phone' : 'md'} disabled={Boolean(busy)} onClick={acceptAll}>{tv('hedwig.v2.screener.acceptAll', 'Accept all')}</Btn>
+    ? (
+      <Btn size={phone ? 'phone' : 'md'} disabled={Boolean(busy)} onClick={acceptAll} style={{ alignSelf: 'center' }}>
+        <Icon name="check" size={phone ? 16 : 14} />
+        {tv('hedwig.v2.screener.acceptAll', 'Accept all')}
+      </Btn>
+    )
     : null;
+  const intro = <Why>{tv('hedwig.v2.screener.intro', 'Each new sender comes with a proposed stream and the reason. Accept it or pick another; Hedwig remembers.')}</Why>;
 
   return (
-    <ViewBody phone={phone} label={title} padded={!phone}>
-      <ViewHead phone={phone} title={title} sub={sub} actions={acceptAllBtn}>
-        <Why style={{ paddingBottom: phone ? 0 : 0 }}>{tv('hedwig.v2.screener.intro', 'Each new sender comes with a proposed stream and the reason. Accept it or pick another; Hedwig remembers.')}</Why>
-      </ViewHead>
-      <div style={{ padding: phone ? '0 16px' : '0 12px', display: 'flex', flexDirection: 'column' }}>
+    <ViewBody phone={phone} label={title} padded={false} style={phone ? undefined : { padding: '14px 0 16px' }}>
+      <ViewHead phone={phone} title={title} sub={sub} actions={acceptAllBtn}>{intro}</ViewHead>
+      <div style={{ padding: phone ? '0 8px' : '0 6px', display: 'flex', flexDirection: 'column' }}>
         {res.error && <ErrorLine error={res.error} onRetry={() => res.reload()} retryLabel={tv('hedwig.v2.action.retry', 'Try again')} />}
         <ErrorLine error={error} />
         {res.loading && !res.data && <Quiet>{tv('hedwig.v2.loading', 'Loading…')}</Quiet>}
@@ -169,7 +242,7 @@ export default function Screener() {
           const prevRescue = i > 0 && senders[i - 1].inSpam;
           return (
             <div key={k}>
-              {i > 0 && !s.inSpam && !prevRescue && <Hair />}
+              {i > 0 && <Hair style={{ margin: `0 0 0 ${phone ? 66 : 62}px`, opacity: s.inSpam || prevRescue ? 0 : 1 }} />}
               <SenderRow
                 sender={s}
                 phone={phone}

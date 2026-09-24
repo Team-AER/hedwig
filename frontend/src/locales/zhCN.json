@@ -1716,7 +1716,8 @@
         "records": "今天，来自你的记录",
         "waiting": "在等别人回复",
         "file": "文件",
-        "seeAll": "查看全部"
+        "seeAll": "查看全部",
+        "summary": "今日简报"
       },
       "cmd": {
         "allMail": "全部邮件（经典列表）",
@@ -1762,10 +1763,7 @@
         "empty": "没有人在等你。",
         "filter": "显示",
         "focusReply": "专注回复",
-        "needYouMany": "{{n}} 封需要你",
-        "needYouOne": "{{n}} 封需要你处理",
-        "needsYou": "需要你处理",
-        "today": "今天 {{n}} 封"
+        "needsYou": "需要你处理"
       },
       "power": {
         "dryRun": "试运行",
@@ -1784,9 +1782,7 @@
         "prompts": "提示词版本",
         "readOnly": "只读",
         "routing": "路由",
-        "rules": "规则",
-        "toPower": "开启 Power",
-        "toSimple": "返回简单模式"
+        "rules": "规则"
       },
       "question": {
         "count": "今天的第 {{i}} 个问题，共 {{n}} 个。你的回答会教会 Hedwig。",
@@ -1890,8 +1886,6 @@
         "records": "记录",
         "sweep": "清扫",
         "sweepFailed": "无法将它们标为已读",
-        "sweepHint": "把不需要你处理的都标为已读",
-        "unread": "{{n}} 封未读",
         "more": "显示更多"
       },
       "tab": {
@@ -1914,11 +1908,9 @@
         "earlierOne": "一封更早的邮件",
         "empty": "选择一个会话在这里阅读。",
         "gone": "那个会话已经不在了。",
-        "imagesBlocked": "已阻止远程图片",
         "messagesMany": "{{n}} 封邮件",
         "messagesOne": "1 封邮件",
         "more": "更多",
-        "myVoice": "我的口吻",
         "original": "查看原文",
         "remind": "提醒我",
         "remindOn": "{{day}}提醒我",
@@ -1929,8 +1921,6 @@
         "setAside": "搁置",
         "snooze": "延后",
         "story": "来龙去脉",
-        "toName": "发给 {{name}}",
-        "toYou": "发给你",
         "trackerMany": "已阻止跟踪器：{{n}}",
         "trackerOne": "已阻止 1 个跟踪器",
         "wrong": "有误？",

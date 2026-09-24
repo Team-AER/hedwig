@@ -1735,7 +1735,8 @@
         "records": "Dziś z twoich dokumentów",
         "waiting": "Czekasz na innych",
         "file": "Plik",
-        "seeAll": "Pokaż wszystko"
+        "seeAll": "Pokaż wszystko",
+        "summary": "Dziś w skrócie"
       },
       "cmd": {
         "allMail": "Cała poczta (klasyczna lista)",
@@ -1781,10 +1782,7 @@
         "empty": "Nikt na ciebie nie czeka.",
         "filter": "Pokaż",
         "focusReply": "Odpowiadaj w skupieniu",
-        "needYouMany": "Czeka na ciebie: {{n}}",
-        "needYouOne": "{{n}} czeka na ciebie",
-        "needsYou": "Czeka na ciebie",
-        "today": "Dziś: {{n}}"
+        "needsYou": "Czeka na ciebie"
       },
       "power": {
         "dryRun": "Próbny przebieg",
@@ -1803,9 +1801,7 @@
         "prompts": "Wersje promptów",
         "readOnly": "tylko do odczytu",
         "routing": "Trasowanie",
-        "rules": "Reguły",
-        "toPower": "Włącz Power",
-        "toSimple": "Wróć do trybu prostego"
+        "rules": "Reguły"
       },
       "question": {
         "count": "Pytanie {{i}} z {{n}} na dziś. Odpowiedzi uczą Hedwiga.",
@@ -1909,8 +1905,6 @@
         "records": "Dokumenty",
         "sweep": "Uprzątnij",
         "sweepFailed": "Nie udało się oznaczyć jako przeczytane",
-        "sweepHint": "Oznacz jako przeczytane wszystko, co na ciebie nie czeka",
-        "unread": "Nieprzeczytane: {{n}}",
         "more": "Pokaż więcej"
       },
       "tab": {
@@ -1933,11 +1927,9 @@
         "earlierOne": "Jedna wcześniejsza wiadomość",
         "empty": "Wybierz wątek, aby go tu przeczytać.",
         "gone": "Tego wątku już nie ma.",
-        "imagesBlocked": "Zdalne obrazy zablokowane",
         "messagesMany": "Wiadomości: {{n}}",
         "messagesOne": "1 wiadomość",
         "more": "Więcej",
-        "myVoice": "Mój styl",
         "original": "Pokaż oryginał",
         "remind": "Przypomnij mi",
         "remindOn": "Przypomnij mi: {{day}}",
@@ -1948,8 +1940,6 @@
         "setAside": "Odłóż",
         "snooze": "Uśpij",
         "story": "Dotychczasowa historia",
-        "toName": "do: {{name}}",
-        "toYou": "do ciebie",
         "trackerMany": "Zablokowane trackery: {{n}}",
         "trackerOne": "Zablokowano 1 tracker",
         "wrong": "Błąd?",

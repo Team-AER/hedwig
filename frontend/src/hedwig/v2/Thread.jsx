@@ -1,26 +1,51 @@
-// The thread (docs/hedwig/design Main + PhoneThread): title and meta, Done / Reply Later / Snooze
-// / Set Aside, the story so far with superscript citations, the deadline slip, the earlier
-// messages folded away, the latest message with Hedwig's reason and Change, the tracker note,
-// quick replies and the reply bar (Draft in my voice, Send).
-import { useCallback, useEffect, useRef, useState } from 'react';
+// The reader (DESIGN-AUDIT-2026-09-24 §c, §d, §g). A 48px glass toolbar (Done; Reply Later,
+// Snooze, Set Aside; Reply, Reply all, Forward; Move, Flag, More), the subject with its reason and
+// Change, the summary or story so far with superscript citations, the deadline and the cards in
+// the same box, then the messages: the newest and every unread one open, older read ones as 44px
+// rows, more than four of those folded into one. HTML bodies render in upstream's sandboxed frame
+// (MessageBodyView) on a white card, quoted history behind a "•••" toggle, remote images behind a
+// consent banner, attachments under each body. The reply bar sits at the bottom (sticky): a 40px
+// field that grows on focus with Draft in my voice, Remind me if no reply and Send (⌘↩).
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../../store/index.js';
 import { hedwigApi } from '../api.js';
 import { useHedwig } from '../store.js';
+import { Icon } from '../icons.jsx';
 import { MenuButton } from '../shell/Menu.jsx';
 import { openMessage } from '../views/hooks.js';
+import MessageBodyView from '../../components/MessageBodyView.jsx';
+import MessageHeaderModal from '../../components/MessageHeaderModal.jsx';
+import AttachmentChips from '../../components/AttachmentChips.jsx';
 import { useV2 } from './state.js';
-import { v2Api, SORT_EVENTS } from './client.js';
+import { v2Api, isMockMode, SORT_EVENTS } from './client.js';
 import { isMissing, useWork } from './hooks.js';
-import { loadThread, loadBody } from './threadData.js';
-import { archiveThread, addToList, snooze, snoozeTimes, prepareReply, guardReply, sendPrepared, watchForReply, settingValue } from './mail.js';
+import { loadThread, loadFullBody } from './threadData.js';
+import {
+  archiveThread, addToList, snooze, snoozeTimes, prepareReply, guardReply, sendPrepared, watchForReply, settingValue,
+  openReplyComposer, openReplyAllComposer, openForwardComposer, folderList, moveMessages, flagMessage, markUnread,
+  reportSpam, unsubscribe, blockSender,
+} from './mail.js';
 import { MessageCards } from './Cards.jsx';
 import { Question } from './Question.jsx';
 import { useWhyDoor } from './WhyDoor.jsx';
-import { Btn, Glyph, IconBtn, LinkBtn, Mono, Quiet, Sheet, Slip, V, Why, ErrorLine, usePhone } from './primitives.jsx';
-import { firstName, fullTime, listTime, senderName, slipDate, storyParts } from './format.js';
+import { Avatar, Btn, IconButton, LinkBtn, Quiet, Reason, Sheet, Slip, V, Why, ErrorLine, usePhone } from './primitives.jsx';
+import { firstName, fullTime, isReplyMessage, listTime, recipientsLine, senderName, slipDate, snippetOf, splitQuotedHtml, splitQuotedText, storyParts } from './format.js';
 import { tv, tvn } from './i18n.js';
 import { LighterLabel } from './TierNote.jsx';
-import { isLighter } from './tiers.js';
+import { isLighter, tierNotice } from './tiers.js';
+
+// MessageBodyView's two callbacks are effect dependencies: module constants, so the frame is set
+// up once per body, and a function (not false) so a right-click never throws. Always the
+// browser's own context menu.
+const NATIVE = () => true;
+const NOOP = () => {};
+
+// Below this reader width the toolbar folds Reply Later / Snooze / Set Aside and Move / Flag into More.
+const NARROW_READER = 900;
+// More than this many collapsed messages fold into one "N earlier messages" row.
+const FOLD_OVER = 4;
+const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform || '');
+const SEND_KEYS = IS_MAC ? '⌘↩' : 'Ctrl+↩';
 
 function useThread(item) {
   const [state, setState] = useState({ data: null, error: null, loading: Boolean(item) });
@@ -71,25 +96,84 @@ function useInlineQuestion(messageId) {
   return [question, setQuestion];
 }
 
+/** The reader column's width, so the toolbar can fold its middle groups (null until measured). */
+function useWidth(ref) {
+  const [width, setWidth] = useState(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === 'undefined') return undefined;
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect?.width;
+      if (w > 0) setWidth(w);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [ref]);
+  return width;
+}
+
+// ── Summary block ─────────────────────────────────────────────────────────────
 function Story({ text, onCite, phone }) {
   const parts = storyParts(text);
+  return parts.map((p, i) => (p.cite != null
+    ? (
+      <button
+        key={i}
+        type="button"
+        onClick={() => onCite(p.cite)}
+        aria-label={tv('hedwig.v2.thread.citation', 'Message {{n}}', { n: p.cite })}
+        className={phone ? 'hw-hit' : undefined}
+        style={{ fontFamily: V.sans, fontSize: 10, fontWeight: 600, fontVariantNumeric: 'tabular-nums', verticalAlign: 'super', marginLeft: 1, color: V.accentInk, padding: '0 1px', border: 0, background: 'none', cursor: 'pointer', lineHeight: 1 }}
+      >
+        {p.cite}
+      </button>
+    )
+    : <span key={i}>{p.text}</span>));
+}
+
+/** The box the summary, the deadline and the cards share: radius 10, --field, hairline. */
+function SummaryBox({ label, ariaLabel, right, children, style, ...rest }) {
   return (
-    <p style={{ margin: 0, fontSize: 15, lineHeight: 1.55, textWrap: 'pretty' }}>
-      {parts.map((p, i) => (p.cite != null
-        ? (
-          <button
-            key={i}
-            type="button"
-            onClick={() => onCite(p.cite)}
-            aria-label={tv('hedwig.v2.thread.citation', 'Message {{n}}', { n: p.cite })}
-            className={phone ? 'hw-hit' : undefined}
-            style={{ fontFamily: V.mono, fontSize: 11, verticalAlign: 'super', marginLeft: 2, color: V.accentInk, padding: 0, border: 0, background: 'none', cursor: 'pointer', lineHeight: 1 }}
-          >
-            {p.cite}
-          </button>
-        )
-        : <span key={i}>{p.text}</span>))}
-    </p>
+    <Slip as="section" aria-label={ariaLabel || label} style={{ gap: 6, ...style }} {...rest}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, minHeight: 16 }}>
+        <span style={{ color: V.accent, display: 'inline-flex' }}><Icon name="sparkles" size={14} /></span>
+        <span style={{ fontSize: 12, fontWeight: 600, lineHeight: '16px' }}>{label}</span>
+        <span style={{ flexGrow: 1 }} />
+        {right}
+      </div>
+      {children}
+    </Slip>
+  );
+}
+
+/** Three lines, then "Show more" (only when there is more). */
+function Clamped({ children, lines = 3 }) {
+  const ref = useRef(null);
+  const [open, setOpen] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || open) return;
+    // Against the three lines themselves: superscript citations overhang a line box a little.
+    setOverflows(el.scrollHeight > lines * 19 + 8);
+  }, [children, open, lines]);
+  return (
+    <>
+      <p
+        ref={ref}
+        style={{
+          margin: 0, fontSize: 13, lineHeight: '19px', textWrap: 'pretty', overflowWrap: 'anywhere',
+          ...(open ? {} : { display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: lines, overflow: 'hidden' }),
+        }}
+      >
+        {children}
+      </p>
+      {(overflows || open) && (
+        <LinkBtn onClick={() => setOpen((v) => !v)} style={{ alignSelf: 'flex-start', fontSize: 12, color: V.accentInk, textDecoration: 'none' }}>
+          {open ? tv('hedwig.v2.thread.showLess', 'Show less') : tv('hedwig.v2.thread.showMore', 'Show more')}
+        </LinkBtn>
+      )}
+    </>
   );
 }
 
@@ -102,120 +186,329 @@ function DeadlineSlip({ deadline, from, phone, onRemind, onWrong }) {
       : tv('hedwig.v2.thread.deadlineAsked', 'Deadline, asked by {{who}}', { who });
   const dayBefore = new Date(new Date(deadline.due_at).getTime() - 86400000);
   const remindLabel = tv('hedwig.v2.thread.remindOn', 'Remind me {{day}}', { day: dayBefore.toLocaleDateString(undefined, { weekday: 'short' }).replace(/\.$/, '') });
-  if (phone) {
-    return (
-      <Slip style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }} aria-label={tv('hedwig.v2.thread.deadline', 'Deadline')}>
-        <span style={{ fontFamily: V.serif, fontSize: 36, lineHeight: 1, flexShrink: 0 }}>{slipDate(deadline.due_at)}</span>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flexGrow: 1 }}>
-          <span style={{ fontSize: 14, fontWeight: 500 }}>{deadline.what}</span>
-          <span style={{ fontSize: 12, color: V.inkSoft }}>{note}</span>
-        </div>
-        <LinkBtn onClick={onRemind} style={{ minHeight: 44 }}>{tv('hedwig.v2.thread.remind', 'Remind me')}</LinkBtn>
-      </Slip>
-    );
-  }
   return (
-    <Slip aria-label={tv('hedwig.v2.thread.deadline', 'Deadline')}>
-      <span style={{ fontFamily: V.serif, fontSize: 34, lineHeight: 1 }}>{slipDate(deadline.due_at)}</span>
-      <span style={{ fontSize: 13, marginTop: 6 }}>{deadline.what}</span>
-      <span style={{ fontSize: 12, color: V.inkSoft }}>{note}</span>
-      <div style={{ display: 'flex', gap: 14, marginTop: 10 }}>
-        <LinkBtn onClick={onRemind}>{remindLabel}</LinkBtn>
-        {onWrong && <LinkBtn muted onClick={onWrong}>{tv('hedwig.v2.thread.wrong', 'Wrong?')}</LinkBtn>}
+    <Slip aria-label={tv('hedwig.v2.thread.deadline', 'Deadline')} style={{ gap: 4 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 17, fontWeight: 600, lineHeight: '22px', fontVariantNumeric: 'tabular-nums', color: V.attentionInk }}>
+          <Icon name="calendar" size={16} />
+          {slipDate(deadline.due_at)}
+        </span>
+        <span style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0, flex: '1 1 160px' }}>
+          <span style={{ fontSize: 13, fontWeight: 500 }}>{deadline.what}</span>
+          <span style={{ fontSize: 12, color: V.muted }}>{note}</span>
+        </span>
+      </div>
+      <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
+        <LinkBtn hit={phone} onClick={onRemind} style={{ fontSize: 12, color: V.accentInk, textDecoration: 'none' }}>{phone ? tv('hedwig.v2.thread.remind', 'Remind me') : remindLabel}</LinkBtn>
+        {onWrong && <LinkBtn muted hit={phone} onClick={onWrong} style={{ fontSize: 12, textDecoration: 'none' }}>{tv('hedwig.v2.thread.wrong', 'Wrong?')}</LinkBtn>}
       </div>
     </Slip>
   );
 }
 
-function MessageBlock({ m, n, you, phone, tldr = null, children }) {
-  const to = m.to && m.to !== 'you' ? tv('hedwig.v2.thread.toName', 'to {{name}}', { name: m.to }) : tv('hedwig.v2.thread.toYou', 'to you');
-  const article = (
-    <article id={`hw-msg-${n}`} style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '18px 0 0', borderTop: `1px solid ${V.line2}` }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-        <span style={{ fontWeight: 600, fontSize: phone ? 16 : 15 }}>{you ? tv('hedwig.v2.thread.you', 'You') : senderName(m.from)}</span>
-        <span style={{ fontSize: 12, color: V.muted }} title={fullTime(m.date)}>{phone ? listTime(m.date) : `${to} · ${listTime(m.date)}`}</span>
-        <span style={{ flexGrow: 1 }} />
-        <Mono>{n}</Mono>
+// ── Message bodies ───────────────────────────────────────────────────────────
+/**
+ * One message's body for the reader: the body route result, fetched when the message opens (the
+ * latest one arrives with the thread). Under the mock the message's own html / text is used.
+ * `remote` refetches with remote images, after the user asked.
+ */
+function useBody(m, open) {
+  const local = isMockMode() || !m.id;
+  const initial = () => {
+    if (m.body) return { body: m.body, error: null, loading: false };
+    if (local) return { body: { html: m.html || null, text: m.text ?? m.snippet ?? '', attachments: m.raw?.attachments || [], hasBlockedRemoteImages: m.hasBlockedRemoteImages }, error: null, loading: false };
+    return { body: null, error: null, loading: false };
+  };
+  const [state, setState] = useState(initial);
+  const [remote, setRemote] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    if (!open || local) return undefined;
+    if (!remote && attempt === 0 && state.body) return undefined;
+    let alive = true;
+    setState((s) => ({ ...s, loading: true, error: null }));
+    loadFullBody(m.id, remote)
+      .then((body) => { if (alive) setState({ body, error: null, loading: false }); })
+      .catch((error) => { if (alive) setState((s) => ({ body: s.body, error, loading: false })); });
+    return () => { alive = false; };
+  }, [open, remote, attempt, m.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const loadImages = useCallback(() => {
+    if (local) { setState((s) => ({ ...s, body: s.body && { ...s.body, hasBlockedRemoteImages: false } })); return; }
+    setRemote(true);
+  }, [local]);
+  return { ...state, remote, loadImages, retry: () => setAttempt((n) => n + 1) };
+}
+
+/** The "•••" that folds quoted history in and out, in place (28×16, radius 4). */
+function QuoteToggle({ open, onToggle }) {
+  const label = open ? tv('hedwig.v2.thread.hideQuoted', 'Hide quoted text') : tv('hedwig.v2.thread.showQuoted', 'Show quoted text');
+  return (
+    <button
+      type="button"
+      data-quote-toggle=""
+      aria-expanded={open}
+      aria-label={label}
+      title={label}
+      onClick={onToggle}
+      className="hw-btn"
+      style={{ alignSelf: 'flex-start', width: 28, height: 16, padding: 0, border: 0, borderRadius: 4, background: V.field, color: V.muted, fontFamily: V.sans, fontSize: 10, lineHeight: '16px', letterSpacing: '0.08em', cursor: 'pointer', flexShrink: 0 }}
+    >
+      •••
+    </button>
+  );
+}
+
+function RemoteImagesBanner({ senderEmail, onLoad, phone }) {
+  const [saving, setSaving] = useState(false);
+  const always = async () => {
+    setSaving(true);
+    try {
+      const add = useStore.getState().addToImageWhitelist;
+      if (add && !isMockMode()) await add({ type: 'address', value: senderEmail });
+      onLoad();
+    } catch (err) {
+      useStore.getState().addNotification?.({ type: 'error', title: tv('hedwig.v2.thread.whitelistFailed', 'Could not remember this sender.'), body: err?.message });
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <div role="note" data-remote-images="" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', minHeight: 36, padding: '4px 12px', boxSizing: 'border-box', borderRadius: 8, background: V.field, fontSize: 12, color: V.muted }}>
+      <Icon name="image-off" size={14} />
+      <span style={{ flex: '1 1 200px', minWidth: 0 }}>{tv('hedwig.v2.thread.imagesHidden', 'Remote images are hidden to protect your privacy.')}</span>
+      <LinkBtn hit={phone} onClick={onLoad} style={{ fontSize: 12, color: V.accentInk, textDecoration: 'none' }}>{tv('hedwig.v2.thread.loadImages', 'Load images')}</LinkBtn>
+      {senderEmail && (
+        <LinkBtn hit={phone} disabled={saving} onClick={always} style={{ fontSize: 12, color: V.accentInk, textDecoration: 'none' }}>{tv('hedwig.v2.thread.imagesAlways', 'Always for this sender')}</LinkBtn>
+      )}
+    </div>
+  );
+}
+
+function HtmlBody({ m, html, body, isReply }) {
+  const iframeRef = useRef(null);
+  const emailScaleRef = useRef(1);
+  const split = useMemo(() => splitQuotedHtml(html, { isReply }), [html, isReply]);
+  const [showQuoted, setShowQuoted] = useState(false);
+  const shown = useMemo(() => ({ ...body, html: showQuoted || !split.quoted ? html : split.main }), [body, html, showQuoted, split]);
+  return (
+    <>
+      <div
+        data-html-body=""
+        style={{ background: '#FFFFFF', borderRadius: 10, padding: '14px 16px 12px', overflow: 'hidden', contain: 'layout', border: `1px solid ${V.line}`, colorScheme: 'light' }}
+      >
+        <MessageBodyView iframeRef={iframeRef} body={shown} messageId={m.id} emailScaleRef={emailScaleRef} hasNativeContextTarget={NATIVE} onContextMenu={NOOP} />
       </div>
+      {split.quoted && <QuoteToggle open={showQuoted} onToggle={() => setShowQuoted((v) => !v)} />}
+    </>
+  );
+}
+
+function TextBody({ text }) {
+  const split = useMemo(() => splitQuotedText(text), [text]);
+  const [showQuoted, setShowQuoted] = useState(false);
+  const style = { margin: 0, fontSize: 14, lineHeight: '21px', maxWidth: '68ch', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', textWrap: 'pretty' };
+  return (
+    <>
+      <p data-text-body="" style={style}>{split.main}</p>
+      {split.quoted && <QuoteToggle open={showQuoted} onToggle={() => setShowQuoted((v) => !v)} />}
+      {split.quoted && showQuoted && <p data-quoted="" style={{ ...style, color: V.muted }}>{split.quoted}</p>}
+    </>
+  );
+}
+
+/**
+ * The body of one message: the rendered HTML (or plain text), the remote-images banner, the
+ * attachments. Loading and error states in place.
+ */
+export function MessageBody({ m, state, phone = false }) {
+  const { body, error, loading, remote, loadImages, retry } = state;
+  const isReply = isReplyMessage(m.subject || m.raw?.subject, m.inReplyTo);
+  if (!body) {
+    if (error) {
+      return (
+        <div role="alert" style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap', fontSize: 13, color: V.red }}>
+          <span>{tv('hedwig.v2.thread.bodyFailed', 'This message could not be loaded.')}</span>
+          <LinkBtn hit={phone} onClick={retry} style={{ color: V.red }}>{tv('hedwig.v2.action.retry', 'Try again')}</LinkBtn>
+        </div>
+      );
+    }
+    return <Quiet style={{ padding: '4px 0' }}>{loading ? tv('hedwig.v2.loading', 'Loading…') : m.snippet}</Quiet>;
+  }
+  const html = typeof body.html === 'string' && body.html.trim() ? body.html : null;
+  const text = html ? '' : String(body.text ?? m.text ?? m.snippet ?? '');
+  return (
+    <div data-message-body="" style={{ display: 'flex', flexDirection: 'column', gap: 10, minWidth: 0 }}>
+      {html && body.hasBlockedRemoteImages && !remote && (
+        <RemoteImagesBanner senderEmail={body.senderEmail || m.from?.email} onLoad={loadImages} phone={phone} />
+      )}
+      {html ? <HtmlBody m={m} html={html} body={body} isReply={isReply} /> : <TextBody text={text} />}
+      {error && <ErrorLine error={error} onRetry={retry} retryLabel={tv('hedwig.v2.action.retry', 'Try again')} />}
+      {Array.isArray(body.attachments) && body.attachments.length > 0 && (
+        <AttachmentChips look="hedwig" messageId={m.id} attachments={body.attachments} />
+      )}
+    </div>
+  );
+}
+
+// ── Messages ─────────────────────────────────────────────────────────────────
+function MessageMenu({ onReply, onForward, onSource, visible }) {
+  return (
+    <span style={{ opacity: visible ? 1 : 0, transition: 'opacity 120ms ease', display: 'inline-flex' }}>
+      <MenuButton
+        label={tv('hedwig.v2.thread.messageActions', 'Message actions')}
+        align="right"
+        width={200}
+        buttonClassName="hw-icon-btn"
+        buttonStyle={{ width: 24, height: 24, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0, border: 0, borderRadius: 6, background: 'transparent', color: V.muted, cursor: 'pointer' }}
+        items={() => [
+          { id: 'reply', label: tv('hedwig.v2.thread.reply', 'Reply'), icon: 'reply', onSelect: onReply },
+          { id: 'forward', label: tv('hedwig.v2.thread.forward', 'Forward'), icon: 'forward', onSelect: onForward },
+          { id: 'source', label: tv('hedwig.v2.thread.viewSource', 'View source'), icon: 'file', onSelect: onSource },
+        ]}
+      >
+        <Icon name="ellipsis" size={16} />
+      </MenuButton>
+    </span>
+  );
+}
+
+/**
+ * One message, as `article#hw-msg-N`. Open: the header (36px avatar, name, address on hover,
+ * To/Cc, date, paperclip, the hover ellipsis), the TL;DR, the body. Collapsed: a 44px row.
+ */
+function MessageItem({ m, n, you, open, onToggle, phone, tldr = null, cards = false, onReply, onForward, onSource, children }) {
+  const state = useBody(m, open);
+  const [hover, setHover] = useState(false);
+  const [recipientsOpen, setRecipientsOpen] = useState(false);
+  const name = you ? tv('hedwig.v2.thread.you', 'You') : senderName(m.from);
+  const attachCount = Array.isArray(state.body?.attachments) ? state.body.attachments.length : 0;
+  const clip = attachCount > 0 || m.hasAttachments;
+  const when = fullTime(m.date);
+
+  if (!open) {
+    return (
+      <article id={`hw-msg-${n}`} style={{ borderTop: `1px solid ${V.line}` }}>
+        <button
+          type="button"
+          aria-expanded={false}
+          onClick={onToggle}
+          className="hw-btn"
+          style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', minHeight: phone ? 48 : 44, padding: phone ? '0 16px' : '0 24px', border: 0, borderRadius: 0, background: 'transparent', color: V.ink, font: 'inherit', textAlign: 'left', cursor: 'pointer' }}
+        >
+          <Avatar name={senderName(m.from)} email={m.from?.email} size={24} />
+          <span style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0, maxWidth: '40%', overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</span>
+          <span style={{ flex: 1, minWidth: 0, fontSize: 12, color: V.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{snippetOf(m)}</span>
+          {clip && <span style={{ color: V.muted, display: 'inline-flex' }}><Icon name="paperclip" size={12} /></span>}
+          <span title={when} style={{ fontSize: 12, color: V.muted, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', flexShrink: 0 }}>{listTime(m.date)}</span>
+        </button>
+      </article>
+    );
+  }
+
+  const recipients = recipientsLine(m.to && m.to !== 'you' ? m.to : tv('hedwig.v2.thread.youLower', 'you'), m.cc);
+  return (
+    <article
+      id={`hw-msg-${n}`}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      onFocus={() => setHover(true)}
+      onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setHover(false); }}
+      style={{ display: 'flex', flexDirection: 'column', borderTop: `1px solid ${V.line}`, padding: phone ? '14px 16px 16px' : '16px 24px 18px', gap: 12 }}
+    >
+      <header style={{ display: 'grid', gridTemplateColumns: '36px minmax(0, 1fr) auto', gap: 12, alignItems: 'start' }}>
+        <Avatar name={senderName(m.from)} email={m.from?.email} size={36} />
+        <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <button
+            type="button"
+            aria-expanded
+            onClick={onToggle}
+            title={tv('hedwig.v2.thread.collapse', 'Collapse')}
+            style={{ display: 'flex', alignItems: 'baseline', gap: 6, minWidth: 0, padding: 0, border: 0, background: 'none', color: V.ink, font: 'inherit', textAlign: 'left', cursor: 'pointer' }}
+          >
+            <span style={{ fontSize: 14, fontWeight: 600, lineHeight: '19px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</span>
+            {m.from?.email && !phone && (
+              <span style={{ fontSize: 12, color: V.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', opacity: hover ? 1 : 0, transition: 'opacity 120ms ease' }}>{m.from.email}</span>
+            )}
+          </button>
+          {recipients && (
+            <button
+              type="button"
+              onClick={() => setRecipientsOpen((v) => !v)}
+              aria-expanded={recipientsOpen}
+              aria-label={recipients}
+              style={{ padding: 0, border: 0, background: 'none', font: 'inherit', fontSize: 12, lineHeight: '16px', color: V.muted, textAlign: 'left', cursor: 'pointer', minWidth: 0, ...(recipientsOpen ? { whiteSpace: 'normal', overflowWrap: 'anywhere' } : { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }) }}
+            >
+              {recipients}
+            </button>
+          )}
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span title={when} style={{ fontSize: 12, lineHeight: '19px', color: V.muted, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{phone ? listTime(m.date) : when}</span>
+            {!phone && m.id && <MessageMenu visible={hover} onReply={onReply} onForward={onForward} onSource={onSource} />}
+          </div>
+          {clip && (
+            <span aria-label={attachCount ? tvn(attachCount, ['hedwig.v2.thread.attachmentOne', '1 attachment'], ['hedwig.v2.thread.attachmentMany', '{{n}} attachments']) : tv('hedwig.v2.thread.hasAttachments', 'Has attachments')} style={{ display: 'inline-flex', alignItems: 'center', gap: 2, fontSize: 11, color: V.muted, fontVariantNumeric: 'tabular-nums' }}>
+              <Icon name="paperclip" size={12} />{attachCount || null}
+            </span>
+          )}
+        </div>
+      </header>
+      {cards && m.id && <MessageCards messageId={m.id} phone={phone} />}
       {tldr && (
-        <p data-tldr="" aria-label={tv('hedwig.v2.thread.tldrLabel', 'In short: {{text}}', { text: tldr })} style={{ margin: 0, fontSize: 14, lineHeight: 1.45, color: V.muted, maxWidth: '62ch', textWrap: 'pretty' }}>
+        <p data-tldr="" aria-label={tv('hedwig.v2.thread.tldrLabel', 'In short: {{text}}', { text: tldr })} style={{ margin: 0, fontSize: 12, lineHeight: '17px', color: V.muted, maxWidth: '68ch', textWrap: 'pretty', display: 'flex', gap: 4 }}>
+          <span aria-hidden="true" style={{ color: V.accent, display: 'inline-flex', paddingTop: 2, flexShrink: 0 }}><Icon name="sparkles" size={12} /></span>
           {tldr}
         </p>
       )}
-      <p style={{ margin: 0, fontSize: 16, lineHeight: phone ? 1.55 : 1.6, maxWidth: '62ch', textWrap: 'pretty', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
-        {m.text ?? m.snippet ?? ''}
-      </p>
+      <MessageBody m={m} state={state} phone={phone} />
       {children}
     </article>
   );
-  // The cards Hedwig read from a message sit above it.
-  if (!m.id) return article;
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <MessageCards messageId={m.id} phone={phone} />
-      {article}
-    </div>
-  );
 }
 
-function EarlierMessages({ messages, open, onToggle, myEmails, phone, tldrs = {} }) {
-  const [bodies, setBodies] = useState({});
-  useEffect(() => {
-    if (!open) return;
-    for (const m of messages) {
-      if (m.text != null || bodies[m.id]) continue;
-      setBodies((b) => ({ ...b, [m.id]: { loading: true } }));
-      loadBody(m.id).then((b) => setBodies((x) => ({ ...x, [m.id]: b }))).catch(() => setBodies((x) => ({ ...x, [m.id]: { text: m.snippet } })));
-    }
-  }, [open, messages]); // eslint-disable-line react-hooks/exhaustive-deps
-  if (!messages.length) return null;
-  const range = messages.length === 1 ? '1' : `1–${messages.length}`;
+function FoldRow({ count, onOpen, phone }) {
   return (
-    <div>
+    <div style={{ borderTop: `1px solid ${V.line}` }}>
       <button
         type="button"
-        aria-expanded={open}
-        onClick={onToggle}
-        style={{ font: 'inherit', display: 'flex', alignItems: 'baseline', gap: 10, padding: phone ? '2px 0 12px' : '6px 0 14px', fontSize: 13, color: V.muted, textAlign: 'left', width: '100%', border: 0, background: 'none', cursor: 'pointer', minHeight: phone ? 44 : undefined }}
+        aria-expanded={false}
+        onClick={onOpen}
+        className="hw-btn"
+        style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', minHeight: phone ? 48 : 44, padding: phone ? '0 16px' : '0 24px', border: 0, borderRadius: 0, background: 'transparent', color: V.accentInk, font: 'inherit', fontSize: 13, fontWeight: 500, textAlign: 'left', cursor: 'pointer' }}
       >
-        <Mono>{range}</Mono>
-        <span>{tvn(messages.length, ['hedwig.v2.thread.earlierOne', 'One earlier message'], ['hedwig.v2.thread.earlierMany', '{{n}} earlier messages'])}</span>
-        <span style={{ flexGrow: 1 }} />
-        <span className="hw-link" style={{ fontSize: 13, fontWeight: 500, color: V.ink }}>{open ? tv('hedwig.v2.records.hide', 'Hide') : tv('hedwig.v2.records.show', 'Show')}</span>
+        <span style={{ width: 24, display: 'inline-flex', justifyContent: 'center', color: V.muted }}><Icon name="history" size={16} /></span>
+        {tvn(count, ['hedwig.v2.thread.earlierOne', 'One earlier message'], ['hedwig.v2.thread.earlierMany', '{{n}} earlier messages'])}
       </button>
-      {open && messages.map((m, i) => {
-        const b = bodies[m.id];
-        const shown = { ...m, text: m.text ?? (b?.loading ? tv('hedwig.v2.loading', 'Loading…') : b?.text ?? m.snippet) };
-        return (
-          <div key={m.id} style={{ paddingBottom: 14 }}>
-            <MessageBlock m={shown} n={i + 1} you={myEmails.has(String(m.from?.email || '').toLowerCase())} phone={phone} tldr={tldrs[m.id] || null} />
-          </div>
-        );
-      })}
     </div>
   );
 }
 
+// ── Reply bar ────────────────────────────────────────────────────────────────
 const WAIT_DAYS = [1, 2, 3, 5, 7, 10, 14];
 function defaultWaitDays() {
   const n = Math.round(Number(settingValue('work.waitingDefaultDays', 3)));
   return Number.isFinite(n) && n >= 1 ? Math.min(60, n) : 3;
 }
 
-/** The reply bar's "remind me if no reply" checkbox with its number of days. */
+/** "Remind me if no reply" (a bell toggle) with its number of days. */
 function RemindIfNoReply({ on, days, onToggle, onDays, phone }) {
   const options = WAIT_DAYS.includes(days) ? WAIT_DAYS : [...WAIT_DAYS, days].sort((a, b) => a - b);
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', fontSize: 13, color: V.muted }}>
-      <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minHeight: phone ? 44 : 28, cursor: 'pointer' }}>
-        <input type="checkbox" checked={on} onChange={(e) => onToggle(e.target.checked)} style={{ accentColor: 'var(--hw-accent)', width: phone ? 20 : 16, height: phone ? 20 : 16, margin: 0 }} />
+    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', fontSize: 12, color: on ? V.accentInk : V.muted }}>
+      <label
+        title={tv('hedwig.v2.waiting.remindTip', 'If nobody answers in time, Hedwig puts this thread back in front of you.')}
+        style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minHeight: phone ? 44 : 28, cursor: 'pointer' }}
+      >
+        <input type="checkbox" checked={on} onChange={(e) => onToggle(e.target.checked)} style={{ accentColor: 'var(--hw-accent)', width: 14, height: 14, margin: 0 }} />
+        <Icon name="bell" size={14} />
         {tv('hedwig.v2.waiting.remindIfNoReply', 'Remind me if no reply')}
       </label>
       <select
         value={days}
         onChange={(e) => { onDays(Number(e.target.value)); onToggle(true); }}
         aria-label={tv('hedwig.v2.waiting.remindAfter', 'Remind me after')}
-        style={{ height: phone ? 44 : 28, border: 0, borderBottom: `1px solid ${V.line2}`, background: 'transparent', color: on ? V.ink : V.muted, font: 'inherit', fontSize: 13, borderRadius: 0, cursor: 'pointer' }}
+        style={{ height: phone ? 44 : 24, border: 0, borderRadius: 6, padding: '0 4px', background: 'transparent', color: on ? V.ink : V.muted, font: 'inherit', fontSize: 12, cursor: 'pointer' }}
       >
         {options.map((n) => <option key={n} value={n}>{tvn(n, ['hedwig.v2.waiting.inOneDay', 'in 1 day'], ['hedwig.v2.waiting.inDays', 'in {{n}} days'])}</option>)}
       </select>
@@ -223,6 +516,27 @@ function RemindIfNoReply({ on, days, onToggle, onDays, phone }) {
   );
 }
 
+function QuickReplies({ items, onPick, disabled, phone }) {
+  if (!items.length) return null;
+  return (
+    <div style={{ display: 'flex', gap: 8, flexWrap: phone ? 'nowrap' : 'wrap', overflowX: phone ? 'auto' : undefined, scrollbarWidth: phone ? 'none' : undefined }}>
+      {items.map((q) => (
+        <button
+          key={q}
+          type="button"
+          className="hw-btn"
+          disabled={disabled}
+          onClick={() => onPick(q)}
+          style={{ height: phone ? 44 : 28, padding: '0 10px', borderRadius: 8, border: `1px solid ${V.line2}`, background: 'transparent', color: V.ink, font: 'inherit', fontSize: 13, whiteSpace: 'nowrap', cursor: 'pointer', flexShrink: 0 }}
+        >
+          {q}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ── The reader ───────────────────────────────────────────────────────────────
 export default function Thread({ props }) {
   const phoneCtx = usePhone();
   const phone = Boolean(phoneCtx?.phone);
@@ -234,24 +548,39 @@ export default function Thread({ props }) {
   const item = props?.item || selected;
   const t = useThread(item);
   const door = useWhyDoor();
-  const [showEarlier, setShowEarlier] = useState(false);
+  const sectionRef = useRef(null);
+  const width = useWidth(sectionRef);
+  const [toggled, setToggled] = useState({});         // messageId → open / closed, over the default
+  const [unfolded, setUnfolded] = useState(false);
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(null);
   const [actionError, setActionError] = useState(null);
-  const [warnings, setWarnings] = useState(null); // { body, list } from the send guard
+  const [warnings, setWarnings] = useState(null);     // { body, list } from the send guard
   const [watchOn, setWatchOn] = useState(false);      // "remind me if no reply in N days"
   const [remindDays, setRemindDays] = useState(() => defaultWaitDays());
+  const [focused, setFocused] = useState(false);      // the reply bar has focus (it grows)
+  const [flagged, setFlagged] = useState(false);
+  const [headersFor, setHeadersFor] = useState(null);
+  const [folders, setFolders] = useState({ account: null, list: null, loading: false });
   const inputRef = useRef(null);
+  const pointerInBar = useRef(false);
+  const snoozeRef = useRef(null);
+  const moveRef = useRef(null);
+  const moreRef = useRef(null);
 
-  useEffect(() => { setShowEarlier(false); setDraft(''); setActionError(null); setWarnings(null); setWatchOn(false); setRemindDays(defaultWaitDays()); }, [item?.messageId]);
+  useEffect(() => {
+    setToggled({}); setUnfolded(false); setDraft(''); setActionError(null); setWarnings(null); setWatchOn(false);
+    setRemindDays(defaultWaitDays()); setFocused(false); setHeadersFor(null);
+  }, [item?.messageId]);
 
   const data = t.data;
-  const messages = data?.messages || [];
+  const messages = useMemo(() => data?.messages || [], [data]);
   const latest = messages[messages.length - 1];
-  const earlier = messages.slice(0, -1);
   const reason = useWhy(latest?.id && item ? item.messageId : null, item?.reason);
   const [question, setQuestion] = useInlineQuestion(latest?.id || null);
   const myEmails = new Set((accounts || []).flatMap((a) => [a.email_address, ...(a.aliases || []).map((x) => x.email)]).filter(Boolean).map((e) => e.toLowerCase()));
+  const isMine = (m) => myEmails.has(String(m?.from?.email || '').toLowerCase());
+  useEffect(() => { setFlagged(Boolean(latest?.starred)); }, [latest?.id, latest?.starred]);
 
   const run = async (key, fn) => {
     setBusy(key);
@@ -262,42 +591,70 @@ export default function Thread({ props }) {
     } finally { setBusy(null); }
   };
 
-  if (!item) {
-    return (
-      <div className="hw-v2" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 32, textAlign: 'center' }}>
-        <Why size={20}>{tv('hedwig.v2.thread.empty', 'Pick a conversation to read it here.')}</Why>
-      </div>
-    );
-  }
-
-  const title = data?.subject || item.subject || '';
-  const people = data?.participants || (data?.people?.length
-    ? tv('hedwig.v2.thread.andYou', '{{names}} and you', { names: data.people.filter((p) => !myEmails.has(String(p).toLowerCase())).slice(0, 3).join(', ') || senderName(item.from) })
-    : senderName(item.from));
-  const meta = [people, messages.length ? tvn(messages.length, ['hedwig.v2.thread.messagesOne', '1 message'], ['hedwig.v2.thread.messagesMany', '{{n}} messages']) : null, !phone ? data?.label : null].filter(Boolean).join(' · ');
-  const replyTo = firstName(latest?.from || item.from);
-  const whyItem = { ...item, messageId: item.messageId, reason };
+  const threadId = item ? (item.threadId || item.messageId) : null;
+  const latestId = latest?.id || item?.messageId;
+  const whyItem = item ? { ...item, messageId: item.messageId, reason } : null;
 
   const done = () => run('done', async () => {
     await archiveThread(messages.map((m) => ({ id: m.id, folder: m.folder })));
     useV2.getState().select(null);
     if (phone) phoneCtx?.back?.();
   });
-  const threadId = item.threadId || item.messageId;
   const later = () => run('later', () => addToList('replyLater', threadId));
   const aside = () => run('aside', () => addToList('setAside', threadId));
-  const snoozeItems = () => snoozeTimes().map((s) => ({ id: s.id, label: s.label, onSelect: () => run('snooze', () => snooze(item.messageId, s.until, threadId)) }));
+  const snoozeItems = () => snoozeTimes().map((s) => ({ id: s.id, label: s.label, icon: 'alarm-clock', onSelect: () => run('snooze', () => snooze(item.messageId, s.until, threadId)) }));
   const showOriginal = async () => {
-    const row = await openMessage(latest?.id || item.messageId);
+    const row = await openMessage(latestId);
     if (row && !phone) useHedwig.getState().openView('core.thread');
+  };
+  const focusReply = () => {
+    if (phone) { run('reply', () => openReplyComposer(latestId, draft)); return; }
+    setFocused(true);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  };
+  const replyAll = () => run('reply', () => openReplyAllComposer(latestId, draft.trim()));
+  const forward = () => run('forward', () => openForwardComposer(latestId));
+  const popOut = () => run('reply', async () => { await openReplyComposer(latestId, draft); setDraft(''); setWarnings(null); });
+  const toggleFlag = () => run('flag', async () => {
+    const next = !flagged;
+    setFlagged(next);
+    try { await flagMessage(latestId, next); } catch (e) { setFlagged(!next); throw e; }
+  });
+  const unread = () => run('unread', async () => { await markUnread([latestId]); });
+  const spam = () => run('spam', async () => { await reportSpam(latestId); useV2.getState().select(null); if (phone) phoneCtx?.back?.(); });
+  const unsub = () => run('unsubscribe', () => unsubscribe(latestId));
+  const block = () => run('block', () => blockSender(latest?.from?.email));
+  const openDoor = (anchor) => { if (whyItem) door.open(whyItem, anchor); };
+
+  const moveIds = () => messages.filter((m) => m.id && m.folder === latest?.folder && m.accountId === latest?.accountId).map((m) => m.id);
+  const loadFolders = () => {
+    const account = latest?.accountId || null;
+    if (folders.loading || (folders.list && folders.account === account)) return;
+    setFolders({ account, list: null, loading: true });
+    folderList(account)
+      .then((list) => setFolders({ account, list, loading: false }))
+      .catch(() => setFolders({ account, list: [], loading: false }));
+  };
+  const moveItems = () => {
+    const list = (folders.list || []).filter((f) => f?.path && f.path !== latest?.folder);
+    return [
+      { id: 'stream', label: tv('hedwig.v2.thread.changeStream', 'Change stream…'), icon: 'list-filter', onSelect: () => openDoor((moveRef.current || moreRef.current)?.querySelector('button')) },
+      { type: 'header', label: tv('hedwig.v2.thread.folders', 'Folders') },
+      ...(folders.loading || !folders.list
+        ? [{ id: 'loading', label: tv('hedwig.v2.loading', 'Loading…'), icon: 'refresh', disabled: true }]
+        : list.length
+          ? list.map((f) => ({ id: `f:${f.path}`, label: f.name || f.path, icon: 'folder-input', onSelect: () => run('move', async () => { await moveMessages(moveIds(), f.path, f.name || f.path); useV2.getState().select(null); if (phone) phoneCtx?.back?.(); }) }))
+          : [{ id: 'none', label: tv('hedwig.v2.thread.noFolders', 'No other folders'), icon: 'folder-input', disabled: true }]),
+    ];
   };
 
   // A citation names a message: by id (the work route's citations) or by its number (older shape).
   const onCite = (n) => {
     const id = data?.story?.cites?.[n];
     const idx = id ? messages.findIndex((m) => m.id === id) : n - 1;
-    if (idx < 0) return;
-    if (idx < messages.length - 1) setShowEarlier(true);
+    if (idx < 0 || !messages[idx]) return;
+    setUnfolded(true);
+    setToggled((x) => ({ ...x, [messages[idx].id]: true }));
     requestAnimationFrame(() => document.getElementById(`hw-msg-${idx + 1}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
   };
 
@@ -321,12 +678,12 @@ export default function Thread({ props }) {
     const text = res?.draft || res?.after;
     if (text) { setDraft(text); setWarnings(null); requestAnimationFrame(() => inputRef.current?.focus()); }
   });
-  // The send guard runs first; its warnings show above the bar and the button becomes "Send
+  // The send guard runs first; its warnings show above the field and the button becomes "Send
   // anyway". It never blocks: a second press with the same text sends.
   const send = () => run('send', async () => {
     const body = draft.trim();
     if (!body) return;
-    const payload = await prepareReply(latest?.id || item.messageId, body);
+    const payload = await prepareReply(latestId, body);
     if (!payload) return;
     if (warnings?.body !== body) {
       const list = await guardReply(payload, threadId);
@@ -339,168 +696,385 @@ export default function Thread({ props }) {
   });
   const warned = warnings && warnings.body === draft.trim() ? warnings.list : null;
 
+  // Keys (desktop): the toolbar's letters. Upstream's own map still runs beside this one; it
+  // only acts on upstream's selection. Never inside a field, a dialog or an open menu, and never
+  // as the second key of a "g" sequence (g r, g h are Hedwig's go-to keys).
+  const keyActions = useRef(null);
+  keyActions.current = {
+    e: done, r: focusReply, a: replyAll, f: forward,
+    ...(work ? { l: later, s: aside } : {}),
+    // Folded into More below 900px: H and V open More, which holds Snooze and Move then.
+    h: () => (snoozeRef.current || moreRef.current)?.querySelector('button')?.click(),
+    v: () => { loadFolders(); (moveRef.current || moreRef.current)?.querySelector('button')?.click(); },
+  };
+  const keysOn = !phone && Boolean(data && latest);
+  useEffect(() => {
+    if (!keysOn) return undefined;
+    let lastG = 0;
+    const onKey = (e) => {
+      if (e.isComposing || e.repeat || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+      const st = useStore.getState();
+      if (st.composing || st.showAdmin) return;
+      const el = e.target;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable || el.closest?.('[role="dialog"], [role="menu"], [contenteditable="true"]'))) return;
+      if (document.querySelector('[role="dialog"][aria-modal="true"], [role="menu"]')) return;
+      const key = String(e.key || '').toLowerCase();
+      const now = Date.now();
+      if (key === 'g') { lastG = now; return; }
+      if (now - lastG < 1000) { lastG = 0; return; }
+      const fn = keyActions.current?.[key];
+      if (!fn) return;
+      e.preventDefault();
+      fn();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [keysOn]);
+
+  // The reply field grows while anything in the bar has focus, and while there is a draft.
+  const expanded = focused || Boolean(draft) || watchOn || Boolean(warned);
+  useLayoutEffect(() => {
+    const el = inputRef.current;
+    if (!el || phone) return;
+    el.style.height = 'auto';
+    const min = expanded ? 64 : 22;
+    el.style.height = `${Math.max(min, Math.min(148, el.scrollHeight || 0))}px`;
+  }, [draft, expanded, phone]);
+
+  if (!item) {
+    return (
+      <div className="hw-v2" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 32, textAlign: 'center' }}>
+        <Why size={13}>{tv('hedwig.v2.thread.empty', 'Pick a conversation to read it here.')}</Why>
+      </div>
+    );
+  }
+
+  const title = data?.subject || item.subject || '';
+  const people = data?.participants || (data?.people?.length
+    ? tv('hedwig.v2.thread.andYou', '{{names}} and you', { names: data.people.filter((p) => !myEmails.has(String(p).toLowerCase())).slice(0, 3).join(', ') || senderName(item.from) })
+    : senderName(item.from));
+  const meta = [people, messages.length ? tvn(messages.length, ['hedwig.v2.thread.messagesOne', '1 message'], ['hedwig.v2.thread.messagesMany', '{{n}} messages']) : null, !phone ? data?.label : null].filter(Boolean).join(' · ');
+  const replyTo = firstName(latest?.from || item.from);
+  const narrow = !phone && width != null && width < NARROW_READER;
   const trackerNote = latest?.trackersBlocked
     ? tvn(latest.trackersBlocked, ['hedwig.v2.thread.trackerOne', '1 tracker blocked'], ['hedwig.v2.thread.trackerMany', 'Trackers blocked: {{n}}'])
-    : latest?.hasBlockedRemoteImages ? tv('hedwig.v2.thread.imagesBlocked', 'Remote images blocked') : null;
+    : null;
 
-  const actions = (
-    <div style={{ display: 'flex', gap: 8, flexShrink: 0, paddingTop: 4 }}>
-      <Btn solid disabled={Boolean(busy)} onClick={done}>{tv('hedwig.v2.thread.done', 'Done')}</Btn>
-      {work && <Btn disabled={Boolean(busy)} onClick={later}>{tv('hedwig.v2.rail.replyLater', 'Reply Later')}</Btn>}
-      <MenuButton label={tv('hedwig.v2.thread.snooze', 'Snooze')} items={snoozeItems} align="right" width={220} buttonClassName="hw-btn"
-        buttonStyle={{ display: 'inline-flex', alignItems: 'center', height: 36, padding: '0 14px', borderRadius: 9, border: `1px solid ${V.line2}`, background: 'transparent', color: V.ink, font: 'inherit', fontSize: 13, fontWeight: 500, cursor: 'pointer' }}
-      >
-        {tv('hedwig.v2.thread.snooze', 'Snooze')}
-      </MenuButton>
-      {work && <Btn disabled={Boolean(busy)} onClick={aside}>{tv('hedwig.v2.thread.setAside', 'Set Aside')}</Btn>}
+  // ── toolbar ──
+  const iconMenuStyle = { width: 28, height: 28, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0, border: 0, borderRadius: 6, background: 'transparent', color: V.ink, cursor: 'pointer', flexShrink: 0 };
+  const snoozeLabel = `${tv('hedwig.v2.thread.snooze', 'Snooze')} (H)`;
+  const moreLabel = tv('hedwig.v2.thread.more', 'More');
+  const moreItems = ({ withGroup2 = false, withGroup4 = false, withReply = false } = {}) => [
+    ...(withGroup2 && work ? [{ id: 'later', label: tv('hedwig.v2.rail.replyLater', 'Reply Later'), icon: 'clock', hint: 'L', onSelect: later }] : []),
+    ...(withGroup2 ? snoozeItems().map((s) => ({ ...s, label: `${tv('hedwig.v2.thread.snooze', 'Snooze')}: ${s.label}` })) : []),
+    ...(withGroup2 && work ? [{ id: 'aside', label: tv('hedwig.v2.thread.setAside', 'Set Aside'), icon: 'bookmark', hint: 'S', onSelect: aside }] : []),
+    ...(withReply ? [
+      { id: 'replyAll', label: tv('hedwig.v2.thread.replyAll', 'Reply all'), icon: 'reply-all', onSelect: replyAll },
+      { id: 'forward', label: tv('hedwig.v2.thread.forward', 'Forward'), icon: 'forward', onSelect: forward },
+    ] : []),
+    ...(withGroup4 ? [
+      { id: 'flag', label: flagged ? tv('hedwig.v2.thread.unflag', 'Remove flag') : tv('hedwig.v2.thread.flag', 'Flag'), icon: 'flag', onSelect: toggleFlag },
+      { type: 'header', label: `${tv('hedwig.v2.thread.move', 'Move')} (V)` },
+      ...moveItems().filter((x) => x.type !== 'header'),
+    ] : []),
+    ...(withGroup2 || withGroup4 || withReply ? [{ type: 'separator' }] : []),
+    { id: 'unread', label: tv('hedwig.v2.thread.markUnread', 'Mark as unread'), icon: 'mail', onSelect: unread },
+    { id: 'source', label: tv('hedwig.v2.thread.viewSource', 'View source'), icon: 'file', onSelect: () => setHeadersFor(latestId) },
+    { id: 'unsubscribe', label: tv('hedwig.v2.thread.unsubscribe', 'Unsubscribe'), icon: 'mail-open', onSelect: unsub },
+    ...(latest?.from?.email && !isMine(latest) ? [{ id: 'block', label: tv('hedwig.v2.thread.blockSender', 'Block sender'), icon: 'ban', onSelect: block }] : []),
+    { id: 'spam', label: tv('hedwig.v2.thread.reportSpam', 'Report spam'), icon: 'circle-alert', onSelect: spam },
+    { id: 'original', label: tv('hedwig.v2.thread.original', 'Open original'), icon: 'external', onSelect: showOriginal },
+  ];
+
+  const group = (children, key) => <div key={key} role="group" style={{ display: 'flex', alignItems: 'center', gap: 2 }}>{children}</div>;
+  const toolbar = !phone && (
+    <Sheet
+      as="div"
+      role="toolbar"
+      aria-label={tv('hedwig.v2.thread.toolbar', 'Message actions')}
+      material="bar"
+      radius={0}
+      style={{ position: 'sticky', top: 0, zIndex: 3, flexShrink: 0, height: 48, boxSizing: 'border-box', display: 'flex', alignItems: 'center', gap: 12, padding: '0 12px', borderBottom: `1px solid ${V.line}` }}
+    >
+      {group(<IconButton icon="circle-check" label={tv('hedwig.v2.thread.done', 'Done')} kbd="E" primary showLabel disabled={Boolean(busy)} onClick={done} />, 'g1')}
+      {!narrow && group(<>
+        {work && <IconButton icon="clock" label={tv('hedwig.v2.rail.replyLater', 'Reply Later')} kbd="L" disabled={Boolean(busy)} onClick={later} />}
+        <span ref={snoozeRef} style={{ display: 'inline-flex' }}>
+          <MenuButton label={snoozeLabel} items={snoozeItems} align="left" width={220} buttonClassName="hw-icon-btn" buttonStyle={iconMenuStyle}>
+            <Icon name="alarm-clock" size={16} />
+          </MenuButton>
+        </span>
+        {work && <IconButton icon="bookmark" label={tv('hedwig.v2.thread.setAside', 'Set Aside')} kbd="S" disabled={Boolean(busy)} onClick={aside} />}
+      </>, 'g2')}
+      {group(<>
+        <IconButton icon="reply" label={tv('hedwig.v2.thread.reply', 'Reply')} kbd="R" onClick={focusReply} />
+        <IconButton icon="reply-all" label={tv('hedwig.v2.thread.replyAll', 'Reply all')} kbd="A" disabled={Boolean(busy)} onClick={replyAll} />
+        <IconButton icon="forward" label={tv('hedwig.v2.thread.forward', 'Forward')} kbd="F" disabled={Boolean(busy)} onClick={forward} />
+      </>, 'g3')}
+      <span style={{ flexGrow: 1 }} />
+      {group(<>
+        {!narrow && (
+          <span ref={moveRef} style={{ display: 'inline-flex' }} onClickCapture={loadFolders}>
+            <MenuButton label={`${tv('hedwig.v2.thread.move', 'Move')} (V)`} items={moveItems} align="right" width={240} buttonClassName="hw-icon-btn" buttonStyle={iconMenuStyle}>
+              <Icon name="folder-input" size={16} />
+            </MenuButton>
+          </span>
+        )}
+        {!narrow && <IconButton icon="flag" label={flagged ? tv('hedwig.v2.thread.unflag', 'Remove flag') : tv('hedwig.v2.thread.flag', 'Flag')} active={flagged} disabled={busy === 'flag'} onClick={toggleFlag} style={flagged ? { color: V.attention } : undefined} />}
+        <span ref={moreRef} style={{ display: 'inline-flex' }} onClickCapture={narrow ? loadFolders : undefined}>
+          <MenuButton label={moreLabel} items={() => moreItems({ withGroup2: narrow, withGroup4: narrow })} align="right" width={240} buttonClassName="hw-icon-btn" buttonStyle={iconMenuStyle}>
+            <Icon name="ellipsis" size={16} />
+          </MenuButton>
+        </span>
+      </>, 'g4')}
+    </Sheet>
+  );
+
+  // ── subject, reason, summary, deadline, cards ──
+  const reasonLine = (
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap', fontSize: 12, lineHeight: '17px', color: V.muted }}>
+      <span style={{ fontVariantNumeric: 'tabular-nums' }}>{meta}</span>
+      {reason && (
+        <>
+          <span aria-hidden="true">·</span>
+          <Reason glyph="info" onOpen={openDoor} hit={phone} label={tv('hedwig.v2.thread.whyLabel', 'Why: {{reason}}. Open to see or change', { reason })}>{reason}</Reason>
+          <LinkBtn hit={phone} onClick={(e) => openDoor(e.currentTarget)} aria-haspopup="dialog" style={{ fontSize: 12, color: V.accentInk, textDecoration: 'none' }}>{tv('hedwig.v2.thread.change', 'Change')}</LinkBtn>
+        </>
+      )}
+      {trackerNote && <><span aria-hidden="true">·</span><span>{trackerNote}</span></>}
+    </div>
+  );
+
+  const pad = phone ? '0 16px' : '0 24px';
+  const short = messages.length <= 3;
+  const lighter = data?.story && isLighter(data.storyProvenance, status);
+  const notice = tierNotice(status);
+  const summary = data && (
+    <>
+      {data.story && (
+        <SummaryBox
+          label={short ? tv('hedwig.v2.thread.summary', 'Summary') : tv('hedwig.v2.thread.storyShort', 'Story so far')}
+          ariaLabel={short ? tv('hedwig.v2.thread.summary', 'Summary') : tv('hedwig.v2.thread.story', 'The story so far')}
+          right={lighter && (
+            <span title={notice?.detail || notice?.text || undefined} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: V.muted }}>
+              <Icon name="info" size={12} />
+              <LighterLabel what="story" />
+            </span>
+          )}
+        >
+          <Clamped><Story text={data.story.text} onCite={onCite} phone={phone} /></Clamped>
+        </SummaryBox>
+      )}
+      {!data.story && data.tldr && messages.length > 1 && (
+        <SummaryBox label={tv('hedwig.v2.thread.summary', 'Summary')} ariaLabel={tv('hedwig.v2.thread.inShort', 'In short')}>
+          <p data-thread-tldr="" style={{ margin: 0, fontSize: 13, lineHeight: '19px', textWrap: 'pretty' }}>{data.tldr}</p>
+        </SummaryBox>
+      )}
+      {!data.story && data.storyProblem && messages.length > 1 && (
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
+          <Reason glyph="info">{data.storyProblem === 'budget'
+            ? tv('hedwig.v2.thread.storyBudget', 'Today’s budget for summaries is spent; the story so far is back tomorrow.')
+            : tv('hedwig.v2.thread.storyFailed', 'Hedwig could not write the story so far just now.')}
+          </Reason>
+          {data.storyProblem !== 'budget' && (
+            <LinkBtn hit={phone} disabled={t.loading || Boolean(busy)} onClick={() => t.reload(true, true)} style={{ fontSize: 12 }}>{tv('hedwig.v2.action.retry', 'Try again')}</LinkBtn>
+          )}
+        </div>
+      )}
+      {data.deadline && <DeadlineSlip deadline={data.deadline} from={latest?.from || item.from} phone={phone} onRemind={remind} onWrong={wrongDeadline} />}
+      {latest?.id && <MessageCards messageId={latest.id} phone={phone} />}
+    </>
+  );
+
+  // ── messages ──
+  const lastIdx = messages.length - 1;
+  const defaultOpen = (m, i) => i === lastIdx || m.unread;
+  const isOpen = (m, i) => toggled[m.id] ?? defaultOpen(m, i);
+  const foldable = messages.map((m, i) => (!defaultOpen(m, i) && toggled[m.id] !== true ? i : -1)).filter((i) => i >= 0);
+  const folded = !unfolded && foldable.length > FOLD_OVER ? new Set(foldable) : null;
+  const messageList = (
+    <div data-messages="" style={{ display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+      {messages.map((m, i) => {
+        if (folded?.has(i)) {
+          return i === foldable[0] ? <FoldRow key="fold" count={foldable.length} phone={phone} onOpen={() => setUnfolded(true)} /> : null;
+        }
+        const latestOne = i === lastIdx;
+        return (
+          <MessageItem
+            key={m.id || i}
+            m={m}
+            n={i + 1}
+            you={isMine(m)}
+            open={isOpen(m, i)}
+            onToggle={() => setToggled((x) => ({ ...x, [m.id]: !isOpen(m, i) }))}
+            phone={phone}
+            tldr={data.messageTldrs?.[m.id] || null}
+            cards={!latestOne}
+            onReply={() => run('reply', () => openReplyComposer(m.id))}
+            onForward={() => run('forward', () => openForwardComposer(m.id))}
+            onSource={() => setHeadersFor(m.id)}
+          >
+            {latestOne && question && <Question question={question} compact phone={phone} onDone={() => setQuestion(null)} />}
+          </MessageItem>
+        );
+      })}
     </div>
   );
 
   const quick = helpMeWrite && data?.quickReplies?.length ? data.quickReplies : [];
-  const replyBar = (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      {quick.length > 0 && (
-        <div style={{ display: 'flex', gap: 8, flexWrap: phone ? 'nowrap' : 'wrap', overflowX: phone ? 'auto' : undefined, scrollbarWidth: phone ? 'none' : undefined }}>
-          {quick.map((q) => <Btn key={q} size={phone ? 'phone' : 'md'} disabled={Boolean(busy)} onClick={() => { setDraft(q); inputRef.current?.focus(); }}>{q}</Btn>)}
-        </div>
-      )}
-      {warned && (
-        <div role="alert" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          {warned.map((w, i) => <Why key={i} tone="accent" size={15}>{w.text || w.message}</Why>)}
-        </div>
-      )}
-      {work && (
-        <RemindIfNoReply phone={phone} on={watchOn} days={remindDays} onToggle={setWatchOn} onDays={setRemindDays} />
-      )}
-      <form onSubmit={(e) => { e.preventDefault(); send(); }} style={{ display: 'flex', alignItems: 'center', gap: phone ? 10 : 12 }}>
-        <input
-          ref={inputRef}
-          type="text"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder={tv('hedwig.v2.thread.replyTo', 'Reply to {{name}}…', { name: replyTo })}
-          aria-label={tv('hedwig.v2.thread.replyToLabel', 'Reply to {{name}}', { name: replyTo })}
-          style={{ flexGrow: 1, minWidth: 0, height: phone ? 40 : 38, border: 0, borderBottom: `1px solid ${V.line2}`, background: 'transparent', font: 'inherit', fontSize: 15, color: V.ink, outline: 'none', borderRadius: 0 }}
-        />
-        {helpMeWrite && work && (
-          <LinkBtn hit={phone} disabled={Boolean(busy)} onClick={draftInVoice} style={{ flexShrink: 0 }}>
-            {busy === 'draft' ? tv('hedwig.v2.thread.drafting', 'Drafting…') : phone ? tv('hedwig.v2.thread.myVoice', 'My voice') : tv('hedwig.v2.thread.draftVoice', 'Draft in my voice')}
-          </LinkBtn>
-        )}
-        {phone
-          ? <IconBtn accent type="submit" label={warned ? tv('hedwig.v2.thread.sendAnyway', 'Send anyway') : tv('hedwig.v2.thread.send', 'Send')} disabled={Boolean(busy) || !draft.trim()}><Glyph name="send" /></IconBtn>
-          : <Btn solid type="submit" disabled={Boolean(busy) || !draft.trim()}>{busy === 'send' ? tv('hedwig.v2.thread.sending', 'Sending…') : warned ? tv('hedwig.v2.thread.sendAnyway', 'Send anyway') : tv('hedwig.v2.thread.send', 'Send')}</Btn>}
-      </form>
+  const warningLine = warned && (
+    <div role="alert" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      {warned.map((w, i) => (
+        <span key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 4, fontSize: 12, lineHeight: '17px', color: V.attentionInk }}>
+          <span style={{ display: 'inline-flex', alignSelf: 'center' }}><Icon name="circle-alert" size={12} /></span>
+          {w.text || w.message}
+        </span>
+      ))}
     </div>
   );
 
-  const whyLine = latest && (reason || trackerNote) && (
-    <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
-      {reason && <Why>{reason}</Why>}
-      {reason && <LinkBtn hit={phone} onClick={(e) => door.open(whyItem, e.currentTarget)} aria-haspopup="dialog">{tv('hedwig.v2.thread.change', 'Change')}</LinkBtn>}
-      {trackerNote && <span style={{ fontSize: 12, color: V.muted }}>{trackerNote}</span>}
-      <LinkBtn hit={phone} muted onClick={showOriginal}>{tv('hedwig.v2.thread.original', 'Show original')}</LinkBtn>
-    </div>
+  const replyLabel = tv('hedwig.v2.thread.replyToLabel', 'Reply to {{name}}', { name: replyTo });
+  const replyBar = data && latest && (phone
+    ? (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '12px 16px 16px', flexShrink: 0 }}>
+        <QuickReplies phone items={quick} disabled={Boolean(busy)} onPick={(q) => run('reply', () => openReplyComposer(latestId, q))} />
+        <button
+          type="button"
+          aria-label={replyLabel}
+          onClick={() => run('reply', () => openReplyComposer(latestId, ''))}
+          style={{ display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 14px', borderRadius: 10, border: 0, background: V.field, color: V.muted, font: 'inherit', fontSize: 15, textAlign: 'left', cursor: 'pointer' }}
+        >
+          <Icon name="reply" size={16} />
+          {tv('hedwig.v2.thread.replyTo', 'Reply to {{name}}…', { name: replyTo })}
+        </button>
+      </div>
+    )
+    : (
+      <div
+        data-reply-bar=""
+        onPointerDownCapture={() => { pointerInBar.current = true; setTimeout(() => { pointerInBar.current = false; }, 400); }}
+        onFocus={() => setFocused(true)}
+        onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget) && !pointerInBar.current) setFocused(false); }}
+        style={{ position: 'sticky', bottom: 0, zIndex: 2, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 8, padding: '10px 24px 14px', background: V.content, borderTop: `1px solid ${V.line}` }}
+      >
+        <QuickReplies items={quick} disabled={Boolean(busy)} onPick={(q) => { setDraft(q); setFocused(true); inputRef.current?.focus(); }} />
+        {warningLine}
+        <form
+          onSubmit={(e) => { e.preventDefault(); send(); }}
+          style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 220, boxSizing: 'border-box', padding: expanded ? '8px 8px 6px 12px' : '0 6px 0 12px', minHeight: 40, borderRadius: 10, background: V.field, border: `1px solid ${focused ? V.line2 : 'transparent'}` }}
+        >
+          <div style={{ display: 'flex', alignItems: expanded ? 'flex-start' : 'center', gap: 6, minHeight: expanded ? 0 : 38 }}>
+            <textarea
+              ref={inputRef}
+              rows={1}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); } }}
+              placeholder={tv('hedwig.v2.thread.replyTo', 'Reply to {{name}}…', { name: replyTo })}
+              aria-label={replyLabel}
+              style={{ flexGrow: 1, minWidth: 0, resize: 'none', border: 0, padding: 0, margin: 0, background: 'transparent', font: 'inherit', fontSize: 13, lineHeight: '19px', color: V.ink, outline: 'none', overflowY: 'auto' }}
+            />
+            {!expanded && <IconButton icon="popout" label={tv('hedwig.v2.thread.popOut', 'Open in the composer')} onClick={popOut} />}
+          </div>
+          {expanded && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              {helpMeWrite && work && (
+                <button
+                  type="button"
+                  className="hw-btn"
+                  disabled={Boolean(busy)}
+                  onClick={draftInVoice}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 5, height: 28, padding: '0 8px 0 6px', borderRadius: 6, border: 0, background: 'transparent', color: V.accentInk, font: 'inherit', fontSize: 12, fontWeight: 500, cursor: 'pointer' }}
+                >
+                  <Icon name="sparkles" size={14} />
+                  <span>{busy === 'draft' ? tv('hedwig.v2.thread.drafting', 'Drafting…') : tv('hedwig.v2.thread.draftVoice', 'Draft in my voice')}</span>
+                </button>
+              )}
+              {work && <RemindIfNoReply on={watchOn} days={remindDays} onToggle={setWatchOn} onDays={setRemindDays} />}
+              <span style={{ flexGrow: 1 }} />
+              <IconButton icon="popout" label={tv('hedwig.v2.thread.popOut', 'Open in the composer')} onClick={popOut} />
+              <span aria-hidden="true" style={{ fontSize: 11, color: V.muted, fontVariantNumeric: 'tabular-nums' }}>{SEND_KEYS}</span>
+              <Btn accent type="submit" title={`${tv('hedwig.v2.thread.send', 'Send')} (${SEND_KEYS})`} disabled={Boolean(busy) || !draft.trim()}>
+                {busy === 'send' ? tv('hedwig.v2.thread.sending', 'Sending…') : warned ? tv('hedwig.v2.thread.sendAnyway', 'Send anyway') : tv('hedwig.v2.thread.send', 'Send')}
+              </Btn>
+            </div>
+          )}
+        </form>
+      </div>
+    ));
+
+  const headersModal = headersFor && (
+    <MessageHeaderModal messageId={headersFor} subject={title} onClose={() => setHeadersFor(null)} />
   );
 
-  const body = (
+  const content = (
     <>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: phone ? '16px 16px 0' : '20px 24px 0', flexShrink: 0 }}>
+        <h2 style={{ margin: 0, fontFamily: V.sans, fontWeight: 600, fontSize: phone ? 22 : 20, lineHeight: phone ? '28px' : '26px', letterSpacing: '-0.01em', textWrap: 'pretty', overflowWrap: 'anywhere' }}>{title}</h2>
+        {reasonLine}
+      </div>
       {t.error && <ErrorLine error={t.error} onRetry={() => t.reload()} retryLabel={tv('hedwig.v2.action.retry', 'Try again')} />}
-      {t.loading && !data && <Quiet>{tv('hedwig.v2.loading', 'Loading…')}</Quiet>}
+      {t.loading && !data && <Quiet style={{ padding: phone ? '16px' : '16px 24px' }}>{tv('hedwig.v2.loading', 'Loading…')}</Quiet>}
       {data && (
         <>
-          {(data.story || data.deadline) && (
-            <div style={{ display: 'grid', gridTemplateColumns: !phone && data.story && data.deadline ? 'minmax(0, 1fr) 236px' : 'minmax(0, 1fr)', gap: phone ? 16 : 24, alignItems: 'start' }}>
-              {data.story && (
-                <section aria-label={tv('hedwig.v2.thread.story', 'The story so far')} style={{ display: 'flex', flexDirection: 'column', gap: phone ? 6 : 8, padding: phone ? '0 0 14px' : '14px 0', borderTop: phone ? 0 : `1px solid ${V.line2}`, borderBottom: `1px solid ${V.line}` }}>
-                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
-                    <Why>{tv('hedwig.v2.thread.story', 'The story so far')}</Why>
-                    {isLighter(data.storyProvenance, status) && <LighterLabel what="story" size={13} />}
-                  </div>
-                  <Story text={data.story.text} onCite={onCite} phone={phone} />
-                </section>
-              )}
-              {data.deadline && <DeadlineSlip deadline={data.deadline} from={latest?.from || item.from} phone={phone} onRemind={remind} onWrong={wrongDeadline} />}
-            </div>
-          )}
-          {!data.story && data.tldr && messages.length > 1 && (
-            <section aria-label={tv('hedwig.v2.thread.inShort', 'In short')} style={{ padding: phone ? '0 0 10px' : '10px 0', borderTop: phone ? 0 : `1px solid ${V.line2}`, borderBottom: `1px solid ${V.line}` }}>
-              <p data-thread-tldr="" style={{ margin: 0, fontSize: 15, lineHeight: 1.5, textWrap: 'pretty' }}>{data.tldr}</p>
-            </section>
-          )}
-          {!data.story && data.storyProblem && messages.length > 1 && (
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap', paddingBottom: 4 }}>
-              <Why size={15}>{data.storyProblem === 'budget'
-                ? tv('hedwig.v2.thread.storyBudget', 'Today’s budget for summaries is spent; the story so far is back tomorrow.')
-                : tv('hedwig.v2.thread.storyFailed', 'Hedwig could not write the story so far just now.')}
-              </Why>
-              {data.storyProblem !== 'budget' && (
-                <LinkBtn hit={phone} disabled={t.loading || Boolean(busy)} onClick={() => t.reload(true, true)}>{tv('hedwig.v2.action.retry', 'Try again')}</LinkBtn>
-              )}
-            </div>
-          )}
-          <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
-            <EarlierMessages messages={earlier} open={showEarlier} onToggle={() => setShowEarlier((v) => !v)} myEmails={myEmails} phone={phone} tldrs={data.messageTldrs || {}} />
-            {latest && (
-              <MessageBlock m={latest} n={messages.length} you={myEmails.has(String(latest.from?.email || '').toLowerCase())} phone={phone} tldr={data.messageTldrs?.[latest.id] || null}>
-                {whyLine}
-                {question && <Question question={question} compact phone={phone} onDone={() => setQuestion(null)} />}
-              </MessageBlock>
-            )}
-          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: pad, margin: '14px 0 16px', flexShrink: 0 }}>{summary}</div>
+          {messageList}
         </>
       )}
-      <ErrorLine error={actionError} />
+      <div style={{ padding: pad, flexShrink: 0 }}><ErrorLine error={actionError} /></div>
     </>
   );
 
   if (phone) {
-    const moreItems = () => [
-      ...(work ? [{ id: 'later', label: tv('hedwig.v2.rail.replyLater', 'Reply Later'), onSelect: later }] : []),
-      ...snoozeItems().map((s) => ({ ...s, label: `${tv('hedwig.v2.thread.snooze', 'Snooze')}: ${s.label}` })),
-      ...(work ? [{ id: 'aside', label: tv('hedwig.v2.thread.setAside', 'Set Aside'), onSelect: aside }] : []),
-      { id: 'original', label: tv('hedwig.v2.thread.original', 'Show original'), onSelect: showOriginal },
-    ];
+    const barBtn = { width: 44, height: 44, minWidth: 44, flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', borderRadius: 10, border: 0, background: 'transparent', color: V.ink, cursor: 'pointer', padding: 0 };
     return (
-      <section className="hw-v2" aria-label={title} style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative', color: V.ink, fontFamily: V.sans }}>
-        <Sheet as="header" phone radius={0} style={{ position: 'relative', zIndex: 3, borderTop: 0, borderRadius: '0 0 28px 28px', padding: 'calc(var(--sat, env(safe-area-inset-top, 0px)) + 10px) 12px 10px', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-          <IconBtn label={tv('hedwig.v2.thread.back', 'Back')} onClick={() => phoneCtx?.back?.()}><Glyph name="back" /></IconBtn>
-          <div style={{ flexGrow: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
-            <span style={{ fontFamily: V.serif, fontSize: 20, lineHeight: 1.1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{title}</span>
-            <span style={{ fontSize: 12, color: V.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{meta}</span>
-          </div>
-          <IconBtn solid label={tv('hedwig.v2.thread.done', 'Done')} disabled={Boolean(busy)} onClick={done}><Glyph name="check" /></IconBtn>
-          <MenuButton label={tv('hedwig.v2.thread.more', 'More')} items={moreItems} align="right" width={240} buttonClassName="hw-btn-quiet"
-            buttonStyle={{ width: 44, height: 44, minWidth: 44, flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', borderRadius: 12, border: 0, background: 'transparent', color: V.ink, cursor: 'pointer', padding: 0 }}
-          >
-            <Glyph name="more" />
+      <section ref={sectionRef} className="hw-v2" aria-label={title} style={{ flex: 1, minHeight: 0, minWidth: 0, display: 'flex', flexDirection: 'column', position: 'relative', color: V.ink, fontFamily: V.sans, background: V.content }}>
+        <Sheet as="header" phone material="bar" radius={0} style={{ position: 'relative', zIndex: 3, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4, padding: 'calc(var(--sat, env(safe-area-inset-top, 0px)) + 4px) 4px 4px', borderBottom: `0.5px solid ${V.line2}` }}>
+          <IconButton icon="chevron-left" size={44} label={tv('hedwig.v2.thread.back', 'Back')} onClick={() => phoneCtx?.back?.()} />
+          <span style={{ flexGrow: 1 }} />
+          <IconButton icon="flag" size={44} label={flagged ? tv('hedwig.v2.thread.unflag', 'Remove flag') : tv('hedwig.v2.thread.flag', 'Flag')} active={flagged} onClick={toggleFlag} style={flagged ? { color: V.attention } : undefined} />
+        </Sheet>
+        <div className="hw-scroll" style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          {content}
+          <div style={{ flexGrow: 1 }} />
+          {replyBar}
+        </div>
+        <Sheet as="footer" phone material="bar" radius={0} role="toolbar" aria-label={tv('hedwig.v2.thread.toolbar', 'Message actions')} style={{ position: 'relative', zIndex: 3, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-around', padding: '2px 8px calc(2px + env(safe-area-inset-bottom, 0px))', borderTop: `0.5px solid ${V.line2}` }}>
+          <IconButton icon="circle-check" size={44} label={tv('hedwig.v2.thread.done', 'Done')} disabled={Boolean(busy)} onClick={done} style={{ color: V.accent }} />
+          {work
+            ? <IconButton icon="clock" size={44} label={tv('hedwig.v2.rail.replyLater', 'Reply Later')} disabled={Boolean(busy)} onClick={later} />
+            : <IconButton icon="mail" size={44} label={tv('hedwig.v2.thread.markUnread', 'Mark as unread')} disabled={Boolean(busy)} onClick={unread} />}
+          <MenuButton label={tv('hedwig.v2.thread.snooze', 'Snooze')} items={snoozeItems} align="left" width={220} buttonClassName="hw-icon-btn" buttonStyle={barBtn}>
+            <Icon name="alarm-clock" size={22} />
+          </MenuButton>
+          <IconButton icon="reply" size={44} label={tv('hedwig.v2.thread.reply', 'Reply')} onClick={focusReply} />
+          <MenuButton label={moreLabel} items={() => [
+            ...(work ? [{ id: 'aside', label: tv('hedwig.v2.thread.setAside', 'Set Aside'), icon: 'bookmark', onSelect: aside }] : []),
+            ...moreItems({ withReply: true }).filter((x) => x.id !== 'unread' || work),
+            { id: 'stream', label: tv('hedwig.v2.thread.changeStream', 'Change stream…'), icon: 'folder-input', onSelect: () => openDoor(null) },
+          ]} align="right" width={240} buttonClassName="hw-icon-btn" buttonStyle={barBtn}>
+            <Icon name="ellipsis" size={22} />
           </MenuButton>
         </Sheet>
-        <div className="hw-scroll" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '16px 20px 24px', display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {body}
-        </div>
-        <Sheet as="footer" phone radius={0} style={{ position: 'relative', zIndex: 3, borderBottom: 0, borderRadius: '28px 28px 0 0', padding: '14px 16px calc(14px + env(safe-area-inset-bottom, 0px))', flexShrink: 0 }}>
-          {replyBar}
-        </Sheet>
         {door.element}
+        {headersModal}
       </section>
     );
   }
 
   return (
-    <section className="hw-v2 hw-scroll" aria-label={title} style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 18, padding: '30px 36px 24px', overflowY: 'auto', color: V.ink, fontFamily: V.sans, fontSize: 14, lineHeight: 1.45, fontVariantNumeric: 'tabular-nums' }}>
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap' }}>
-        {/* A title narrower than this wraps to four lines beside the actions; the actions go under it instead. */}
-        <div style={{ flex: '1 1 340px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <h2 style={{ margin: 0, fontFamily: V.serif, fontWeight: 400, fontSize: 34, lineHeight: 1.05, letterSpacing: '-0.015em', textWrap: 'pretty' }}>{title}</h2>
-          <span style={{ fontSize: 13, color: V.muted }}>{meta}</span>
-        </div>
-        {actions}
-      </div>
-      {body}
+    <section
+      ref={sectionRef}
+      className="hw-v2 hw-scroll"
+      aria-label={title}
+      style={{ flex: 1, minHeight: 0, minWidth: 0, display: 'flex', flexDirection: 'column', overflowY: 'auto', overflowX: 'hidden', color: V.ink, fontFamily: V.sans, fontSize: 13, lineHeight: 1.45, fontVariantNumeric: 'tabular-nums', position: 'relative' }}
+    >
+      {toolbar}
+      {content}
       <div style={{ flexGrow: 1 }} />
-      <div style={{ paddingTop: 14, borderTop: `1px solid ${V.line2}` }}>{replyBar}</div>
+      {replyBar}
       {door.element}
+      {headersModal}
     </section>
   );
 }

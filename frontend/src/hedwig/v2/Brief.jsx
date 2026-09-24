@@ -1,6 +1,9 @@
-// The Daily Brief (GET /insights/brief/today): date line, the headline, Ask, Needs you today,
-// Waiting on others with Nudge, "Today, from your Records" as a strip of figures, Reading picks,
-// the day's question (Yes always / No), and the "Hedwig today" line with Review or undo.
+// The Daily Brief (GET /insights/brief/today), an opaque reading page in the reader column
+// (DESIGN-AUDIT-2026-09-24 keep list): date line, the headline (22/600) in the summary box with
+// where its prose came from, the Ask field in the search field's look, Needs you today, Waiting on
+// others with Nudge, "Today, from your Records" as boxed cards with 20/600 tabular figures, Reading
+// picks, the day's question, and the "Hedwig today" line with Review or undo. Section headers are
+// the 11px/600 SectionLabel. No serif, no italic.
 import { useState } from 'react';
 import { useStore } from '../../store/index.js';
 import { useHedwig } from '../store.js';
@@ -10,7 +13,8 @@ import { listOf, v2Api, announceSortChange } from './client.js';
 import { openThread, showView, VIEW } from './nav.js';
 import { nudgeThread } from './mail.js';
 import { Question } from './Question.jsx';
-import { ErrorLine, Figure, LinkBtn, Mono, Quiet, V, ViewBody, Why, usePhone, ViewHead } from './primitives.jsx';
+import { ErrorLine, Figure, LinkBtn, Mono, Quiet, Reason, SectionLabel, Slip, V, ViewBody, usePhone, ViewHead } from './primitives.jsx';
+import { Icon } from '../icons.jsx';
 import { ageLabel, briefDateLine, listTime, senderName } from './format.js';
 import { tv } from './i18n.js';
 import { TierNote } from './TierNote.jsx';
@@ -19,21 +23,43 @@ import { isLighter } from './tiers.js';
 
 function Item({ time, children, action }) {
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '52px minmax(0, 1fr) auto', columnGap: 12, alignItems: 'baseline', padding: '12px 0', borderTop: `1px solid ${V.line}` }}>
-      <Mono size={12}>{time}</Mono>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>{children}</div>
+    <div style={{ display: 'grid', gridTemplateColumns: '52px minmax(0, 1fr) auto', columnGap: 12, alignItems: 'baseline', padding: '10px 0', borderTop: `1px solid ${V.line}` }}>
+      <Mono size={11}>{time}</Mono>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>{children}</div>
       {action || <span />}
     </div>
   );
 }
 
-function RowLink({ onClick, children, size = 16, weight = 500 }) {
+function RowLink({ onClick, children, weight = 500 }) {
   return (
-    <button type="button" onClick={onClick} className="hw-link" style={{ padding: 0, border: 0, background: 'none', color: V.ink, font: 'inherit', fontSize: size, fontWeight: weight, textAlign: 'left', cursor: 'pointer', textDecorationColor: 'transparent', minWidth: 0 }}>
+    <button type="button" onClick={onClick} className="hw-link" style={{ padding: 0, border: 0, background: 'none', color: V.ink, font: 'inherit', fontSize: 13, fontWeight: weight, textAlign: 'left', cursor: 'pointer', textDecorationColor: 'transparent', minWidth: 0 }}>
       {children}
     </button>
   );
 }
+
+/** A Brief section header: the 11px/600 section label, flush with the page's left edge. */
+function Head({ children, action }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, paddingBottom: 6 }}>
+      <SectionLabel as="h2" style={{ padding: 0, flexGrow: 1 }}>{children}</SectionLabel>
+      {action}
+    </div>
+  );
+}
+
+/**
+ * The Ask field in the look of the search field (spec §b), 36px here: radius 8, the --hw-field
+ * fill, a 14px glyph, 13px text, and a ring on the whole field while the input has focus.
+ * Ask.jsx uses the same style and CSS.
+ */
+export const ASK_FIELD_CSS = '.hw-ask-field:focus-within{box-shadow:0 0 0 2px var(--hw-accent)}.hw-ask-field input:focus-visible{outline:none}';
+export const askFieldStyle = {
+  display: 'flex', alignItems: 'center', gap: 8, height: 36, padding: '0 6px 0 12px', borderRadius: 8, background: V.field,
+  color: V.muted, fontSize: 13, boxSizing: 'border-box', minWidth: 0,
+};
+export const askInputStyle = { flexGrow: 1, minWidth: 0, height: '100%', border: 0, padding: 0, background: 'transparent', font: 'inherit', fontSize: 13, color: V.ink };
 
 const PROSE_REASONS = {
   tier2_degraded: () => tv('hedwig.v2.brief.reasonTier2', 'Tier 2 was not answering'),
@@ -138,37 +164,39 @@ export default function Brief() {
 
   const title = tv('hedwig.v2.rail.brief', 'Daily Brief');
   const askField = (
-    <form onSubmit={submitAsk} style={{ margin: 0 }}>
-      <label style={{ display: 'flex', alignItems: 'center', gap: 12, width: phone ? '100%' : 400, maxWidth: '100%', height: 44, padding: '0 4px', borderBottom: `1px solid ${V.line2}`, color: V.muted, fontSize: 15, boxSizing: 'border-box' }}>
-        <span style={{ fontFamily: V.why, fontStyle: 'italic', fontSize: 18, color: V.ink }}>{tv('hedwig.v2.brief.ask', 'Ask')}</span>
+    <form onSubmit={submitAsk} style={{ margin: 0, width: '100%', maxWidth: phone ? 'none' : 560 }}>
+      <style>{ASK_FIELD_CSS}</style>
+      <label className="hw-ask-field" style={{ ...askFieldStyle, height: phone ? 44 : 36 }}>
+        <Icon name="search" size={14} strokeWidth={1.75} />
         <input
           type="text"
           value={ask}
           onChange={(e) => setAsk(e.target.value)}
           placeholder={tv('hedwig.v2.brief.askPlaceholder', 'what did the landlord say about the deposit?')}
           aria-label={tv('hedwig.v2.brief.askLabel', 'Ask your mail')}
-          style={{ flexGrow: 1, minWidth: 0, border: 0, background: 'transparent', font: 'inherit', color: V.ink, outline: 'none' }}
+          style={{ ...askInputStyle, fontSize: phone ? 16 : 13 }}
         />
-        <Mono>↵</Mono>
+        <span aria-hidden="true" style={{ fontSize: 11, color: V.muted, padding: '0 6px' }}>↵</span>
       </label>
     </form>
   );
 
   const left = (
-    <section style={{ display: 'flex', flexDirection: 'column' }}>
-      <Why tone="accent" style={{ paddingBottom: 6 }}>{tv('hedwig.v2.brief.needsToday', 'Needs you today')}</Why>
+    <section style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+      <Head>{tv('hedwig.v2.brief.needsToday', 'Needs you today')}</Head>
       {!needs.length && <Item time=""><span style={{ color: V.muted }}>{tv('hedwig.v2.brief.nothingNeeds', 'Nothing needs you today.')}</span></Item>}
       {needs.map((n) => (
         <Item key={n.messageId} time={ageLabel(n.date || n.at)}>
-          <RowLink onClick={() => openThread({ ...n, needsYou: true })}>{[who(n), n.subject].filter(Boolean).join(' · ')}</RowLink>
-          {n.reason && <Why tone="accent">{n.reason}</Why>}
+          <RowLink weight={600} onClick={() => openThread({ ...n, needsYou: true })}>{[who(n), n.subject].filter(Boolean).join(' · ')}</RowLink>
+          {n.reason && <Reason glyph="alert" tone="attention">{n.reason}</Reason>}
         </Item>
       ))}
       {waiting.length > 0 && (
         <>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, padding: '26px 0 6px' }}>
-            <Why style={{ flexGrow: 1 }}>{tv('hedwig.v2.brief.waiting', 'Waiting on others')}</Why>
-            {work && <LinkBtn hit={phone} onClick={() => showView(VIEW.waiting)}>{tv('hedwig.v2.brief.seeAll', 'See all')}</LinkBtn>}
+          <div style={{ paddingTop: 20 }}>
+            <Head action={work && <LinkBtn hit={phone} onClick={() => showView(VIEW.waiting)} style={{ fontSize: 12, color: V.accentInk }}>{tv('hedwig.v2.brief.seeAll', 'See all')}</LinkBtn>}>
+              {tv('hedwig.v2.brief.waiting', 'Waiting on others')}
+            </Head>
           </div>
           {waiting.map((w) => (
             <Item
@@ -178,8 +206,8 @@ export default function Brief() {
                 ? <LinkBtn hit={phone} disabled={nudging === (w.threadId || w.messageId)} onClick={() => nudgeFrom(w)}>{nudging === (w.threadId || w.messageId) ? tv('hedwig.v2.thread.drafting', 'Drafting…') : tv('hedwig.v2.brief.nudge', 'Nudge')}</LinkBtn>
                 : null}
             >
-              <span style={{ fontSize: 16 }}>{[who(w), w.what || w.subject].filter(Boolean).join(' · ')}</span>
-              {(w.note || w.reason) && <span style={{ fontSize: 13, color: V.muted }}>{w.note || w.reason}</span>}
+              <span style={{ fontSize: 13 }}>{[who(w), w.what || w.subject].filter(Boolean).join(' · ')}</span>
+              {(w.note || w.reason) && <span style={{ fontSize: 12, color: V.muted }}>{w.note || w.reason}</span>}
             </Item>
           ))}
         </>
@@ -188,23 +216,25 @@ export default function Brief() {
   );
 
   const right = (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 26, minWidth: 0 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20, minWidth: 0 }}>
       {cards.length > 0 && (
-        <section style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <Why>{tv('hedwig.v2.brief.records', 'Today, from your Records')}</Why>
-          <div style={{ display: 'grid', gridTemplateColumns: `repeat(${phone ? 2 : Math.min(4, cards.length)}, minmax(0, 1fr))`, rowGap: 18, padding: '6px 0' }}>
+        <section style={{ display: 'flex', flexDirection: 'column' }}>
+          <Head>{tv('hedwig.v2.brief.records', 'Today, from your Records')}</Head>
+          <div style={{ display: 'grid', gridTemplateColumns: `repeat(${phone ? 2 : Math.min(2, cards.length)}, minmax(0, 1fr))`, gap: 8 }}>
             {cards.slice(0, phone ? 4 : 8).map((c, i) => {
-              const col = i % (phone ? 2 : Math.min(4, cards.length));
               const part = cardParts(c);
+              const open = c.messageId ? () => openThread({ messageId: c.messageId, threadId: c.threadId, subject: c.title }) : undefined;
               return (
-                <button
+                <Slip
                   key={`${c.messageId || i}`}
-                  type="button"
-                  onClick={c.messageId ? () => openThread({ messageId: c.messageId, threadId: c.threadId, subject: c.title }) : undefined}
-                  style={{ padding: col === 0 ? '0 20px 0 0' : '0 20px', borderTop: 0, borderRight: 0, borderBottom: 0, borderLeft: col === 0 ? 0 : `1px solid ${V.line2}`, background: 'none', color: 'inherit', textAlign: 'left', font: 'inherit', cursor: c.messageId ? 'pointer' : 'default', minWidth: 0 }}
+                  as={open ? 'button' : 'div'}
+                  type={open ? 'button' : undefined}
+                  onClick={open}
+                  data-brief-card=""
+                  style={{ font: 'inherit', textAlign: 'left', cursor: open ? 'pointer' : 'default', minWidth: 0 }}
                 >
-                  <Figure value={part.figure} caption={part.caption} sub={c.detail} accent={Boolean(c.accent)} size={phone ? 30 : 36} />
-                </button>
+                  <Figure value={part.figure} caption={part.caption} sub={c.detail} accent={Boolean(c.accent)} size={20} />
+                </Slip>
               );
             })}
           </div>
@@ -212,16 +242,16 @@ export default function Brief() {
       )}
       {reading.length > 0 && (
         <section style={{ display: 'flex', flexDirection: 'column' }}>
-          <Why style={{ paddingBottom: 6 }}>{tv('hedwig.v2.brief.reading', 'Reading, worth a look')}</Why>
+          <Head>{tv('hedwig.v2.brief.reading', 'Reading, worth a look')}</Head>
           {reading.map((r) => {
             // The sender or source name leads when the Brief has one (as in the mockup); else the title.
             const source = r.source || senderName(r.from);
             const lead = source || r.title || r.subject;
             const tail = source ? (r.title || r.subject) : r.line;
             return (
-              <div key={r.messageId} style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '10px 0', borderTop: `1px solid ${V.line}`, minWidth: 0 }}>
-                <span style={{ flexShrink: 0, maxWidth: '60%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}><RowLink size={15} onClick={() => openThread({ ...r, subject: r.subject || r.title })}>{lead}</RowLink></span>
-                <span style={{ fontSize: 14, color: V.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>{tail}</span>
+              <div key={r.messageId} style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '10px 0', borderTop: `1px solid ${V.line}`, minWidth: 0 }}>
+                <span style={{ flexShrink: 0, maxWidth: '60%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}><RowLink weight={600} onClick={() => openThread({ ...r, subject: r.subject || r.title })}>{lead}</RowLink></span>
+                <span style={{ fontSize: 13, color: V.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>{tail}</span>
               </div>
             );
           })}
@@ -246,9 +276,8 @@ export default function Brief() {
       setUndoing(null);
     }
   };
-  const proseLine = proseNote(b.prose, status);
   const footer = (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, paddingTop: 14, borderTop: `1px solid ${V.line2}` }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 12, borderTop: `1px solid ${V.line}` }}>
       {entries.length > 0 && (
         <section aria-label={tv('hedwig.v2.brief.undoAny', 'Undo any of it')} style={{ display: 'flex', flexDirection: 'column' }}>
           {entries.map((e) => (
@@ -260,24 +289,40 @@ export default function Brief() {
           ))}
         </section>
       )}
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 16, fontSize: 13, color: V.muted, flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, fontSize: 12, color: V.muted, flexWrap: 'wrap', fontVariantNumeric: 'tabular-nums' }}>
         {b.today && <span>{todayLine(b.today)}</span>}
-        <LinkBtn onClick={() => showView(VIEW.today)}>{tv('hedwig.v2.today.review', 'Review or undo')}</LinkBtn>
-        <span style={{ flexGrow: 1 }} />
-        {proseLine
-          ? <Why size={15}>{proseLine}</Why>
-          : noModel && <Why size={15}>{tv('hedwig.v2.brief.noModel', 'Compiled from your mail, no model call.')}</Why>}
+        <LinkBtn onClick={() => showView(VIEW.today)} style={{ fontSize: 12, color: V.accentInk }}>{tv('hedwig.v2.today.review', 'Review or undo')}</LinkBtn>
       </div>
-      <CoverageNote what="brief" coverage={b.coverage ?? null} />
+      <CoverageNote what="brief" coverage={b.coverage ?? null} style={{ fontSize: 12 }} />
     </div>
   );
 
-  const dateLine = <Mono size={12}>{briefDateLine(dayOf, compiledAt)}</Mono>;
+  // The day in short: the summary box (spec §c) holding the headline. Sparkles when a model wrote
+  // it, info when the template did; the note on the right says where the prose came from.
+  const proseLine = proseNote(b.prose, status);
+  const templated = Boolean(b.prose && typeof b.prose === 'object' && (b.prose.fallback || b.prose.source === 'template'));
+  const lighter = Boolean(proseLine) && !templated;
+  const note = proseLine || (noModel ? tv('hedwig.v2.brief.noModel', 'Compiled from your mail, no model call.') : null);
+  const written = !noModel && !templated;
   const headline = (
-    <h1 style={{ margin: 0, fontFamily: V.serif, fontWeight: 400, fontSize: phone ? 40 : 52, lineHeight: 0.98, letterSpacing: '-0.02em', maxWidth: '14ch', textWrap: 'balance' }}>
-      {b.headline || title}
-    </h1>
+    <Slip data-brief-summary="" style={{ gap: 6, width: '100%', maxWidth: phone ? 'none' : 760 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flexWrap: 'wrap' }}>
+        <span style={{ display: 'inline-flex', color: written ? V.accent : V.muted }}><Icon name={written ? 'sparkles' : 'info'} size={14} strokeWidth={1.75} /></span>
+        <span style={{ fontSize: 12, fontWeight: 600 }}>{tv('hedwig.v2.brief.summary', 'Today in short')}</span>
+        <span style={{ flexGrow: 1 }} />
+        {note && (
+          <span data-lighter={lighter ? '' : undefined} title={note} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, lineHeight: '14px', color: V.muted, minWidth: 0 }}>
+            <Icon name="info" size={12} strokeWidth={1.75} />
+            <span>{note}</span>
+          </span>
+        )}
+      </div>
+      <h1 style={{ margin: 0, fontFamily: V.sans, fontWeight: 600, fontSize: 22, lineHeight: '28px', letterSpacing: '-0.01em', textWrap: 'balance' }}>
+        {b.headline || title}
+      </h1>
+    </Slip>
   );
+  const dateLine = <Mono size={12}>{briefDateLine(dayOf, compiledAt)}</Mono>;
 
   const state = (
     <>
@@ -290,7 +335,7 @@ export default function Brief() {
     return (
       <ViewBody phone label={title} padded={false}>
         <ViewHead phone title={title} sub={briefDateLine(dayOf, compiledAt)} />
-        <div style={{ padding: '4px 20px 0', display: 'flex', flexDirection: 'column', gap: 22 }}>
+        <div style={{ padding: '12px 16px 0', display: 'flex', flexDirection: 'column', gap: 20 }}>
           {state}
           {res.data && <>{headline}<TierNote />{askField}{left}{right}{footer}</>}
         </div>
@@ -299,18 +344,16 @@ export default function Brief() {
   }
 
   return (
-    <ViewBody label={title} padded={false} style={{ padding: '34px 44px 26px', gap: 22 }}>
-      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 32, flexWrap: 'wrap' }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, flex: '1 1 320px', minWidth: 0 }}>
-          {dateLine}
-          {headline}
-          <TierNote />
-        </div>
+    <ViewBody label={title} padded={false} style={{ padding: '20px 24px 24px', gap: 20, background: V.content }}>
+      <header style={{ display: 'flex', flexDirection: 'column', gap: 10, minWidth: 0 }}>
+        {dateLine}
+        {res.data && headline}
+        <TierNote />
         {askField}
-      </div>
+      </header>
       {state}
       {res.data && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 44, flexGrow: 1, alignItems: 'start' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 32, flexGrow: 1, alignItems: 'start' }}>
           {left}
           {right}
         </div>

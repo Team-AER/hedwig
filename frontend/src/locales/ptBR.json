@@ -1716,7 +1716,8 @@
         "records": "Hoje, dos seus registros",
         "waiting": "Aguardando outras pessoas",
         "file": "Arquivo",
-        "seeAll": "Ver tudo"
+        "seeAll": "Ver tudo",
+        "summary": "Hoje, em resumo"
       },
       "cmd": {
         "allMail": "Todos os e-mails (a lista clássica)",
@@ -1762,10 +1763,7 @@
         "empty": "Ninguém está esperando por você.",
         "filter": "Exibir",
         "focusReply": "Responder com foco",
-        "needYouMany": "{{n}} precisam de você",
-        "needYouOne": "{{n}} precisa de você",
-        "needsYou": "Precisa de você",
-        "today": "{{n}} hoje"
+        "needsYou": "Precisa de você"
       },
       "power": {
         "dryRun": "Simulação",
@@ -1784,9 +1782,7 @@
         "prompts": "Versões dos prompts",
         "readOnly": "somente leitura",
         "routing": "Roteamento",
-        "rules": "Regras de triagem",
-        "toPower": "Ligar o Power",
-        "toSimple": "Voltar ao Simples"
+        "rules": "Regras de triagem"
       },
       "question": {
         "count": "Pergunta {{i}} de {{n}} hoje. As respostas ensinam o Hedwig.",
@@ -1890,8 +1886,6 @@
         "records": "Registros",
         "sweep": "Varrer",
         "sweepFailed": "Não foi possível marcá-las como lidas",
-        "sweepHint": "Marcar como lido tudo o que não precisa de você",
-        "unread": "{{n}} não lidas",
         "more": "Mostrar mais"
       },
       "tab": {
@@ -1914,11 +1908,9 @@
         "earlierOne": "Uma mensagem anterior",
         "empty": "Escolha uma conversa para lê-la aqui.",
         "gone": "Essa conversa não está mais lá.",
-        "imagesBlocked": "Imagens remotas bloqueadas",
         "messagesMany": "{{n}} mensagens",
         "messagesOne": "1 mensagem",
         "more": "Mais opções",
-        "myVoice": "Meu tom",
         "original": "Ver o original",
         "remind": "Lembrar-me",
         "remindOn": "Lembrar-me na {{day}}",
@@ -1929,8 +1921,6 @@
         "setAside": "Deixar de lado",
         "snooze": "Adiar",
         "story": "A história até aqui",
-        "toName": "para: {{name}}",
-        "toYou": "para você",
         "trackerMany": "Rastreadores barrados: {{n}}",
         "trackerOne": "1 rastreador barrado",
         "wrong": "Errado?",

@@ -234,3 +234,122 @@ export function tldrLighter(item) {
   const t = item?.tldr;
   return Boolean(t && typeof t === 'object' && t.lighter === true);
 }
+
+// ── Quoted history (collapsed in the reader, never deleted) ───────────────────
+// The selectors are the backend's (backend/src/hedwig/indexer/parse.js QUOTE_CLASS and
+// AFTER_IS_QUOTED_ID), run through DOMParser so nothing is inserted into the page.
+const QUOTE_CLASSES = ['gmail_quote', 'gmail_quote_container', 'x_gmail_quote', 'yahoo_quoted', 'protonmail_quote', 'moz-cite-prefix', 'OutlookMessageHeader', 'zmail_extra', 'replyQuote'];
+const AFTER_IS_QUOTED_ID = /^(x_)?(divRplyFwdMsg|appendonsend|stopSpelling)/;
+const FORWARD_START = /^\s*(-{2,}\s*(Forwarded message|Weitergeleitete Nachricht|Message transféré|Mensaje reenviado|Messaggio inoltrato|Doorgestuurd bericht|Mensagem encaminhada|Vidarebefordrat meddelande)|Begin forwarded message)/i;
+const ATTRIBUTION = /(\bwrote|schrieb|a écrit|escribió|skrev|scrisse|napisał|schreef|kirjoitti|escreveu)\s*:?\s*$/i;
+const REPLY_SUBJECT = /^\s*(re|sv|aw|antw|ref|rif|odp|vs|r)\s*(\[\d+\])?\s*:/i;
+
+/** Whether a message is a reply: its subject starts with Re: (or a local form) or it has In-Reply-To. */
+export function isReplyMessage(subject, inReplyTo) {
+  return Boolean(inReplyTo) || REPLY_SUBJECT.test(String(subject || ''));
+}
+
+function quoteStartsHere(el, isReply) {
+  const cls = typeof el.className === 'string' ? el.className.split(/\s+/) : [];
+  if (cls.some((c) => QUOTE_CLASSES.includes(c)) || /^yahoo_quoted/.test(el.id || '')) return true;
+  if (el.tagName === 'BLOCKQUOTE') return el.getAttribute('type') === 'cite' || isReply;
+  return false;
+}
+
+// Nodes after `node` in document order, up to <body>.
+function followingNodes(node) {
+  const out = [];
+  let cur = node;
+  while (cur && cur.parentNode && cur.nodeName !== 'BODY') {
+    for (let sib = cur.nextSibling; sib; sib = sib.nextSibling) out.push(sib);
+    cur = cur.parentNode;
+  }
+  return out;
+}
+
+const textOfNode = (n) => String(n?.textContent || '').replace(/\s+/g, ' ').trim();
+
+/**
+ * Split an HTML body into the new part and its quoted history: { main, quoted } where `main`
+ * is the HTML to show and `quoted` the HTML that was folded away (null when there is none).
+ * Quote containers (Gmail, Yahoo, Proton, Thunderbird, Outlook) and `blockquote type=cite`
+ * always count; a bare <blockquote> only when the message is a reply (`isReply`), because
+ * newsletters use blockquotes for pull quotes. A forwarded message is never folded.
+ */
+export function splitQuotedHtml(html, { isReply = false } = {}) {
+  const source = String(html || '');
+  if (!source.trim() || typeof DOMParser === 'undefined') return { main: source, quoted: null };
+  let doc;
+  try { doc = new DOMParser().parseFromString(source, 'text/html'); } catch { return { main: source, quoted: null }; }
+  const body = doc.body;
+  if (!body) return { main: source, quoted: null };
+  const removed = [];
+  const gone = new Set();
+  const within = (n) => { for (let p = n; p; p = p.parentNode) if (gone.has(p)) return true; return false; };
+  for (const el of [...body.querySelectorAll('*')]) {
+    if (within(el)) continue;
+    if (AFTER_IS_QUOTED_ID.test(el.id || '')) {
+      const rest = [el, ...followingNodes(el)].filter((n) => !within(n));
+      rest.forEach((n) => gone.add(n));
+      removed.push(...rest);
+      continue;
+    }
+    if (!quoteStartsHere(el, isReply)) continue;
+    if (FORWARD_START.test(el.textContent || '')) continue;
+    // "On Mon, Anna wrote:" just before a quote goes with it.
+    const prev = el.previousElementSibling;
+    if (prev && !within(prev) && !quoteStartsHere(prev, isReply) && ATTRIBUTION.test(textOfNode(prev)) && textOfNode(prev).length < 300) {
+      gone.add(prev);
+      removed.push(prev);
+    }
+    gone.add(el);
+    removed.push(el);
+  }
+  if (!removed.length) return { main: source, quoted: null };
+  const quoted = removed.map((n) => (n.nodeType === 1 ? n.outerHTML : n.textContent || '')).join('\n');
+  for (const n of removed) n.parentNode?.removeChild(n);
+  // Nothing new left (a bare forward of a quote): show it all rather than an empty frame.
+  if (!textOfNode(body) && !body.querySelector('img')) return { main: source, quoted: null };
+  const styles = [...doc.head.querySelectorAll('style')].map((s) => s.outerHTML).join('');
+  return { main: styles + body.innerHTML, quoted };
+}
+
+/**
+ * The plain-text counterpart: { main, quoted } with the history ("On … wrote:", including the
+ * two-line Gmail form, "-----Original Message-----", Outlook's From:/Sent: block, a trailing run
+ * of "> " lines) and a "-- " signature kept in `quoted` rather than dropped.
+ */
+export function splitQuotedText(text) {
+  const src = String(text || '');
+  if (!src.trim()) return { main: src, quoted: null };
+  const lines = src.split('\n');
+  let cut = -1;
+  for (let i = 0; i < lines.length && cut < 0; i += 1) {
+    const l = lines[i].trim();
+    const two = `${l} ${String(lines[i + 1] || '').trim()}`;
+    if (/^On .+wrote:\s*$/.test(l) || /^-{2,}\s*Original Message/i.test(l) || l === '--' || lines[i] === '-- ') cut = i;
+    else if (/^On .+/.test(l) && /wrote:\s*$/.test(two) && !/wrote:/.test(l)) cut = i;
+    else if (/^(From|Von|De|Fra):\s.+/.test(l) && lines.slice(i + 1, i + 4).some((x) => /^(Sent|Date|Gesendet|Envoyé|Sendt|Datum):\s/.test(x.trim()))) cut = i;
+    else if (/^>/.test(l) && lines.slice(i).every((x) => /^>/.test(x.trim()) || !x.trim())) cut = i;
+  }
+  if (cut <= 0) return { main: src, quoted: null };
+  const main = lines.slice(0, cut).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  if (!main) return { main: src, quoted: null };
+  return { main, quoted: lines.slice(cut).join('\n').replace(/\s+$/, '') };
+}
+
+/** "To: Prakhar, Cc: Anna" for a message header (to/cc: strings or [{ name, email }]). */
+export function recipientsLine(to, cc) {
+  const names = (v) => (Array.isArray(v) ? v.map((a) => (typeof a === 'string' ? a : a?.name || a?.email || a?.address)).filter(Boolean).join(', ') : String(v || ''));
+  const t = names(to);
+  const c = names(cc);
+  return [t && `${tv('hedwig.v2.thread.toLabel', 'To')}: ${t}`, c && `${tv('hedwig.v2.thread.ccLabel', 'Cc')}: ${c}`].filter(Boolean).join(', ');
+}
+
+/** The first line of a message for a collapsed row: its snippet, or the start of its text. */
+export function snippetOf(m) {
+  const s = String(m?.snippet || '').replace(/\s+/g, ' ').trim();
+  if (s) return s;
+  const t = splitQuotedText(String(m?.text || '')).main;
+  return t.replace(/\s+/g, ' ').trim().slice(0, 200);
+}

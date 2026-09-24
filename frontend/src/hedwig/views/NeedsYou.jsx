@@ -7,7 +7,7 @@ import { TRIAGE_CATEGORIES, categoryLabel, senderName, triageReason } from './he
 import { isTypingTarget, openMessage, selectSenderEntity, useAction, useResource } from './hooks.js';
 import Explainer, { MoveMenu, overrideTriage } from './Explainer.jsx';
 import {
-  AccountDot, ActionError, Button, Empty, IconButton, KeyHints, Loading, Pill, ReasonChip, RelativeTime, Select, StateView, T,
+  AccountDot, ActionError, Button, Empty, IconButton, KeyHints, Loading, Pill, ReasonChip, RelativeTime, Select, NUM, StateView, T,
 } from './ui.jsx';
 import { tr } from './i18n.js';
 
@@ -211,7 +211,7 @@ function Row({ item, active, open, expanded, onOpen, onResolve, onToggle, onMove
             <span style={{ fontWeight: message.is_read ? 500 : 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
               {senderName(message)}
             </span>
-            {thread?.count > 1 && <span style={{ fontFamily: T.mono, fontSize: 11, color: T.muted }}>{thread.count}</span>}
+            {thread?.count > 1 && <span style={{ ...NUM, fontSize: 11, color: T.muted }}>{thread.count}</span>}
             <span style={{ flexGrow: 1 }} />
             <RelativeTime value={message.date} style={{ fontSize: 12, color: T.muted }} />
           </div>

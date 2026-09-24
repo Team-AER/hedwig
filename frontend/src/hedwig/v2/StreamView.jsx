@@ -1,8 +1,10 @@
-// People, Reading and Records (GET /sort/stream/:stream). Needs you on top with Hedwig's reasons
-// in italic accent (its own needsYou=1 list, so it is complete however long the stream is), then
-// the rest by day, a page at a time with "Show more"; Records collapses each bundle to one line
-// with a summary. People has the Reply Later footer on desktop; on a phone it carries the day's
-// first question (on desktop the question lives in the Daily Brief).
+// People, Reading and Records (GET /sort/stream/:stream) as the message list (DESIGN-AUDIT-2026-09-24
+// §b). The header block holds the search field, then the title with "N · M unread" and the filter
+// menu (Unread, Needs you, Has attachments, sort, and "Mark the rest read"). Needs you comes first
+// with Hedwig's reasons (its own needsYou=1 list, so it is complete however long the stream is),
+// then the rest under sticky date headers, a page at a time with "Show more"; Records collapses each
+// bundle to one row with a summary. People has the Reply Later footer on desktop; on a phone it
+// carries the day's first question (on desktop the question lives in the Daily Brief).
 import { useMemo, useRef, useState } from 'react';
 import { useStore } from '../../store/index.js';
 import { useV2, streamPath, countText } from './state.js';
@@ -13,19 +15,35 @@ import { openThread, showView, VIEW } from './nav.js';
 import { markRead, LIST_KIND } from './mail.js';
 import { useWhyDoor } from './WhyDoor.jsx';
 import { Question } from './Question.jsx';
-import { StreamRow, GroupLabel, onListKeyDown, useFirstRowKeys } from './rows.jsx';
-import { Figure, Glyph, Hair, IconBtn, LinkBtn, Mono, Quiet, ErrorLine, TextTabs, V, ViewBody, ViewHead, Why, usePhone } from './primitives.jsx';
-import { groupBundles, groupLabel, listTime, splitStream } from './format.js';
-import { tv, tvn } from './i18n.js';
+import { RowList, GroupLabel, ListSearch, onListKeyDown, rowDate, rowMeta, useFirstRowKeys } from './rows.jsx';
+import { Figure, Hair, LinkBtn, Num, Quiet, ErrorLine, TextTabs, V, ViewBody, ViewHead, Why, usePhone } from './primitives.jsx';
+import { Icon } from '../icons.jsx';
+import { MenuButton } from '../shell/Menu.jsx';
+import { groupBundles, groupLabel, splitStream } from './format.js';
+import { tv } from './i18n.js';
 import { bundleCardSummary, cardFigure, cardsByMessage, cardsForItems } from './cards.js';
 import { LEDGER_KINDS, SIMPLE_LEDGERS, ledgerTitle } from './Ledger.jsx';
-import { useShell } from '../shell/state.js';
 
 export function streamTitle(stream) {
   if (stream === 'reading') return tv('hedwig.v2.stream.reading', 'Reading');
   if (stream === 'records') return tv('hedwig.v2.stream.records', 'Records');
   return tv('hedwig.v2.stream.people', 'People');
 }
+
+/** "24 · 3 unread", "24", "100+ · 12 unread". */
+export function listCountLine(n, unread, more = false) {
+  if (!n) return null;
+  const total = `${n}${more ? '+' : ''}`;
+  return unread ? tv('hedwig.v2.list.countUnread', '{{n}} · {{m}} unread', { n: total, m: unread }) : total;
+}
+
+/** The filter menu's choices applied to a list of items. Pure. */
+export function applyListFilter(items, f) {
+  return (items || []).filter((i) => (!f.unread || i.unread) && (!f.needs || i.needsYou) && (!f.attachments || rowMeta(i).attachments));
+}
+
+const BUNDLE_ICONS = { deliveries: 'package', bills: 'receipt', travel: 'plane', notifications: 'bell', receipts: 'shopping-bag', purchases: 'shopping-bag', subscriptions: 'repeat' };
+export const bundleIcon = (key) => BUNDLE_ICONS[key] || (key ? 'receipt' : 'mail');
 
 function useQuestions(enabled) {
   const res = useV2Resource(enabled ? '/labels/questions' : null);
@@ -34,21 +52,16 @@ function useQuestions(enabled) {
   return { list, total: listOf(res.data, 'questions').length, onDone: (id) => setDone((d) => [...d, id]), error: res.error };
 }
 
-function Rows({ items, stream, phone, onWhy }) {
-  return items.map((it, i) => (
-    <div key={it.messageId || i}>
-      {i > 0 && <Hair inset={phone ? 0 : 12} />}
-      <StreamRow item={it} stream={stream} phone={phone} onOpen={openThread} onWhy={onWhy} />
-    </div>
-  ));
+function Rows({ items, stream, list, phone, onWhy }) {
+  return <RowList items={items} stream={stream} list={list} phone={phone} onWhy={onWhy} onOpen={openThread} />;
 }
 
 function BundleGroup({ group, phone, onWhy, open, onToggle, cards = [] }) {
-  const label = open ? tv('hedwig.v2.records.hide', 'Hide') : tv('hedwig.v2.records.show', 'Show');
   // The bundle's cards say more than its senders: "2 deliveries, 1 arriving today", and the first
   // few as figures while the bundle is closed.
   const cardLine = bundleCardSummary(cards);
   const figures = open ? [] : cards.slice(0, phone ? 2 : 3).map((c) => ({ id: c.id, ...cardFigure(c) })).filter((f) => f.figure);
+  const tile = phone ? 40 : 36;
   return (
     <div>
       <button
@@ -57,34 +70,39 @@ function BundleGroup({ group, phone, onWhy, open, onToggle, cards = [] }) {
         aria-expanded={open}
         onClick={onToggle}
         style={{
-          display: 'grid', gridTemplateColumns: `${phone ? 12 : 14}px minmax(0, 1fr) auto`, columnGap: 10, alignItems: 'baseline', width: '100%',
-          padding: '14px 12px', borderRadius: 12, border: 0, background: 'none', color: 'inherit', font: 'inherit', textAlign: 'left', cursor: 'pointer', minHeight: 44,
+          display: 'grid', gridTemplateColumns: `8px ${tile}px minmax(0, 1fr) 16px`, columnGap: 10, alignItems: 'start', width: '100%', boxSizing: 'border-box',
+          padding: phone ? '12px 8px' : '10px 14px 10px 8px', borderRadius: 8, border: 0, background: 'none', color: 'inherit', font: 'inherit', textAlign: 'left', cursor: 'pointer', minHeight: phone ? 64 : 56,
         }}
       >
-        <span aria-hidden="true" style={{ alignSelf: 'center', width: 7, height: 7, borderRadius: '50%', background: group.unread ? V.accent : 'transparent' }} />
-        <span style={{ display: 'flex', alignItems: 'baseline', gap: 10, minWidth: 0 }}>
-          <span style={{ fontFamily: V.serif, fontSize: 20, lineHeight: 1.1, whiteSpace: 'nowrap' }}>{group.name}</span>
-          <Mono size={12}>{group.items.length}</Mono>
+        <span aria-hidden="true" style={{ width: 8, height: 8, marginTop: phone ? 6 : 4, borderRadius: '50%', background: group.unread ? V.attention : 'transparent' }} />
+        <span aria-hidden="true" style={{ width: tile, height: tile, borderRadius: 8, background: V.field, color: V.accent, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+          <Icon name={bundleIcon(group.key)} size={phone ? 20 : 18} />
         </span>
-        <span style={{ display: 'flex', gap: 12, alignItems: 'baseline' }}>
-          <Mono>{listTime(group.latest)}</Mono>
-          <span className="hw-link" style={{ fontSize: 13, fontWeight: 500 }}>{label}</span>
-        </span>
-        <span />
-        <span style={{ gridColumn: '2 / 4', paddingTop: 3, fontSize: 14, color: V.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          {cardLine ? `${cardLine} · ${group.summary}` : `${group.summary}${group.items[0]?.subject ? ` · ${group.items[0].subject}` : ''}`}
-        </span>
-        {figures.length > 0 && (
-          <span style={{ gridColumn: '2 / 4', display: 'grid', gridTemplateColumns: `repeat(${figures.length}, minmax(0, 1fr))`, paddingTop: 12 }}>
-            {figures.map((f, i) => (
-              <span key={f.id} style={{ padding: i === 0 ? '0 14px 0 0' : '0 14px', borderLeft: i === 0 ? 0 : `1px solid ${V.line2}`, minWidth: 0 }}>
-                <Figure value={f.figure} caption={f.caption} size={phone ? 22 : 24} />
-              </span>
-            ))}
+        <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+            <span style={{ fontSize: phone ? 15 : 13, lineHeight: phone ? '20px' : '16px', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{group.name}</span>
+            <Num size={phone ? 13 : 11}>{group.items.length}</Num>
+            <span style={{ flexGrow: 1 }} />
+            <Num size={phone ? 13 : 11}>{rowDate(group.latest)}</Num>
           </span>
-        )}
+          <span style={{ fontSize: phone ? 14 : 12, lineHeight: phone ? '19px' : '16px', color: V.muted, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+            {cardLine ? `${cardLine} · ${group.summary}` : `${group.summary}${group.items[0]?.subject ? ` · ${group.items[0].subject}` : ''}`}
+          </span>
+          {figures.length > 0 && (
+            <span style={{ display: 'grid', gridTemplateColumns: `repeat(${figures.length}, minmax(0, 1fr))`, paddingTop: 8 }}>
+              {figures.map((f, i) => (
+                <span key={f.id} style={{ padding: i === 0 ? '0 12px 0 0' : '0 12px', borderLeft: i === 0 ? 0 : `1px solid ${V.line}`, minWidth: 0 }}>
+                  <Figure value={f.figure} caption={f.caption} size={17} />
+                </span>
+              ))}
+            </span>
+          )}
+        </span>
+        <span aria-hidden="true" style={{ alignSelf: 'center', color: V.muted, display: 'inline-flex' }}>
+          <Icon name={open ? 'chevron-down' : 'chevron-right'} size={16} />
+        </span>
       </button>
-      {open && <div style={{ paddingLeft: phone ? 8 : 16 }}><Rows items={group.items} stream="records" phone={phone} onWhy={onWhy} /></div>}
+      {open && <div style={{ paddingLeft: phone ? 12 : 20 }}><Rows items={group.items} stream="records" phone={phone} onWhy={onWhy} /></div>}
     </div>
   );
 }
@@ -108,11 +126,46 @@ function useRowCards(enabled, ids) {
 function MoreButton({ pages, phone }) {
   if (!pages.next) return null;
   return (
-    <div style={{ padding: '10px 12px 4px' }}>
+    <div style={{ padding: phone ? '10px 8px 4px' : '10px 10px 4px' }}>
       <LinkBtn hit={phone} disabled={pages.loadingMore} onClick={() => pages.loadMore()}>
         {pages.loadingMore ? tv('hedwig.v2.loading', 'Loading…') : tv('hedwig.v2.stream.more', 'Show more')}
       </LinkBtn>
     </div>
+  );
+}
+
+const NO_FILTER = { unread: false, needs: false, attachments: false, sort: 'newest' };
+
+/** The list-filter button and its menu (spec §b). */
+export function FilterMenu({ filter, onChange, attachable = false, extra = [], phone = false }) {
+  const on = filter.unread || filter.needs || filter.attachments || filter.sort !== 'newest';
+  const set = (patch) => () => onChange({ ...filter, ...patch });
+  const items = () => [
+    { type: 'header', label: tv('hedwig.v2.filter.show', 'Show') },
+    { id: 'unread', label: tv('hedwig.v2.filter.unread', 'Unread'), checked: filter.unread, onSelect: set({ unread: !filter.unread }) },
+    { id: 'needs', label: tv('hedwig.v2.people.needsYou', 'Needs you'), checked: filter.needs, onSelect: set({ needs: !filter.needs }) },
+    ...(attachable ? [{ id: 'attachments', label: tv('hedwig.v2.filter.attachments', 'Has attachments'), checked: filter.attachments, onSelect: set({ attachments: !filter.attachments }) }] : []),
+    { type: 'separator' },
+    { type: 'header', label: tv('hedwig.v2.filter.sort', 'Sort') },
+    { id: 'newest', label: tv('hedwig.v2.filter.newest', 'Newest first'), checked: filter.sort === 'newest', onSelect: set({ sort: 'newest' }) },
+    { id: 'oldest', label: tv('hedwig.v2.filter.oldest', 'Oldest first'), checked: filter.sort === 'oldest', onSelect: set({ sort: 'oldest' }) },
+    ...(extra.length ? [{ type: 'separator' }, ...extra] : []),
+  ];
+  const size = phone ? 44 : 28;
+  return (
+    <MenuButton
+      label={tv('hedwig.v2.filter.label', 'Filter and sort')}
+      items={items}
+      align="right"
+      width={220}
+      buttonClassName="hw-icon-btn"
+      buttonStyle={{
+        width: size, height: size, flexShrink: 0, alignSelf: 'center', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        padding: 0, border: 0, borderRadius: 6, background: on ? V.select : 'transparent', color: on ? V.accent : V.ink, cursor: 'pointer',
+      }}
+    >
+      <Icon name="list-filter" size={phone ? 20 : 16} />
+    </MenuButton>
   );
 }
 
@@ -140,32 +193,32 @@ export default function StreamView({ props }) {
   const [tab, setTab] = useState('needs');
   const [openBundles, setOpenBundles] = useState({});
   const [sweeping, setSweeping] = useState(false);
-  const openPalette = useShell((s) => s.openPalette);
+  const [filter, setFilter] = useState(NO_FILTER);
 
-  const needs = useMemo(() => needsItems.filter((i) => i.needsYou), [needsItems]);
-  const rest = useMemo(() => restItems.filter((i) => !i.needsYou), [restItems]);
+  const allNeeds = useMemo(() => needsItems.filter((i) => i.needsYou), [needsItems]);
+  const allRest = useMemo(() => restItems.filter((i) => !i.needsYou), [restItems]);
+  const oldest = filter.sort === 'oldest';
+  const needs = useMemo(() => {
+    const list = applyListFilter(allNeeds, filter);
+    return oldest ? [...list].reverse() : list;
+  }, [allNeeds, filter, oldest]);
+  const rest = useMemo(() => (filter.needs ? [] : applyListFilter(allRest, filter)), [allRest, filter]);
   const items = useMemo(() => [...needs, ...rest], [needs, rest]);
-  const { groups } = useMemo(() => splitStream(rest), [rest]);
+  const groups = useMemo(() => {
+    const g = splitStream(rest).groups;
+    return oldest ? g.map((x) => ({ ...x, items: [...x.items].reverse() })).reverse() : g;
+  }, [rest, oldest]);
   const bundleGroups = useMemo(() => (stream === 'records' ? groupBundles(rest, listOf(bundles.data, 'bundles')) : []), [stream, rest, bundles.data]);
-  const todayCount = groups.find((g) => g.key === 'today')?.items.length || 0;
-  const unread = items.filter((i) => i.unread).length;
+  const everything = allNeeds.length + allRest.length;
+  const unread = [...allNeeds, ...allRest].filter((i) => i.unread).length;
   const title = streamTitle(stream);
-
-  let sub;
-  if (stream === 'people') {
-    // The server-side count when there is one (the rail's), else what the Needs you list holds.
-    const n = needsCount ? Number.parseInt(needsCount, 10) : needs.length;
-    const shown = needsCount && needsCount.endsWith('+') ? needsCount : n;
-    sub = [
-      n ? tvn(n, ['hedwig.v2.people.needYouOne', '{{n}} needs you'], ['hedwig.v2.people.needYouMany', '{{n}} need you'], { n: shown }) : null,
-      todayCount ? tv('hedwig.v2.people.today', '{{n}} today', { n: todayCount + (res.next ? '+' : '') }) : null,
-    ].filter(Boolean).join(' · ');
-  } else {
-    sub = unread ? tv('hedwig.v2.stream.unread', '{{n}} unread', { n: `${unread}${res.next ? '+' : ''}` }) : null;
-  }
+  const sub = listCountLine(everything, unread, Boolean(res.next));
+  const attachable = [...allNeeds, ...allRest].some((i) => i.hasAttachments !== undefined || i.has_attachments !== undefined);
+  // The server-side Needs you count when there is one (the rail's), else what the list holds.
+  const needsLabel = stream === 'people' && needsCount ? needsCount : (allNeeds.length || null);
 
   const sweep = async () => {
-    const ids = rest.filter((i) => i.unread && i.messageId).map((i) => i.messageId);
+    const ids = allRest.filter((i) => i.unread && i.messageId).map((i) => i.messageId);
     if (!ids.length) return;
     setSweeping(true);
     try {
@@ -179,12 +232,15 @@ export default function StreamView({ props }) {
     }
   };
 
-  const searchBtn = phone
-    ? <IconBtn label={tv('hedwig.v2.searchOrAsk', 'Search or ask')} onClick={() => openPalette?.()}><Glyph name="search" /></IconBtn>
-    : null;
-  const actions = phone
-    ? searchBtn
-    : <LinkBtn onClick={sweep} disabled={sweeping || !rest.some((i) => i.unread)} title={tv('hedwig.v2.stream.sweepHint', 'Mark everything that does not need you as read')}>{tv('hedwig.v2.stream.sweep', 'Sweep')}</LinkBtn>;
+  const filterMenu = (
+    <FilterMenu
+      filter={filter}
+      onChange={setFilter}
+      attachable={attachable}
+      phone={phone}
+      extra={[{ id: 'sweep', icon: 'mail-open', label: tv('hedwig.v2.stream.sweepMenu', 'Mark the rest read'), disabled: sweeping || !allRest.some((i) => i.unread), onSelect: sweep }]}
+    />
+  );
 
   const phoneTabs = phone && stream === 'people'
     ? (
@@ -208,23 +264,30 @@ export default function StreamView({ props }) {
   const loading = (res.loading && !res.loaded) || (needsRes.loading && !needsRes.loaded);
   const question = questions.list[0];
   const retry = () => { res.reload(); needsRes.reload(); };
+  const filtering = filter.unread || filter.needs || filter.attachments;
 
   const content = (
-    <div ref={listRef} onKeyDown={onListKeyDown} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+    <div ref={listRef} onKeyDown={onListKeyDown} style={{ display: 'flex', flexDirection: 'column' }}>
       {error && <ErrorLine error={error} onRetry={retry} retryLabel={tv('hedwig.v2.action.retry', 'Try again')} />}
       {loading && <Quiet>{tv('hedwig.v2.loading', 'Loading…')}</Quiet>}
       {!loading && !error && !items.length && (
-        <Quiet><Why>{stream === 'people' ? tv('hedwig.v2.people.empty', 'Nobody is waiting on you.') : tv('hedwig.v2.stream.empty', 'Nothing here right now.')}</Why></Quiet>
+        <Quiet>
+          <Why>
+            {filtering
+              ? tv('hedwig.v2.filter.empty', 'Nothing matches this filter.')
+              : stream === 'people' ? tv('hedwig.v2.people.empty', 'Nobody is waiting on you.') : tv('hedwig.v2.stream.empty', 'Nothing here right now.')}
+          </Why>
+        </Quiet>
       )}
       {needs.length > 0 && (
         <section aria-label={tv('hedwig.v2.people.needsYou', 'Needs you')}>
-          <GroupLabel tone="accent" first phone={phone}>{tv('hedwig.v2.people.needsYou', 'Needs you')}</GroupLabel>
+          <GroupLabel tone="attention" count={needsLabel} first phone={phone}>{tv('hedwig.v2.people.needsYou', 'Needs you')}</GroupLabel>
           <Rows items={needs} stream={stream} phone={phone} onWhy={door.open} />
           <MoreButton pages={needsRes} phone={phone} />
         </section>
       )}
       {question && phone && stream === 'people' && !showNeedsOnly && (
-        <div style={{ padding: '16px 0 4px' }}>
+        <div style={{ padding: '16px 8px 4px' }}>
           <Question question={question} index={questions.total - questions.list.length} total={questions.total} onDone={questions.onDone} compact phone />
         </div>
       )}
@@ -236,11 +299,11 @@ export default function StreamView({ props }) {
       ))}
       {stream === 'records' && bundleGroups.map((g, i) => (
         <section key={g.key || 'none'} aria-label={g.name}>
-          {(i > 0 || needs.length > 0) && <Hair inset={phone ? 0 : 12} />}
+          {(i > 0 || needs.length > 0) && <Hair style={{ margin: `0 0 0 ${phone ? 66 : 62}px` }} />}
           <BundleGroup group={g} phone={phone} onWhy={door.open} cards={cardsForItems(g.items, byMessage)} open={Boolean(openBundles[g.key])} onToggle={() => setOpenBundles((o) => ({ ...o, [g.key]: !o[g.key] }))} />
         </section>
       ))}
-      {!showNeedsOnly && <MoreButton pages={res} phone={phone} />}
+      {!showNeedsOnly && !filter.needs && <MoreButton pages={res} phone={phone} />}
       {showNeedsOnly && !needs.length && !loading && items.length > 0 && <Quiet><Why>{tv('hedwig.v2.people.empty', 'Nobody is waiting on you.')}</Why></Quiet>}
     </div>
   );
@@ -248,8 +311,8 @@ export default function StreamView({ props }) {
   if (phone && stream === 'people' && tab === 'later' && work) {
     return (
       <ViewBody phone label={title} padded={false}>
-        <ViewHead phone title={title} sub={sub} actions={searchBtn}>{phoneTabs}</ViewHead>
-        <div style={{ padding: '0 16px' }}><ListItems list="replyLater" phone /></div>
+        <ViewHead phone title={title} sub={sub}><ListSearch phone />{phoneTabs}</ViewHead>
+        <div style={{ padding: '0 8px' }}><ListItems list="replyLater" phone /></div>
       </ViewBody>
     );
   }
@@ -258,39 +321,44 @@ export default function StreamView({ props }) {
     // On a phone the rail is not there: Records carries its ledgers in the header.
     const ledgerLinks = stream === 'records'
       ? (
-        <nav aria-label={tv('hedwig.v2.ledger.label', 'Ledgers')} style={{ display: 'flex', gap: 18, flexWrap: 'wrap', paddingBottom: 6 }}>
+        <nav aria-label={tv('hedwig.v2.ledger.label', 'Ledgers')} style={{ display: 'flex', gap: 18, flexWrap: 'wrap' }}>
           {(power ? LEDGER_KINDS : SIMPLE_LEDGERS).map((kind) => (
-            <LinkBtn key={kind} style={{ minHeight: 44, minWidth: 44 }} onClick={() => showView(VIEW.ledger, { kind })}>{ledgerTitle(kind)}</LinkBtn>
+            <LinkBtn key={kind} style={{ minHeight: 44, minWidth: 44, fontSize: 15 }} onClick={() => showView(VIEW.ledger, { kind })}>{ledgerTitle(kind)}</LinkBtn>
           ))}
         </nav>
       )
       : null;
     return (
       <ViewBody phone label={title} padded={false}>
-        <ViewHead phone title={title} sub={sub} actions={actions}>{phoneTabs || ledgerLinks}</ViewHead>
-        <div style={{ padding: '0 16px', flex: '1 0 auto' }}>{content}</div>
+        <ViewHead phone title={title} sub={sub} actions={filterMenu}>
+          <ListSearch phone />
+          {phoneTabs || ledgerLinks}
+        </ViewHead>
+        <div style={{ padding: '0 8px', flex: '1 0 auto' }}>{content}</div>
         {door.element}
       </ViewBody>
     );
   }
 
-  // Desktop: the header and the Reply Later footer stay put; only the list scrolls.
+  // Desktop: the header block and the Reply Later footer stay put; only the list scrolls.
   return (
-    <ViewBody label={title} padded={false} style={{ overflowY: 'hidden', padding: '26px 14px 0' }}>
-      <ViewHead title={title} sub={sub} actions={actions} />
-      <div className="hw-scroll" style={{ flex: 1, minHeight: 0, overflowY: 'auto', margin: '0 -14px', padding: '0 14px 16px' }}>{content}</div>
+    <ViewBody label={title} padded={false} style={{ overflowY: 'hidden', padding: '10px 0 0' }}>
+      <ViewHead title={title} sub={sub} actions={filterMenu} before={<ListSearch style={{ marginBottom: 2 }} />} />
+      <div className="hw-scroll" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 6px 16px' }}>{content}</div>
       {stream === 'people' && work && (
-        <div style={{ flexShrink: 0, paddingBottom: 16 }}>
-          <Hair inset={12} style={{ marginBottom: 10 }} />
+        <div style={{ flexShrink: 0, padding: '0 6px 8px' }}>
+          <Hair style={{ marginBottom: 6 }} />
           <button
             type="button"
+            className="hw-btn-quiet"
             onClick={() => showView(VIEW.list, { list: 'replyLater' })}
-            style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '4px 12px 6px', textAlign: 'left', width: '100%', boxSizing: 'border-box', border: 0, background: 'none', color: 'inherit', font: 'inherit', cursor: 'pointer' }}
+            style={{ display: 'flex', alignItems: 'center', gap: 8, height: 32, padding: '0 8px', borderRadius: 6, textAlign: 'left', width: '100%', boxSizing: 'border-box', border: 0, background: 'none', color: 'inherit', font: 'inherit', fontSize: 13, cursor: 'pointer' }}
           >
-            <span style={{ fontFamily: V.serif, fontSize: 20 }}>{tv('hedwig.v2.rail.replyLater', 'Reply Later')}</span>
-            <Mono size={12}>{replyLaterCount ?? ''}</Mono>
+            <span aria-hidden="true" style={{ display: 'inline-flex', color: V.accent }}><Icon name="reply" size={16} /></span>
+            <span style={{ fontWeight: 600 }}>{tv('hedwig.v2.rail.replyLater', 'Reply Later')}</span>
+            <Num size={12}>{replyLaterCount ?? ''}</Num>
             <span style={{ flexGrow: 1 }} />
-            <span className="hw-link" style={{ fontSize: 13, fontWeight: 500 }}>{tv('hedwig.v2.people.focusReply', 'Focus and Reply')}</span>
+            <span className="hw-link" style={{ fontSize: 12, fontWeight: 500, color: V.accentInk, textDecorationColor: 'transparent' }}>{tv('hedwig.v2.people.focusReply', 'Focus and Reply')}</span>
           </button>
         </div>
       )}
@@ -315,7 +383,7 @@ export function ListItems({ list, phone }) {
       {res.error && <ErrorLine error={res.error} onRetry={() => res.reload()} retryLabel={tv('hedwig.v2.action.retry', 'Try again')} />}
       {res.loading && !res.data && <Quiet>{tv('hedwig.v2.loading', 'Loading…')}</Quiet>}
       {!res.loading && !res.error && !items.length && <Quiet><Why>{tv('hedwig.v2.list.empty', 'Nothing in this list.')}</Why></Quiet>}
-      <Rows items={items} phone={phone} onWhy={door.open} />
+      <Rows items={items} list={list} phone={phone} onWhy={door.open} />
       {door.element}
     </div>
   );

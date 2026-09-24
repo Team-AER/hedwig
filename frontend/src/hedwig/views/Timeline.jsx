@@ -4,7 +4,7 @@ import { useHedwig } from '../store.js';
 import { dueLabel, formatAgo, formatCount, formatDay, senderName, truncate } from './helpers.js';
 import { isTypingTarget, openMessage, useResource } from './hooks.js';
 import { CommitmentList, FactsGrid, removeById, replaceById } from './contextParts.jsx';
-import { Button, Chip, Dot, Empty, Glyph, Loading, Markdown, SectionLabel, StateView, T } from './ui.jsx';
+import { Button, Chip, Dot, Empty, Glyph, Loading, Markdown, SectionLabel, NUM, StateView, T } from './ui.jsx';
 import { tr } from './i18n.js';
 
 const MARKER_COLOR = { i_owe: T.amber, they_owe: T.teal, settled: T.muted };
@@ -116,7 +116,7 @@ function TopicDetail({ topicId }) {
           const tags = tagsFor(m.id, commitments, facts);
           return (
             <li key={m.id || i} style={{ display: 'flex', gap: 14, padding: '10px 0', borderTop: `1px solid ${T.border}` }}>
-              <div style={{ width: 78, flexShrink: 0, fontFamily: T.mono, fontSize: 12, color: T.muted, paddingTop: 2 }}>{formatDay(m.date)}</div>
+              <div style={{ width: 78, flexShrink: 0, ...NUM, fontSize: 12, color: T.muted, paddingTop: 2 }}>{formatDay(m.date)}</div>
               <div style={{ width: 10, flexShrink: 0, display: 'flex', justifyContent: 'center', paddingTop: 6 }}>
                 <Dot color={MARKER_COLOR[ev.marker] || T.muted} />
               </div>
@@ -126,7 +126,7 @@ function TopicDetail({ topicId }) {
                   <span style={{ fontSize: 12, color: T.muted }}>{m.account?.name}</span>
                   <span style={{ flexGrow: 1 }} />
                   <button type="button" onClick={() => openMessage(m.id, { lite: m })} aria-label={`Open message ${i + 1}: ${m.subject || ''}`}
-                    style={{ border: 0, padding: 0, background: 'none', fontFamily: T.mono, fontSize: 11, color: T.teal, cursor: 'pointer' }}>[{i + 1}]</button>
+                    style={{ border: 0, padding: 0, background: 'none', ...NUM, fontSize: 11, fontWeight: 600, color: T.tealText, cursor: 'pointer' }}>[{i + 1}]</button>
                 </div>
                 <div style={{ fontSize: 13 }}>{ev.gist || truncate(m.subject || m.snippet || '', 200)}</div>
                 {tags.length > 0 && (
@@ -178,7 +178,7 @@ function People({ people }) {
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
         {people.map((p) => (
           <button key={p.id} type="button" onClick={() => { setSelectedEntity(p.id); openView('hedwig.context', { entityId: p.id }); }} style={{
-            padding: '3px 9px', borderRadius: 999, border: `1px solid ${T.border}`, background: T.surface, color: T.ink, font: 'inherit', fontSize: 12, cursor: 'pointer',
+            padding: '3px 9px', borderRadius: 6, border: `1px solid ${T.border}`, background: T.surface, color: T.ink, font: 'inherit', fontSize: 12, cursor: 'pointer',
           }}>{p.display_name || p.primary_email}</button>
         ))}
       </div>

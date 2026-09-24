@@ -8,7 +8,7 @@ import Explainer, { MoveMenu, overrideTriage } from '../Explainer.jsx';
 import ConfigForm from './ConfigForm.jsx';
 import SettingsFrame from './SettingsFrame.jsx';
 import {
-  ActionError, Button, Card, Checkbox, Dot, Loading, MessageLiteRow, SectionLabel, Select, StatTile, StateView, T, Table, TileGrid, TONES,
+  ActionError, Button, Card, Checkbox, Dot, Loading, MessageLiteRow, SectionLabel, Select, StatTile, NUM, StateView, T, Table, TileGrid, TONES,
 } from '../ui.jsx';
 import { tr } from '../i18n.js';
 
@@ -72,7 +72,7 @@ export default function TriageSettings({ props = {} }) {
       <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'flex-start' }}>
         <div style={{ flex: '1 1 460px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-            <h2 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>{tr('triageSettings.recentDecisions', 'Recent decisions')}</h2>
+            <h2 style={{ margin: 0, fontSize: 11, lineHeight: '14px', fontWeight: 600, color: T.muted }}>{tr('triageSettings.recentDecisions', 'Recent decisions')}</h2>
             <span style={{ fontSize: 12, color: T.muted }}>{tr('triageSettings.selectOneToSeeWhy', 'select one to see why, or correct it')}</span>
           </div>
           {decisions.loading && !decisions.data && <Loading />}
@@ -116,7 +116,7 @@ export default function TriageSettings({ props = {} }) {
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 820 }}>
-        <h2 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>{tr('triageSettings.yourTriageSettings', 'Your triage settings')}</h2>
+        <h2 style={{ margin: 0, fontSize: 11, lineHeight: '14px', fontWeight: 600, color: T.muted }}>{tr('triageSettings.yourTriageSettings', 'Your triage settings')}</h2>
         {settings.loading && !settings.data && <Loading />}
         {settings.error && !settings.data && <StateView error={settings.error} onRetry={settings.reload} what="Settings" compact />}
         {triageFields.length > 0 && <ConfigForm fields={triageFields} onSave={saveSettings} resettable="user" grouped={false} />}
@@ -204,7 +204,7 @@ function Pipeline({ stats, budget }) {
             {i > 0 && <span aria-hidden="true" style={{ color: T.muted }}>→</span>}
             <span style={{ padding: '4px 8px', borderRadius: 6, background: st.bg, color: T.ink }}>
               {st.n} {st.label}
-              {stageCount(stats?.stageCounts, st.n) != null && <span style={{ fontFamily: T.mono, marginLeft: 6, color: T.muted }}>{formatCount(stageCount(stats.stageCounts, st.n))}</span>}
+              {stageCount(stats?.stageCounts, st.n) != null && <span style={{ ...NUM, marginLeft: 6, color: T.muted }}>{formatCount(stageCount(stats.stageCounts, st.n))}</span>}
             </span>
           </span>
         ))}

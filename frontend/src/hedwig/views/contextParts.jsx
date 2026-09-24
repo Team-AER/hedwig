@@ -124,12 +124,12 @@ function FactRow({ f, editable, editing, draft, setDraft, onEdit, onCancel, onSa
       <span style={{ color: T.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={f.key}>{f.key}</span>
       {editing ? (
         <form onSubmit={(e) => { e.preventDefault(); onSave(); }} style={{ display: 'flex', gap: 4 }}>
-          <TextInput aria-label={`Value for ${f.key}`} value={draft} onChange={(e) => setDraft(e.target.value)} style={{ height: 26, fontSize: 12, flexGrow: 1, fontFamily: T.mono }} autoFocus />
+          <TextInput aria-label={`Value for ${f.key}`} value={draft} onChange={(e) => setDraft(e.target.value)} style={{ height: 26, fontSize: 12, flexGrow: 1 }} autoFocus />
           <Button size="sm" type="submit" busy={busy}>{tr('contextParts.save', 'Save')}</Button>
           <Button size="sm" variant="ghost" onClick={onCancel}>{tr('contextParts.cancel', 'Cancel')}</Button>
         </form>
       ) : (
-        <span style={{ fontFamily: T.mono, overflowWrap: 'anywhere' }}>
+        <span style={{ overflowWrap: 'anywhere' }}>
           {f.source_message_id
             ? <button type="button" onClick={() => openMessage(f.source_message_id)} title={tr('contextParts.openTheMessageThisCame', 'Open the message this came from')}
               style={{ border: 0, padding: 0, background: 'none', color: T.ink, font: 'inherit', cursor: 'pointer', textAlign: 'left' }}>{String(f.value)}</button>

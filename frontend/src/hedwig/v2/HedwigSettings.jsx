@@ -1,6 +1,8 @@
-// Settings → Hedwig, the v2 part. Simple: five switches and the look (accent, blur, light or
-// dark). Power adds the rules list with dry-run (/sort/rules), the model routing table
-// (read-only unless admin), prompt versions (admin) and index status (/index/status).
+// Settings → Hedwig, the v2 part. The Power mode switch (the rail no longer carries it), then
+// Simple: five switches and the look (a blue-family accent, blur, light or dark). Power adds the
+// rules list with dry-run (/sort/rules), the model routing table (read-only unless admin), prompt
+// versions (admin) and index status (/index/status). Section headers are the 11px/600
+// SectionLabel, rows 13px, fields radius 8 on --hw-field; mono only for model and prompt ids.
 import { useState } from 'react';
 import { hedwigApi } from '../api.js';
 import { useHedwig } from '../store.js';
@@ -11,14 +13,15 @@ import { useV2, UI_DEFAULTS } from './state.js';
 import { v2Api, listOf, isMockMode } from './client.js';
 import { useV2Resource } from './hooks.js';
 import { nextScheme, schemeLabel } from './Rail.jsx';
-import { Btn, ErrorLine, Hair, LinkBtn, Mono, Quiet, V, Why } from './primitives.jsx';
+import { Code, ErrorLine, Hair, LinkBtn, Mono, Quiet, SectionLabel, V, Why } from './primitives.jsx';
 import { listTime, percent } from './format.js';
 import { tv } from './i18n.js';
 import { tierLabel } from './tiers.js';
 import { TierNote } from './TierNote.jsx';
 import { tierChoiceLabel } from '../views/settings/RoutingSettings.jsx';
 
-const ACCENTS = ['#E0561A', '#2F6F5E', '#3B5A8A', '#B8336A'];
+// Blue-family accents only (spec §e): orange means attention now. System blue first (the default).
+const ACCENTS = ['#007AFF', '#0B5FCC', '#3B5A8A', '#5856D6'];
 
 // The five Simple controls. `ui.*` keys are this stream's; sort.* / spam.* come from sorting (C).
 // Bundle delivery is per bundle in C (a schedule on each, PATCH /sort/bundles/:id), so that row
@@ -33,24 +36,24 @@ export function simpleSwitches() {
   ];
 }
 
-function Switch({ checked, onChange, label, help, disabled, note }) {
+function Switch({ checked, onChange, label, help, disabled, note, title, ...rest }) {
   return (
-    <label style={{ display: 'flex', alignItems: 'flex-start', gap: 14, padding: '12px 0', borderTop: `1px solid ${V.line}`, cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.6 : 1 }}>
+    <label title={title} style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '10px 0', borderTop: `1px solid ${V.line}`, cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.6 : 1 }}>
       <span style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
-        <span style={{ fontSize: 15 }}>{label}</span>
-        {help && <span style={{ fontSize: 13, color: V.muted }}>{help}</span>}
-        {note && <Why size={14}>{note}</Why>}
+        <span style={{ fontSize: 13 }}>{label}</span>
+        {help && <span style={{ fontSize: 12, color: V.muted }}>{help}</span>}
+        {note && <Why>{note}</Why>}
       </span>
-      <input type="checkbox" role="switch" checked={Boolean(checked)} disabled={disabled} onChange={(e) => onChange(e.target.checked)} style={{ width: 20, height: 20, marginTop: 2, accentColor: 'var(--hw-accent)', flexShrink: 0 }} />
+      <input type="checkbox" role="switch" checked={Boolean(checked)} disabled={disabled} onChange={(e) => onChange(e.target.checked)} {...rest} style={{ width: 16, height: 16, marginTop: 1, accentColor: 'var(--hw-accent)', flexShrink: 0 }} />
     </label>
   );
 }
 
 function Section({ title, children, right }) {
   return (
-    <section style={{ display: 'flex', flexDirection: 'column', gap: 6, maxWidth: 900 }}>
+    <section style={{ display: 'flex', flexDirection: 'column', gap: 4, maxWidth: 900 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
-        <h2 style={{ margin: 0, fontFamily: V.serif, fontWeight: 400, fontSize: 24, lineHeight: 1.1 }}>{title}</h2>
+        <SectionLabel as="h2" style={{ padding: '0 0 2px' }}>{title}</SectionLabel>
         <span style={{ flexGrow: 1 }} />
         {right}
       </div>
@@ -118,13 +121,13 @@ function BundleTimes({ label, help }) {
       res.setData((d) => ({ ...(d || {}), bundles: listOf(d, 'bundles').map((x) => (x.id === b.id ? { ...x, ...next } : x)) }));
     } catch (e) { setError(e); }
   };
-  const inputStyle = { font: 'inherit', fontSize: 13, color: V.ink, background: 'transparent', border: 0, borderBottom: `1px solid ${V.line2}`, padding: '4px 2px' };
+  const inputStyle = { font: 'inherit', fontSize: 13, color: V.ink, background: V.field, border: `1px solid ${V.line}`, borderRadius: 8, height: 28, boxSizing: 'border-box', padding: '0 8px' };
   return (
-    <div style={{ padding: '12px 0', borderTop: `1px solid ${V.line}` }}>
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14 }}>
+    <div style={{ padding: '10px 0', borderTop: `1px solid ${V.line}` }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
         <span style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
-          <span style={{ fontSize: 15 }}>{label}</span>
-          <span style={{ fontSize: 13, color: V.muted }}>{help}</span>
+          <span style={{ fontSize: 13 }}>{label}</span>
+          <span style={{ fontSize: 12, color: V.muted }}>{help}</span>
         </span>
         <LinkBtn aria-expanded={open} onClick={() => setOpen((v) => !v)}>{open ? tv('hedwig.v2.records.hide', 'Hide') : tv('hedwig.v2.records.show', 'Show')}</LinkBtn>
       </div>
@@ -138,7 +141,7 @@ function BundleTimes({ label, help }) {
             return (
               <div key={b.id || b.key} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderTop: `1px solid ${V.line}`, flexWrap: 'wrap' }}>
                 <span style={{ flexGrow: 1, minWidth: 120, display: 'flex', flexDirection: 'column' }}>
-                  <span style={{ fontSize: 14 }}>{b.name || b.key}</span>
+                  <span style={{ fontSize: 13 }}>{b.name || b.key}</span>
                   <span style={{ fontSize: 12, color: V.muted }}>{scheduleLabel(sc)}</span>
                 </span>
                 <select aria-label={tv('hedwig.v2.settings.whenFor', 'When {{name}} arrives', { name: b.name || b.key })} value={mode} style={inputStyle}
@@ -173,8 +176,8 @@ function LookSection() {
   const accent = (prefs.accent || DEFAULT_ACCENT).toUpperCase();
   return (
     <Section title={tv('hedwig.v2.settings.look', 'The look')}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 0', borderTop: `1px solid ${V.line}`, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 15, flexGrow: 1 }}>{tv('hedwig.v2.settings.accent', 'Accent')}</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 0', borderTop: `1px solid ${V.line}`, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 13, flexGrow: 1 }}>{tv('hedwig.v2.settings.accent', 'Accent')}</span>
         <div role="radiogroup" aria-label={tv('hedwig.v2.settings.accent', 'Accent')} style={{ display: 'flex', gap: 10 }}>
           {ACCENTS.map((c) => (
             <button key={c} type="button" role="radio" aria-checked={accent === c} aria-label={c} title={c} onClick={() => useV2.getState().setPref('accent', c)}
@@ -182,15 +185,15 @@ function LookSection() {
           ))}
         </div>
       </div>
-      <label style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 0', borderTop: `1px solid ${V.line}` }}>
-        <span style={{ fontSize: 15, flexGrow: 1 }}>{tv('hedwig.v2.settings.blur', 'Glass blur')}</span>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 0', borderTop: `1px solid ${V.line}` }}>
+        <span style={{ fontSize: 13, flexGrow: 1 }}>{tv('hedwig.v2.settings.blur', 'Glass blur')}</span>
         <input type="range" min={0} max={48} step={2} value={blur} onChange={(e) => setBlur(Number(e.target.value))}
           onPointerUp={() => useV2.getState().setPref('blur', blur)} onKeyUp={() => useV2.getState().setPref('blur', blur)} onBlur={() => { if (blur !== prefs.blur) useV2.getState().setPref('blur', blur); }}
           style={{ width: 180, accentColor: 'var(--hw-accent)' }} />
         <Mono size={12}>{`${blur}px`}</Mono>
       </label>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 0', borderTop: `1px solid ${V.line}` }}>
-        <span style={{ fontSize: 15, flexGrow: 1 }}>{tv('hedwig.v2.settings.scheme', 'Light or dark')}</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 0', borderTop: `1px solid ${V.line}` }}>
+        <span style={{ fontSize: 13, flexGrow: 1 }}>{tv('hedwig.v2.settings.scheme', 'Light or dark')}</span>
         <LinkBtn onClick={() => useV2.getState().setScheme(nextScheme(scheme))}>{schemeLabel(scheme)}</LinkBtn>
       </div>
       {(prefs.accent !== UI_DEFAULTS.accent || prefs.blur !== UI_DEFAULTS.blur) && (
@@ -236,21 +239,21 @@ function RulesSection() {
       {rules.map((r) => {
         const d = dry[r.id];
         return (
-          <div key={r.id} style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '12px 0', borderTop: `1px solid ${V.line}`, opacity: r.enabled === false ? 0.6 : 1 }}>
+          <div key={r.id} style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '10px 0', borderTop: `1px solid ${V.line}`, opacity: r.enabled === false ? 0.6 : 1 }}>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
               <Mono size={12}>{r.position ?? ''}</Mono>
-              <span style={{ fontSize: 15, fontWeight: 500 }}>{r.name || r.id}</span>
+              <span style={{ fontSize: 13, fontWeight: 500 }}>{r.name || r.id}</span>
               {r.enabled === false && <span style={{ fontSize: 12, color: V.muted }}>{tv('hedwig.v2.power.off', 'off')}</span>}
               <span style={{ flexGrow: 1 }} />
               <Mono size={12}>{tv('hedwig.v2.power.hits', '{{n}} hits', { n: r.hits ?? 0 })}</Mono>
               <LinkBtn onClick={() => dryRun(r)} disabled={d?.loading}>{tv('hedwig.v2.power.dryRun', 'Dry run')}</LinkBtn>
             </div>
-            <span style={{ fontSize: 13, color: V.muted }}>{describe(r.conditions)}{r.actions ? ` → ${describe(r.actions)}` : ''}</span>
+            <span style={{ fontSize: 12, color: V.muted }}>{describe(r.conditions)}{r.actions ? ` → ${describe(r.actions)}` : ''}</span>
             {d?.loading && <span style={{ fontSize: 13, color: V.muted }}>{tv('hedwig.v2.loading', 'Loading…')}</span>}
             {d?.error && <ErrorLine error={d.error} />}
             {d?.data && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 2, paddingLeft: 12 }}>
-                <Why size={15}>{tv('hedwig.v2.power.matched', 'Would match {{n}} messages', { n: d.data.matched ?? 0 })}</Why>
+                <Why>{tv('hedwig.v2.power.matched', 'Would match {{n}} messages', { n: d.data.matched ?? 0 })}</Why>
                 {listOf(d.data.sample, 'sample').slice(0, 5).map((m, i) => (
                   <span key={m.messageId || i} style={{ fontSize: 13 }}>
                     <Mono>{listTime(m.date)}</Mono> {typeof m.from === 'string' ? m.from : (m.from?.name || m.from?.email || '')} · {m.subject}
@@ -295,16 +298,16 @@ function RoutingSection({ admin }) {
       {!rows.length && <Quiet>{tv('hedwig.v2.power.noRouting', 'The model routing is not known yet.')}</Quiet>}
       {rows.map(([role, model]) => (
         <div key={role} style={{ display: 'grid', gridTemplateColumns: 'minmax(140px, 200px) minmax(0, 1fr)', gap: 12, padding: '10px 0', borderTop: `1px solid ${V.line}`, alignItems: 'baseline' }}>
-          <span style={{ fontSize: 14 }}>{tierLabel(role)}</span>
-          <Mono size={12} color={model?.degraded ? V.accentInk : V.ink} style={{ whiteSpace: 'normal', overflowWrap: 'anywhere' }}>{routingLine(model)}</Mono>
+          <span style={{ fontSize: 13 }}>{tierLabel(role)}</span>
+          <Code size={12} color={model?.degraded ? V.attentionInk : V.ink} style={{ overflowWrap: 'anywhere' }}>{routingLine(model)}</Code>
         </div>
       ))}
       {features.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', paddingTop: 8 }}>
           {features.map((f) => (
             <div key={f.feature} style={{ display: 'grid', gridTemplateColumns: 'minmax(140px, 200px) minmax(0, 1fr) auto', gap: 12, padding: '8px 0', borderTop: `1px solid ${V.line}`, alignItems: 'baseline' }}>
-              <span style={{ fontSize: 14 }}>{f.feature}</span>
-              <span style={{ fontSize: 13, color: V.muted, minWidth: 0 }}>{[tierChoiceLabel(f.override, f.defaultTier), f.cadence].filter(Boolean).join(' · ')}</span>
+              <span style={{ fontSize: 13 }}>{f.feature}</span>
+              <span style={{ fontSize: 12, color: V.muted, minWidth: 0 }}>{[tierChoiceLabel(f.override, f.defaultTier), f.cadence].filter(Boolean).join(' · ')}</span>
               <Mono size={11}>{f.usedToday ? tv('hedwig.v2.power.usedToday', '{{n}} tokens today', { n: Number(f.usedToday).toLocaleString() }) : ''}</Mono>
             </div>
           ))}
@@ -323,9 +326,9 @@ function PromptsSection() {
       {res.loading && !res.data && <Quiet>{tv('hedwig.v2.loading', 'Loading…')}</Quiet>}
       {prompts.map((p) => (
         <div key={p.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto auto', gap: 14, padding: '10px 0', borderTop: `1px solid ${V.line}`, alignItems: 'baseline' }}>
-          <Mono size={13} color={V.ink}>{p.id}</Mono>
+          <Code size={12}>{p.id}</Code>
           <Mono size={12}>{p.version}{p.tier ? ` · ${p.tier}` : ''}</Mono>
-          <Mono size={12} title={p.hash || undefined}>{p.hash ? String(p.hash).slice(0, 8) : ''}</Mono>
+          <Code size={11} color={V.muted} title={p.hash || undefined}>{p.hash ? String(p.hash).slice(0, 8) : ''}</Code>
         </div>
       ))}
     </Section>
@@ -339,7 +342,7 @@ function IndexSection() {
   const embeddedPct = d.pct?.embedded ?? percent(d.embedded, d.total);
   const recipe = typeof d.recipe === 'string' ? d.recipe : (d.recipe?.active || d.recipe?.target || '');
   return (
-    <Section title={tv('hedwig.v2.power.index', 'Index')} right={res.data ? <Mono size={12}>{recipe}</Mono> : null}>
+    <Section title={tv('hedwig.v2.power.index', 'Index')} right={res.data ? <Code size={11} color={V.muted}>{recipe}</Code> : null}>
       {res.error && <ErrorLine error={res.error.status === 404 ? new Error(tv('hedwig.v2.notYet', 'Not available yet.')) : res.error} onRetry={() => res.reload()} retryLabel={tv('hedwig.v2.action.retry', 'Try again')} />}
       {res.loading && !res.data && <Quiet>{tv('hedwig.v2.loading', 'Loading…')}</Quiet>}
       {res.data && !d.total && (
@@ -348,8 +351,8 @@ function IndexSection() {
       )}
       {res.data && d.total > 0 && (
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 18, flexWrap: 'wrap', padding: '6px 0 10px' }}>
-          <span style={{ fontFamily: V.serif, fontSize: 36, lineHeight: 1 }}>{`${embeddedPct}%`}</span>
-          <span style={{ fontSize: 13, color: V.muted }}>{tv('hedwig.v2.power.indexSummary', '{{embedded}} of {{total}} messages searchable · {{pending}} to go', { embedded: (d.embedded ?? 0).toLocaleString(), total: (d.total ?? 0).toLocaleString(), pending: (d.pending ?? 0).toLocaleString() })}</span>
+          <span data-figure="" style={{ fontFamily: V.sans, fontWeight: 600, fontSize: 20, lineHeight: 1.15, letterSpacing: '-0.01em', fontVariantNumeric: 'tabular-nums' }}>{`${embeddedPct}%`}</span>
+          <span style={{ fontSize: 12, color: V.muted }}>{tv('hedwig.v2.power.indexSummary', '{{embedded}} of {{total}} messages searchable · {{pending}} to go', { embedded: (d.embedded ?? 0).toLocaleString(), total: (d.total ?? 0).toLocaleString(), pending: (d.pending ?? 0).toLocaleString() })}</span>
           {d.embedError && <span role="alert" style={{ fontSize: 13, color: V.red }}>{d.embedError}</span>}
         </div>
       )}
@@ -358,7 +361,7 @@ function IndexSection() {
         return (
           <div key={`${r.accountId || r.account_id}-${r.folder}-${i}`} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 120px 60px', gap: 12, padding: '10px 0', borderTop: `1px solid ${V.line}`, alignItems: 'center' }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
-              <span style={{ fontSize: 14 }}>{[r.account, r.folder].filter(Boolean).join(' · ')}</span>
+              <span style={{ fontSize: 13 }}>{[r.account, r.folder].filter(Boolean).join(' · ')}</span>
               <span style={{ fontSize: 12, color: r.error ? V.red : V.muted }}>{r.error || r.state}</span>
             </div>
             <div aria-hidden="true" style={{ height: 4, borderRadius: 2, background: V.line, overflow: 'hidden' }}>
@@ -377,17 +380,19 @@ export default function HedwigSettingsV2() {
   const power = useV2((s) => s.prefs.powerMode);
   const admin = useIsAdmin();
   return (
-    <div className="hw-v2" style={{ display: 'flex', flexDirection: 'column', gap: 26, fontFamily: V.sans, color: V.ink }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap', maxWidth: 900 }}>
-        <Why size={17}>{power
-          ? tv('hedwig.v2.power.onIntro', 'Power is on: rules, routing, prompts and the index are below.')
-          : tv('hedwig.v2.power.offIntro', 'Simple keeps it to five switches. Power shows how Hedwig decides.')}
-        </Why>
-        <span style={{ flexGrow: 1 }} />
-        <Btn solid={!power} onClick={() => useV2.getState().togglePower()} aria-pressed={power}>
-          {power ? tv('hedwig.v2.power.toSimple', 'Back to Simple') : tv('hedwig.v2.power.toPower', 'Turn on Power')}
-        </Btn>
-      </div>
+    <div className="hw-v2" style={{ display: 'flex', flexDirection: 'column', gap: 24, fontFamily: V.sans, fontSize: 13, color: V.ink }}>
+      <section data-power-mode="" style={{ display: 'flex', flexDirection: 'column', maxWidth: 900 }}>
+        <Switch
+          label={tv('hedwig.v2.power.label', 'Power mode')}
+          help={power
+            ? tv('hedwig.v2.power.onIntro', 'Power is on: rules, routing, prompts and the index are below.')
+            : tv('hedwig.v2.power.offIntro', 'Simple keeps it to five switches. Power shows how Hedwig decides.')}
+          title={tv('hedwig.v2.power.hint', 'Power shows rules, routing, prompts and index status')}
+          checked={power}
+          onChange={() => useV2.getState().togglePower()}
+          data-power-switch=""
+        />
+      </section>
       <SimpleSection />
       <LookSection />
       {power && (

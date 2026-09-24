@@ -6,7 +6,7 @@ import { formatAgo, formatCount, formatDay, formatHours, formatPercent, sparkPoi
 import { openMessage, useAction, useResource } from './hooks.js';
 import {
   AccountDot, ActionError, Button, Card, Chip, ColumnChart, IconButton, Loading, Markdown, Meter, SectionLabel,
-  Sparkline, StatTile, StateView, T, Table, TileGrid, Title,
+  Sparkline, StatTile, NUM, StateView, T, Table, TileGrid, Title,
 } from './ui.jsx';
 import { tr } from './i18n.js';
 
@@ -31,7 +31,7 @@ export default function Insights({ props = {} }) {
         <div role="group" aria-label={tr('insights.range', 'Range')} style={{ display: 'flex', gap: 6 }}>
           {RANGES.map((d) => (
             <button key={d} type="button" aria-pressed={days === d} onClick={() => setDays(d)} style={{
-              padding: '3px 10px', borderRadius: 999, border: `1px solid ${days === d ? T.ink : T.border}`, background: days === d ? T.ink : 'transparent',
+              padding: '3px 10px', borderRadius: 6, border: `1px solid ${days === d ? T.ink : T.border}`, background: days === d ? T.ink : 'transparent',
               color: days === d ? T.surface : T.ink, font: 'inherit', fontSize: 12, cursor: 'pointer',
             }}>{d} d</button>
           ))}
@@ -88,7 +88,7 @@ function Overview({ data }) {
               <div style={{ display: 'flex', alignItems: 'flex-end', gap: 14 }}>
                 <Sparkline points={sparkPoints(weekly.map((w) => w.median_hours), 220, 60, 5)} width={220} height={60} label="Weekly median reply time" />
                 <span style={{ fontSize: 12, color: T.muted }}>
-                  now <strong style={{ fontFamily: T.mono, fontWeight: 500, color: T.ink }}>{formatHours(weekly[weekly.length - 1].median_hours)}</strong>
+                  now <strong style={{ ...NUM, fontWeight: 600, color: T.ink }}>{formatHours(weekly[weekly.length - 1].median_hours)}</strong>
                   <br />was {formatHours(weekly[0].median_hours)}
                 </span>
               </div>
@@ -102,7 +102,7 @@ function Overview({ data }) {
                 <div key={a.account?.id || i} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 }}>
                   <AccountDot account={a.account} />
                   <span style={{ flexGrow: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.account?.name}</span>
-                  <span style={{ fontFamily: T.mono, fontSize: 12 }}>{formatCount(a.received)} in · {formatCount(a.sent)} out</span>
+                  <span style={{ ...NUM, fontSize: 12 }}>{formatCount(a.received)} in · {formatCount(a.sent)} out</span>
                 </div>
               ))}
             </div>
@@ -129,7 +129,7 @@ function RateCell({ value, color, label }) {
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
       <Meter value={v} color={color} width={60} label={label} />
-      <span style={{ fontFamily: T.mono, fontSize: 12 }}>{formatPercent(v)}</span>
+      <span style={{ ...NUM, fontSize: 12 }}>{formatPercent(v)}</span>
     </span>
   );
 }
@@ -172,7 +172,7 @@ function Sources({ ids }) {
       <span>{tr('insights.sources', 'Sources')}</span>
       {ids.slice(0, 12).map((id, i) => (
         <button key={id} type="button" onClick={() => openMessage(id)} aria-label={`Open source ${i + 1}`} style={{
-          border: 0, borderRadius: 4, padding: '1px 5px', background: T.tealTint, color: T.tealText, fontFamily: T.mono, fontSize: 10, cursor: 'pointer',
+          border: 0, borderRadius: 4, padding: '1px 5px', background: T.tealTint, color: T.tealText, ...NUM, fontSize: 10, fontWeight: 600, cursor: 'pointer',
         }}>{i + 1}</button>
       ))}
     </div>

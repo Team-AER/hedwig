@@ -645,11 +645,16 @@ describe('Tier 2 status and the lighter model', () => {
   test('the rail, Ask and the Brief say Tier 2 is slow only while it is', async () => {
     await render(h(Rail, {}));
     assert.equal(document.querySelector('[data-tier-note]'), null);
+    assert.match(document.querySelector('nav footer').textContent, /Up to date/, 'healthy: the footer\'s status line is the sync line');
     await cleanup();
     mock.mockSetDegraded(true);
     useHedwig.setState({ status: mock.mockStatus() });
     await render(h(Rail, {}));
     const note = document.querySelector('[data-tier-note]');
+    assert.equal(document.querySelectorAll('[data-tier-note]').length, 1, 'once in the rail');
+    assert.ok(note.closest('footer'), 'as the rail footer\'s status line, not under the search field');
+    assert.equal(note.closest('button')?.closest('footer'), note.closest('footer'), 'the status line opens Today');
+    assert.doesNotMatch(note.closest('footer').textContent, /Up to date/, 'the tier note replaces the sync line while degraded');
     assert.equal(note.textContent, 'Tier 2 is slow; using the lighter model', 'the server’s notice, as it says it');
     assert.equal(note.getAttribute('role'), 'status');
     assert.match(note.title, /gemma/);

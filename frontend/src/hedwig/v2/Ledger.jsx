@@ -6,7 +6,7 @@ import { useV2Resource, isMissing } from './hooks.js';
 import { listOf } from './client.js';
 import { openThread } from './nav.js';
 import { cadenceLabel, statusLabel } from './cards.js';
-import { ErrorLine, Figure, Hair, Mono, Quiet, V, ViewBody, ViewHead, Why, usePhone } from './primitives.jsx';
+import { Avatar, Code, ErrorLine, Figure, Hair, Num, Quiet, V, ViewBody, ViewHead, Why, usePhone } from './primitives.jsx';
 import { money, shortDate, fullTime } from './format.js';
 import { tv, tvn } from './i18n.js';
 import { CoverageNote } from './CoverageNote.jsx';
@@ -142,10 +142,10 @@ export default function Ledger({ props }) {
   );
 
   const totals = figures.length > 0 && (
-    <section aria-label={tv('hedwig.v2.ledger.totals', 'Totals')} style={{ display: 'grid', gridTemplateColumns: `repeat(${phone ? Math.min(2, figures.length) : Math.min(4, figures.length)}, minmax(0, 1fr))`, rowGap: 18, padding: phone ? '4px 0 18px' : '4px 12px 22px' }}>
+    <section aria-label={tv('hedwig.v2.ledger.totals', 'Totals')} style={{ display: 'grid', gridTemplateColumns: `repeat(${phone ? Math.min(2, figures.length) : Math.min(4, figures.length)}, minmax(0, 1fr))`, rowGap: 14, padding: phone ? '4px 0 14px' : '4px 12px 16px' }}>
       {figures.map((f, i) => (
-        <div key={f.key} style={{ padding: i % (phone ? 2 : 4) === 0 ? '0 20px 0 0' : '0 20px', borderLeft: i % (phone ? 2 : 4) === 0 ? 0 : `1px solid ${V.line2}` }}>
-          <Figure value={f.figure} caption={f.caption} sub={f.sub} size={phone ? 30 : 36} />
+        <div key={f.key} style={{ padding: i % (phone ? 2 : 4) === 0 ? '0 14px 0 0' : '0 14px', borderLeft: i % (phone ? 2 : 4) === 0 ? 0 : `1px solid ${V.line}` }}>
+          <Figure value={f.figure} caption={f.caption} sub={f.sub} size={20} />
         </div>
       ))}
     </section>
@@ -165,7 +165,7 @@ export default function Ledger({ props }) {
               <select
                 value={current ? `${current.field}:${current.dir}` : ''}
                 onChange={(e) => { const [field, dir] = e.target.value.split(':'); setSort({ kind, field, dir }); }}
-                style={{ height: 44, border: 0, borderBottom: `1px solid ${V.line2}`, background: 'transparent', color: V.ink, font: 'inherit', fontSize: 14, borderRadius: 0 }}
+                style={{ height: 44, border: 0, borderRadius: 8, padding: '0 8px', background: V.field, color: V.ink, font: 'inherit', fontSize: 15 }}
               >
                 {sortable.flatMap((c) => [
                   <option key={`${c.sort}:desc`} value={`${c.sort}:desc`}>{`${c.label} ↓`}</option>,
@@ -179,19 +179,24 @@ export default function Ledger({ props }) {
             const titleCol = columns.find((c) => c.id === lead.title);
             const sideCol = columns.find((c) => c.id === lead.side);
             const rest = columns.filter((c) => c !== titleCol && c !== sideCol);
+            const name = titleCol.render(r);
             return (
               <div key={r.id}>
-                {i > 0 && <Hair />}
+                {i > 0 && <Hair style={{ margin: '0 0 0 50px' }} />}
                 <button
                   type="button"
+                  className="hw-row"
                   onClick={() => open(r)}
-                  style={{ display: 'flex', flexDirection: 'column', gap: 3, width: '100%', padding: '12px 0', minHeight: 44, border: 0, background: 'none', color: V.ink, font: 'inherit', textAlign: 'left', cursor: r.messageId ? 'pointer' : 'default' }}
+                  style={{ display: 'grid', gridTemplateColumns: '40px minmax(0, 1fr)', columnGap: 10, alignItems: 'start', width: '100%', boxSizing: 'border-box', padding: '12px 0', minHeight: 64, border: 0, borderRadius: 8, background: 'none', color: V.ink, font: 'inherit', textAlign: 'left', cursor: r.messageId ? 'pointer' : 'default' }}
                 >
-                  <span style={{ display: 'flex', alignItems: 'baseline', gap: 10, width: '100%' }}>
-                    <span style={{ fontSize: 15, fontWeight: 500, flexGrow: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{titleCol.render(r)}</span>
-                    <Mono size={12} color={V.ink}>{sideCol.render(r)}</Mono>
+                  <Avatar name={name || ledgerTitle(kind)} size={40} />
+                  <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+                    <span style={{ display: 'flex', alignItems: 'baseline', gap: 10, width: '100%' }}>
+                      <span style={{ fontSize: 15, lineHeight: '20px', fontWeight: 600, flexGrow: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
+                      <Num size={13} color={V.ink}>{sideCol.render(r)}</Num>
+                    </span>
+                    <span style={{ fontSize: 14, lineHeight: '19px', color: V.muted, overflowWrap: 'anywhere' }}>{rest.map((c) => c.render(r)).filter(Boolean).join(' · ')}</span>
                   </span>
-                  <span style={{ fontSize: 13, color: V.muted, overflowWrap: 'anywhere' }}>{rest.map((c) => c.render(r)).filter(Boolean).join(' · ')}</span>
                 </button>
               </div>
             );
@@ -201,15 +206,15 @@ export default function Ledger({ props }) {
     );
   }
 
-  const th = { textAlign: 'left', fontWeight: 500, fontSize: 12, color: V.muted, padding: '0 12px 8px', borderBottom: `1px solid ${V.line2}`, whiteSpace: 'nowrap' };
+  const th = { textAlign: 'left', fontWeight: 600, fontSize: 11, lineHeight: '14px', color: V.muted, padding: '0 12px 6px', borderBottom: `1px solid ${V.line}`, whiteSpace: 'nowrap' };
   return (
-    <ViewBody label={title} padded={false} style={{ padding: '26px 14px 16px' }}>
+    <ViewBody label={title} padded={false} style={{ padding: '14px 6px 16px' }}>
       <ViewHead title={title} sub={sub} />
       {state}
       {totals}
       {rows.length > 0 && (
         <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, fontVariantNumeric: 'tabular-nums' }}>
             <caption style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)' }}>{title}</caption>
             <thead>
               <tr>
@@ -234,10 +239,10 @@ export default function Ledger({ props }) {
               {sorted.map((r) => (
                 <tr key={r.id} className="hw-row" onClick={() => open(r)} style={{ cursor: r.messageId ? 'pointer' : 'default' }}>
                   {columns.map((c, i) => (
-                    <td key={c.id} style={{ padding: '12px', borderBottom: `1px solid ${V.line}`, textAlign: c.num ? 'right' : 'left', fontFamily: c.mono || c.num ? V.mono : 'inherit', fontSize: c.mono || c.num ? 13 : 14, whiteSpace: c.num || c.mono || c.date ? 'nowrap' : undefined }}>
+                    <td key={c.id} style={{ padding: '10px 12px', borderBottom: `1px solid ${V.line}`, textAlign: c.num ? 'right' : 'left', color: c.date ? V.muted : V.ink, fontWeight: i === 1 ? 600 : 400, whiteSpace: c.num || c.mono || c.date ? 'nowrap' : undefined }}>
                       {i === 1 && r.messageId
                         ? <button type="button" onClick={(e) => { e.stopPropagation(); open(r); }} className="hw-link" style={{ padding: 0, border: 0, background: 'none', font: 'inherit', color: V.ink, cursor: 'pointer', textAlign: 'left', textDecorationColor: 'transparent' }}>{c.render(r)}</button>
-                        : c.render(r)}
+                        : c.mono && c.render(r) ? <Code size={12}>{c.render(r)}</Code> : c.render(r)}
                     </td>
                   ))}
                 </tr>

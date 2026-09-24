@@ -286,8 +286,9 @@ describe('People stream', () => {
   test('Needs you on top with reasons, no question on desktop, then the rest; the reason opens the why door and Change this corrects', async () => {
     await render(h(StreamView, { props: { stream: 'people' } }));
     assert.ok(document.querySelector('h1').textContent === 'People');
-    assert.match(text(), /5 need you/);
+    assert.match(document.querySelector('h1').parentElement.textContent, /People\d+ · 5 unread/, 'the title row says how many and how many unread');
     const needs = document.querySelector('section[aria-label="Needs you"]');
+    assert.equal(needs.querySelector('h2').textContent, 'Needs you5', 'the Needs you header carries its count');
     assert.equal(all('[data-row-button]', needs).length, 5, 'four people and a due reminder');
     assert.match(needs.textContent, /Asked for the report by Friday/);
     assert.doesNotMatch(text(), /Keep her mail in People\?/, 'the day\'s question lives in the Brief on desktop');
@@ -513,35 +514,65 @@ describe('Screener', () => {
 
 describe('Thread', () => {
   after(cleanup);
+  const annaItem = async () => (await mock.mockRequest('GET', '/sort/stream/people')).items.find((i) => i.messageId === 'm-anna');
+  const setText = async (el, value) => {
+    const proto = el.tagName === 'TEXTAREA' ? dom.window.HTMLTextAreaElement.prototype : dom.window.HTMLInputElement.prototype;
+    await React.act(async () => {
+      Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, value);
+      el.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    });
+  };
+  const focusIn = async (el) => { await React.act(async () => { el.focus(); el.dispatchEvent(new dom.window.FocusEvent('focusin', { bubbles: true })); }); await settle(); };
 
-  test('story with citations, deadline slip, earlier fold, latest message, why with Change, quick replies and the reply bar', async () => {
-    const item = (await mock.mockRequest('GET', '/sort/stream/people')).items.find((i) => i.messageId === 'm-anna');
-    await render(h(Thread, { props: { item } }));
+  test('toolbar, subject, story with citations, deadline, collapsed earlier messages, latest message, reason with Change, quick replies and the reply bar', async () => {
+    await render(h(Thread, { props: { item: await annaItem() } }));
     await settle(60);
     assert.equal(document.querySelector('h2').textContent, 'Q3 report: can you send the final numbers?');
+    assert.equal(document.querySelector('h2').style.fontSize, '20px');
     assert.match(text(), /Anna Berg and you · 5 messages · Work/);
+
+    // The toolbar: every button names its key, in its tooltip too; Done shows its label.
+    const bar = document.querySelector('[role="toolbar"]');
+    for (const label of ['Done (E)', 'Reply Later (L)', 'Snooze (H)', 'Set Aside (S)', 'Reply (R)', 'Reply all (A)', 'Forward (F)', 'Move (V)', 'Flag', 'More']) {
+      const b = byLabel(label, bar);
+      assert.ok(b, `${label} in the toolbar`);
+      assert.equal(b.getAttribute('title'), label);
+    }
+    assert.equal(byLabel('Done (E)', bar).textContent, 'Done');
+
     const story = document.querySelector('section[aria-label="The story so far"]');
+    assert.match(story.textContent, /Story so far/);
     assert.equal(all('button[aria-label^="Message "]', story).length, 3);
-    // Citation 1 names m-anna-2 (the second message), so it opens the earlier messages.
+
+    // Older read messages are 44px rows (four of them: not folded); the newest is open.
+    assert.equal(all('article[id^="hw-msg-"]').length, 5);
+    assert.equal(document.querySelector('article#hw-msg-2 [data-message-body]'), null, 'collapsed: no body');
+    assert.ok(document.querySelector('article#hw-msg-2 button[aria-expanded="false"]'));
+    assert.doesNotMatch(text(), /earlier messages/, 'four collapsed rows do not fold');
+    assert.equal(document.querySelector('article#hw-msg-5 [data-text-body]').textContent, 'Hi, the board pack goes to print Friday morning. Could you send the final Q3 numbers by Thursday evening? The corrected revenue lines are already in.');
+    assert.equal(document.querySelector('article#hw-msg-5 iframe'), null, 'plain text, no frame');
+    assert.doesNotMatch(document.querySelector('article#hw-msg-5').textContent, /^\s*5/, 'no mono ordinal');
+
+    // Citation 1 names m-anna-2 (the second message): it opens in place.
     await click(byLabel('Message 1', story));
-    assert.match(text(), /Two revenue lines look off/);
-    await click(all('button[aria-expanded]').find((b) => b.textContent.includes('earlier messages')));
+    assert.match(document.querySelector('article#hw-msg-2 [data-message-body]').textContent, /Two revenue lines look off/);
+    await click(document.querySelector('article#hw-msg-2 header button[aria-expanded="true"]'));
+    assert.equal(document.querySelector('article#hw-msg-2 [data-message-body]'), null, 'collapsed again');
+
     const slip = document.querySelector('[aria-label="Deadline"]');
     assert.match(slip.textContent, /Final Q3 numbers/);
     assert.match(slip.textContent, /Deadline, asked by Anna/);
-    assert.match(text(), /4 earlier messages/);
-    assert.match(text(), /the board pack goes to print Friday morning/);
     assert.match(text(), /In People because you reply to Anna within an hour\./);
     assert.match(text(), /1 tracker blocked/);
-    for (const label of ['Done', 'Reply Later', 'Snooze', 'Set Aside', 'Draft in my voice', 'Send']) {
-      assert.ok(all('button').some((b) => b.textContent.trim() === label), `${label} button`);
-    }
-    await click(all('button[aria-expanded]').find((b) => b.textContent.includes('earlier messages')));
-    await settle();
-    assert.match(text(), /Two revenue lines look off/);
+
+    // The reply bar: a 40px field that grows on focus with Draft in my voice and Send.
+    const input = byLabel('Reply to Anna');
+    assert.equal(input.tagName, 'TEXTAREA');
+    assert.equal(byText('button', 'Draft in my voice'), undefined, 'collapsed until focused');
+    await focusIn(input);
+    for (const label of ['Draft in my voice', 'Send']) assert.ok(byText('button', label), `${label} button`);
 
     await click(byText('button', 'Sending them now.'));
-    const input = byLabel('Reply to Anna');
     assert.equal(input.value, 'Sending them now.');
     await click(byText('button', 'Draft in my voice'));
     await settle();
@@ -549,11 +580,7 @@ describe('Thread', () => {
     assert.ok(mock.mockRequests().includes('POST /work/draft'));
     const submit = async () => { await React.act(async () => { input.closest('form').dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true })); }); await settle(); };
     // The send guard warns first (a mentioned attachment, nothing attached); a second press sends.
-    await React.act(async () => {
-      const set = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value').set;
-      set.call(input, 'The numbers are attached.');
-      input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
-    });
+    await setText(input, 'The numbers are attached.');
     await submit();
     assert.match(text(), /You mention “attached” but nothing is attached\./);
     assert.ok(byText('button', 'Send anyway'));
@@ -569,32 +596,47 @@ describe('Thread', () => {
   test('without the work routes, Reply Later, Set Aside and drafting are hidden, not "not available"', async () => {
     await cleanup();
     useV2.setState({ caps: { work: false } });
-    const item = (await mock.mockRequest('GET', '/sort/stream/people')).items.find((i) => i.messageId === 'm-anna');
-    await render(h(Thread, { props: { item } }));
+    await render(h(Thread, { props: { item: await annaItem() } }));
     await settle(60);
-    for (const label of ['Reply Later', 'Set Aside', 'Draft in my voice']) assert.equal(byText('button', label), undefined, label);
-    assert.ok(byText('button', 'Done'));
+    await focusIn(byLabel('Reply to Anna'));
+    for (const label of ['Reply Later (L)', 'Set Aside (S)']) assert.equal(byLabel(label), null, label);
+    assert.equal(byText('button', 'Draft in my voice'), undefined);
+    assert.ok(byLabel('Done (E)'));
     assert.doesNotMatch(text(), /Not available yet/);
   });
 
   test('Reply Later posts the thread to /work/lists/reply_later', async () => {
     await cleanup();
-    const item = (await mock.mockRequest('GET', '/sort/stream/people')).items.find((i) => i.messageId === 'm-anna');
-    await render(h(Thread, { props: { item } }));
+    await render(h(Thread, { props: { item: await annaItem() } }));
     await settle(60);
-    await click(byText('button', 'Reply Later'));
+    await click(byLabel('Reply Later (L)'));
     assert.equal(notifications.at(-1).title, 'Added to Reply Later.');
     const list = await mock.mockRequest('GET', '/work/lists/replyLater');
     assert.ok(list.items.some((i) => i.threadId === 't-anna'));
     assert.equal(useV2.getState().counts.replyLater, 4);
   });
 
+  test('keys: S sets aside, never while typing or as the second key of a g sequence', async () => {
+    await cleanup();
+    await render(h(Thread, { props: { item: await annaItem() } }));
+    await settle(60);
+    const key = async (k, target = document.body) => { await React.act(async () => { target.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true })); }); await settle(); };
+    notifications.length = 0;
+    await key('s', byLabel('Reply to Anna'));
+    assert.equal(notifications.length, 0, 'typing an s in the reply is text');
+    await key('g');
+    await key('s');
+    assert.equal(notifications.length, 0, 'g then s is not Set Aside');
+    await key('s');
+    assert.equal(notifications.at(-1).title, 'Set aside.');
+  });
+
   test('help me write off hides quick replies and drafting', async () => {
     await cleanup();
     useV2.setState({ prefs: { ...UI_DEFAULTS, helpMeWrite: false } });
-    const item = (await mock.mockRequest('GET', '/sort/stream/people')).items.find((i) => i.messageId === 'm-anna');
-    await render(h(Thread, { props: { item } }));
+    await render(h(Thread, { props: { item: await annaItem() } }));
     await settle(60);
+    await focusIn(byLabel('Reply to Anna'));
     assert.equal(byText('button', 'Sending them now.'), undefined);
     assert.equal(byText('button', 'Draft in my voice'), undefined);
   });
@@ -603,6 +645,143 @@ describe('Thread', () => {
     await cleanup();
     await render(h(Thread, { props: {} }));
     assert.match(text(), /Pick a conversation to read it here\./);
+  });
+
+  test('the reply bar never shrinks under the messages: both keep their height (flex-shrink 0), the bar is sticky', async () => {
+    await cleanup();
+    await render(h(Thread, { props: { item: await annaItem() } }));
+    await settle(60);
+    const list = document.querySelector('[data-messages]');
+    const bar = document.querySelector('[data-reply-bar]');
+    assert.equal(list.style.flexShrink, '0');
+    assert.equal(bar.style.flexShrink, '0');
+    assert.equal(bar.style.position, 'sticky');
+    assert.ok(list.compareDocumentPosition(bar) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+});
+
+describe('Thread on upstream mail: HTML bodies, quoted history, remote images, attachments, folding', () => {
+  const account = 'acc-work';
+  const row = (i, over = {}) => ({
+    id: `h${i}`, account_id: account, folder: 'INBOX', thread_id: 't-html', subject: 'Venue for Friday',
+    from_name: i % 2 ? 'Maria Lopez' : 'You', from_email: i % 2 ? 'maria@studio.example' : 'me@example.org',
+    to_addresses: JSON.stringify([{ name: 'Prakhar', email: 'me@example.org' }]), cc_addresses: '[]',
+    date: new Date(Date.UTC(2026, 8, 10 + i, 9, 0)).toISOString(), snippet: `Message ${i}`, is_read: true, has_attachments: false, ...over,
+  });
+  const rows = [1, 2, 3, 4, 5].map((i) => row(i)).concat(row(6, { subject: 'Re: Venue for Friday', is_read: false, has_attachments: true, in_reply_to: '<h5@x>' }));
+  const bodies = {
+    h3: { html: null, text: 'Thursday works for me.\n\nOn Tue, Maria Lopez wrote:\n> Does Thursday work?\n> Or Friday?', attachments: [] },
+    h6: {
+      html: '<div dir="ltr"><p>See you at the venue at 7.</p><img src="data:image/gif;base64,R0lGODlhAQABAAAAACw="></div><div class="gmail_quote"><div class="gmail_attr">On Mon, You wrote:</div><blockquote class="gmail_quote">Earlier question about the venue</blockquote></div>',
+      text: 'See you at the venue at 7.', attachments: [{ part: '2', filename: 'floor-plan.pdf', type: 'application/pdf', size: 20480 }],
+      hasBlockedRemoteImages: true, senderEmail: 'maria@studio.example',
+    },
+  };
+  let requests = [];
+  let realFetch;
+  beforeEach(() => {
+    requests = [];
+    realFetch = globalThis.fetch;
+    setMockMode(false);
+    useV2.setState({ caps: { work: false } });
+    globalThis.fetch = async (url) => {
+      const u = String(url);
+      requests.push(u);
+      const ok = (json) => ({ ok: true, status: 200, json: async () => json, headers: { get: () => '' } });
+      if (u.startsWith('/api/mail/thread/t-html')) return ok({ messages: rows });
+      const m = /^\/api\/mail\/messages\/(h\d)\/body(\?remoteImages=1)?$/.exec(u);
+      if (m && bodies[m[1]]) return ok({ ...bodies[m[1]], ...(m[2] ? { hasBlockedRemoteImages: false } : {}) });
+      if (m) return ok({ html: null, text: `Body of ${m[1]}`, attachments: [] });
+      return { ok: false, status: 404, json: async () => ({ error: 'not in this test' }), headers: { get: () => '' } };
+    };
+  });
+  const restore = async () => { await cleanup(); globalThis.fetch = realFetch; setMockMode(true); };
+
+  test('the latest HTML body renders in the sandboxed frame (no plain text), quoted history behind •••, remote images on consent, attachment chips; five read messages fold', async () => {
+    try {
+      await render(h(Thread, { props: { item: { threadId: 't-html', messageId: 'h6', subject: 'Re: Venue for Friday', from: { name: 'Maria Lopez', email: 'maria@studio.example' } } } }));
+      await settle(80);
+      const latest = document.querySelector('article#hw-msg-6');
+      assert.ok(latest, 'the latest message is open');
+      const frame = latest.querySelector('iframe[srcdoc]');
+      assert.ok(frame, 'the HTML body is in a srcdoc frame');
+      assert.equal(frame.getAttribute('sandbox'), 'allow-same-origin allow-popups allow-popups-to-escape-sandbox');
+      assert.equal(latest.querySelector('[data-text-body]'), null, 'no plain-text copy beside the frame');
+      assert.match(frame.getAttribute('srcdoc'), /See you at the venue at 7\./);
+      assert.doesNotMatch(frame.getAttribute('srcdoc'), /Earlier question about the venue/, 'quoted history is folded');
+      assert.equal(requests.filter((r) => r.startsWith('/api/mail/messages/h6/body')).length, 1, 'one body request for the latest message');
+
+      // ••• expands the quote in place and folds it again.
+      const toggle = latest.querySelector('[data-quote-toggle]');
+      assert.equal(toggle.textContent, '•••');
+      assert.equal(toggle.getAttribute('aria-expanded'), 'false');
+      await click(toggle);
+      assert.match(latest.querySelector('iframe[srcdoc]').getAttribute('srcdoc'), /Earlier question about the venue/);
+      await click(latest.querySelector('[data-quote-toggle]'));
+      assert.doesNotMatch(latest.querySelector('iframe[srcdoc]').getAttribute('srcdoc'), /Earlier question about the venue/);
+
+      // Remote images: a banner, and the images only after "Load images".
+      const banner = latest.querySelector('[data-remote-images]');
+      assert.match(banner.textContent, /Remote images are hidden to protect your privacy\./);
+      assert.ok(byText('button', 'Always for this sender', banner));
+      await click(byText('button', 'Load images', banner));
+      await settle(40);
+      assert.ok(requests.includes('/api/mail/messages/h6/body?remoteImages=1'));
+      assert.equal(latest.querySelector('[data-remote-images]'), null);
+
+      // Attachments under the body, with the paperclip count in the header.
+      const chips = all('[data-attachments] button[data-attachment]', latest);
+      assert.equal(chips.length, 1);
+      assert.match(chips[0].textContent, /floor-plan\.pdf/);
+      assert.match(chips[0].textContent, /20 KB/);
+      assert.ok(byLabel('1 attachment', latest));
+
+      // Five older read messages fold into one row; opening it shows them as 44px rows.
+      assert.equal(all('article[id^="hw-msg-"]').length, 1);
+      const fold = all('button').find((b) => b.textContent.trim() === '5 earlier messages');
+      assert.ok(fold, 'the fold row');
+      await click(fold);
+      assert.equal(all('article[id^="hw-msg-"]').length, 6);
+
+      // A plain-text message: its quote is kept behind ••• too, not deleted.
+      await click(document.querySelector('article#hw-msg-3 button[aria-expanded="false"]'));
+      await settle(40);
+      const third = document.querySelector('article#hw-msg-3');
+      assert.equal(third.querySelector('[data-text-body]').textContent, 'Thursday works for me.');
+      assert.equal(third.querySelector('[data-quoted]'), null);
+      await click(third.querySelector('[data-quote-toggle]'));
+      assert.match(third.querySelector('[data-quoted]').textContent, /Does Thursday work\?/);
+    } finally { await restore(); }
+  });
+});
+
+describe('quoted history', () => {
+  test('splitQuotedHtml folds Gmail, Outlook and cite quotes; a bare blockquote only in a reply; a forward never', () => {
+    const gmail = format.splitQuotedHtml('<p>New</p><div class="gmail_quote">On Mon, A wrote:<blockquote>old</blockquote></div>');
+    assert.equal(gmail.main.trim(), '<p>New</p>');
+    assert.match(gmail.quoted, /old/);
+    const outlook = format.splitQuotedHtml('<div>Reply</div><div id="divRplyFwdMsg">From: A</div><div>older thread</div>');
+    assert.doesNotMatch(outlook.main, /older thread|From: A/);
+    const cite = format.splitQuotedHtml('<p>Yes.</p><div>On Tue, Anna wrote:</div><blockquote type="cite">Can you?</blockquote>');
+    assert.doesNotMatch(cite.main, /Anna wrote|Can you/);
+    const pull = '<p>Essay</p><blockquote>A pull quote</blockquote><p>More essay</p>';
+    assert.equal(format.splitQuotedHtml(pull).quoted, null, 'a newsletter keeps its pull quotes');
+    assert.match(format.splitQuotedHtml(pull, { isReply: true }).quoted, /A pull quote/);
+    assert.equal(format.splitQuotedHtml('<div class="gmail_quote">---------- Forwarded message ---------<br>From: B</div>').quoted, null);
+    assert.equal(format.isReplyMessage('Re: Venue', null), true);
+    assert.equal(format.isReplyMessage('SV: Venue', null), true);
+    assert.equal(format.isReplyMessage('Weekly digest', null), false);
+    assert.equal(format.isReplyMessage('Weekly digest', '<a@b>'), true);
+  });
+
+  test('splitQuotedText keeps the history in `quoted`: On … wrote (one or two lines), Original Message, trailing > lines, a -- signature', () => {
+    assert.deepEqual(format.splitQuotedText('Yes.\n\nOn Mon, Anna wrote:\n> old'), { main: 'Yes.', quoted: 'On Mon, Anna wrote:\n> old' });
+    assert.equal(format.splitQuotedText('Yes.\nOn Mon, 22 Sep 2026 at 10:00, Anna Berg <\nanna@x.example> wrote:\n> old').main, 'Yes.');
+    assert.equal(format.splitQuotedText('Fine.\n-----Original Message-----\nFrom: A').main, 'Fine.');
+    assert.equal(format.splitQuotedText('Fine.\n\nFrom: Anna\nSent: Monday\nTo: me').main, 'Fine.');
+    assert.equal(format.splitQuotedText('Thanks!\n-- \nPrakhar').quoted, '-- \nPrakhar');
+    assert.equal(format.splitQuotedText('> a quote first\nthen my answer').quoted, null, 'interleaved: nothing folded');
+    assert.equal(format.splitQuotedText('Just text.').quoted, null);
   });
 });
 
@@ -643,6 +822,32 @@ describe('Daily Brief', () => {
     assert.equal(useHedwig.getState().viewRequest.id, 'core.list');
   });
 
+  test('the Brief sets no italic and no serif; its figures are the body face, 600, tabular', async () => {
+    await cleanup();
+    await render(h(Brief));
+    await settle(40);
+    const styled = all('[style]');
+    assert.ok(styled.length > 20);
+    for (const el of styled) {
+      assert.notEqual(el.style.fontStyle, 'italic', `no italic: ${el.outerHTML.slice(0, 80)}`);
+      assert.doesNotMatch(el.style.fontFamily || '', /Instrument|Georgia|--hw-font-display|--hw-font-why|(^|[\s,'"])serif/i, 'no display or serif face');
+    }
+    const h1 = document.querySelector('h1');
+    assert.equal(h1.style.fontSize, '22px');
+    assert.equal(h1.style.fontWeight, '600');
+    assert.ok(h1.closest('[data-brief-summary]'), 'the headline sits in the summary box');
+    const cards = all('[data-brief-card]');
+    assert.equal(cards.length, 4, 'the Records cards are boxed');
+    for (const card of cards) {
+      const figure = card.querySelector('span');
+      assert.match(figure.style.fontFamily, /--hw-font-body/, 'figures are the body face, not mono');
+      assert.equal(figure.style.fontWeight, '600');
+      assert.equal(figure.style.fontSize, '20px');
+      assert.match(figure.getAttribute('style'), /font-variant-numeric: tabular-nums/);
+    }
+    await cleanup();
+  });
+
   test('card and line helpers', () => {
     assert.deepEqual(cardParts({ figure: 'Fri', caption: 'Electricity' }), { figure: 'Fri', caption: 'Electricity' });
     assert.deepEqual(cardParts({ kind: 'attachment', figure: 'Lease-renewal-option-B-final.docx', caption: '24 months' }), { figure: 'DOCX', caption: 'Lease-renewal-option-B-final.docx · 24 months' });
@@ -666,6 +871,22 @@ describe('Hedwig today', () => {
     assert.match(text(), /Undone/);
     const log = await mock.mockRequest('GET', '/sort/today');
     assert.equal(log.entries[0].undone, true);
+  });
+
+  test('opens with the four-figure strip that replaced the rail paragraph, then Review or undo', async () => {
+    await cleanup();
+    await render(h(Today));
+    const strip = document.querySelector('[data-today-strip]');
+    assert.ok(strip, 'the strip is there');
+    assert.equal(strip.getAttribute('aria-label'), todayLine({ screened: 12, bundled: 40, rescued: 2, blocked: 9 }));
+    assert.equal(strip.compareDocumentPosition(document.querySelector('[role="list"]')) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING, dom.window.Node.DOCUMENT_POSITION_FOLLOWING, 'the strip comes before the entries');
+    assert.match(strip.textContent, /12screened40bundled2rescued9blocked/);
+    const figure = all('span', strip).find((s) => s.textContent === '12');
+    assert.equal(figure.style.fontSize, '20px');
+    assert.equal(figure.style.fontWeight, '600');
+    await click(byText('button', 'Review or undo', strip));
+    assert.equal(document.activeElement.textContent, 'Undo', 'Review or undo takes focus to the first Undo');
+    await cleanup();
   });
 });
 
@@ -715,7 +936,10 @@ describe('Settings → Hedwig (Simple and Power)', () => {
 
   test('Simple shows the five controls; Power adds rules with dry run, routing, prompts and the index', async () => {
     await render(h(HedwigSettingsV2));
-    assert.equal(all('input[role="switch"]').length, 4);
+    assert.equal(all('input[role="switch"]').length, 5, 'the Power mode switch and four Simple switches');
+    const powerSwitch = document.querySelector('[data-power-switch]');
+    assert.equal(powerSwitch.closest('label').textContent.startsWith('Power mode'), true, 'Power lives in Settings now, not the rail');
+    assert.equal(powerSwitch.checked, false);
     assert.match(text(), /Bundle delivery times/);
     await click(all('button[aria-expanded]').find((b) => b.closest('div').textContent.includes('Bundle delivery times')));
     await settle();
@@ -729,8 +953,9 @@ describe('Settings → Hedwig (Simple and Power)', () => {
     const bundles = await mock.mockRequest('GET', '/sort/bundles');
     assert.deepEqual(bundles.bundles.find((b) => b.key === 'bills').schedule, { mode: 'instant' });
     assert.doesNotMatch(text(), /Dry run/);
-    await click(byText('button', 'Turn on Power'));
+    await click(powerSwitch);
     assert.equal(useV2.getState().prefs.powerMode, true);
+    assert.equal(document.querySelector('[data-power-switch]').checked, true);
     await settle(60);
     assert.match(text(), /Receipts to Records/);
     assert.match(text(), /subject contains receipt or subject contains kvittering → stream records, bundle receipts/);
@@ -752,6 +977,125 @@ describe('registration', () => {
     const byId = Object.fromEntries(v2Views().map((v) => [v.id, v]));
     assert.equal(byId['hedwig.brief'].wide, true);
     assert.equal(byId['hedwig.thread'].hideBesideWide, true);
+  });
+});
+
+describe('list and rail (redesign)', () => {
+  after(cleanup);
+  const annaLabel = 'Anna Berg: Q3 report: can you send the final numbers?, unread';
+
+  test('rowDate: clock today, Yesterday, weekday this week, day and month, and the year when it is not this year', async () => {
+    const { rowDate } = await import('./rows.jsx');
+    const now = new Date('2026-09-23T12:00:00');
+    assert.equal(rowDate(new Date('2026-09-23T09:14:00'), now), '09:14');
+    assert.equal(rowDate(new Date('2026-09-22T09:14:00'), now), 'Yesterday');
+    assert.equal(rowDate(new Date('2026-09-21T09:14:00'), now), 'Mon');
+    assert.equal(rowDate(new Date('2026-09-12T09:14:00'), now), '12 Sep');
+    assert.equal(rowDate(new Date('2025-09-12T09:14:00'), now), '12 Sep 2025');
+    assert.equal(rowDate('not a date', now), '');
+    assert.equal(rowDate(null, now), '');
+  });
+
+  test('a row shows the sender\'s avatar initials and the date, the subject and a preview', async () => {
+    await render(h(StreamView, { props: { stream: 'people' } }));
+    const anna = byLabel(annaLabel);
+    const avatar = anna.querySelector('[data-avatar]');
+    assert.ok(avatar, 'the row has an avatar');
+    assert.equal(avatar.textContent, 'AB');
+    assert.equal(avatar.style.width, '36px');
+    assert.match(anna.textContent, /09:40/, 'today\'s mail shows its time');
+    const jonas = byLabel('Jonas Weber: Re: Weekend plans');
+    assert.equal(jonas.querySelector('[data-avatar]').textContent, 'JW');
+    assert.match(jonas.textContent, /sounds good, see you there/, 'no TL;DR: the snippet is the preview');
+    assert.equal(anna.closest('article').style.minHeight, '76px');
+  });
+
+  test('a TL;DR row starts its preview with the sparkles glyph and keeps data-tldr', async () => {
+    const { Icon } = await import('../icons.jsx');
+    const anna = byLabel(annaLabel);
+    const line = anna.querySelector('[data-tldr]');
+    assert.equal(line.textContent, 'Wants the final Q3 numbers by Thursday evening for Friday’s board pack.');
+    const glyph = line.previousElementSibling;
+    assert.equal(glyph?.tagName.toLowerCase(), 'svg', 'a glyph sits right before the TL;DR');
+    const ref = document.createElement('div');
+    const refRoot = createRoot(ref);
+    await React.act(async () => { refRoot.render(h(Icon, { name: 'sparkles', size: 11 })); });
+    assert.equal(glyph.innerHTML, ref.querySelector('svg').innerHTML, 'it is the sparkles glyph');
+    assert.equal(glyph.getAttribute('width'), '11');
+    await React.act(async () => refRoot.unmount());
+    const jonas = byLabel('Jonas Weber: Re: Weekend plans');
+    assert.equal(jonas.querySelector('svg'), null, 'no TL;DR, no sparkle');
+  });
+
+  test('the reason line of a Needs-you row has the alert glyph and opens the why door; the hover buttons are Done, Snooze and Reply Later', async () => {
+    const why = byLabel('Why: Asked for the report by Friday. Open to see or change');
+    assert.ok(why.querySelector('svg'), 'the reason has a glyph');
+    assert.notEqual(why.style.fontStyle, 'italic');
+    const article = byLabel(annaLabel).closest('article');
+    const actions = article.querySelector('[data-row-actions]');
+    assert.equal(actions.style.visibility, 'hidden', 'hidden until hover or focus');
+    await React.act(async () => { article.dispatchEvent(new dom.window.MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body })); });
+    assert.equal(article.querySelector('[data-row-actions]').style.visibility, 'visible');
+    const labels = all('button', actions).map((b) => b.getAttribute('aria-label'));
+    assert.deepEqual(labels.slice(0, 2), ['Done (E)', 'Snooze']);
+    assert.equal(labels.includes('Reply Later (L)'), useV2.getState().caps.work === true, 'Reply Later when the work routes are there');
+    assert.equal(all('button', actions)[0].style.height, '24px');
+  });
+
+  test('the list header has the search field above the title; a question goes to Ask, anything else to search', async () => {
+    const input = document.querySelector('input[data-list-search]');
+    assert.ok(input, 'the search field is in the list header');
+    assert.equal(input.getAttribute('aria-label'), 'Search or ask');
+    assert.equal(input.getAttribute('placeholder'), 'Search or ask');
+    assert.ok(input.compareDocumentPosition(document.querySelector('h1')) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING, 'above the title');
+    assert.ok(byLabel('Open the command palette'), 'with the ⌘K hint');
+    assert.ok(byLabel('Filter and sort'), 'and the filter button on the title row');
+    let searched = null;
+    useStore.setState({ setSearchQuery: (q) => { searched = q; } });
+    await React.act(async () => {
+      Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value').set.call(input, 'deposit');
+      input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    });
+    await React.act(async () => { input.closest('form').dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true })); });
+    assert.equal(searched, 'deposit');
+    assert.equal(useHedwig.getState().viewRequest.id, 'core.list');
+  });
+
+  test('the filter menu narrows the list to unread', async () => {
+    const before = all('[data-row-button]').length;
+    await click(byLabel('Filter and sort'));
+    await click(all('[role="menuitemcheckbox"]').find((b) => b.textContent === 'Unread'));
+    const after = all('[data-row-button]');
+    assert.ok(after.length < before, 'fewer rows');
+    assert.ok(after.every((b) => /, unread$/.test(b.getAttribute('aria-label'))), 'only unread rows');
+    await cleanup();
+  });
+
+  test('the rail: places with glyphs, no "screened" paragraph, no Power or search, and the account line in the footer', async () => {
+    const Rail = (await import('./Rail.jsx')).default;
+    await useV2.getState().refreshCounts();
+    await render(h(Rail, {}));
+    const nav = document.querySelector('nav');
+    assert.doesNotMatch(nav.textContent, /screened/i, 'the Hedwig today paragraph moved to Today');
+    assert.doesNotMatch(nav.textContent, /Power/);
+    assert.equal(nav.querySelector('input'), null, 'search moved to the list header');
+    assert.ok(byLabel('New message (C)', nav), 'compose sits in the top row');
+    const people = all('button.hw-nav', nav).find((b) => b.textContent.startsWith('People'));
+    assert.ok(people.querySelector('svg'), 'each place has a glyph');
+    assert.equal(people.style.height, '28px');
+    assert.equal(people.lastElementChild.style.color, 'var(--hw-attention-ink, #A8420F)', 'the Needs-you count is in the attention ink');
+    assert.deepEqual(all('h2', nav).map((x) => x.textContent), useV2.getState().caps.work === true ? ['Later', 'Hedwig'] : ['Hedwig']);
+    const account = nav.querySelector('footer [data-account-line]');
+    assert.ok(account, 'the account line is in the footer');
+    assert.equal(account.querySelector('[data-avatar]').style.width, '20px');
+    assert.match(account.textContent, /me@example\.org$/, 'one account: its address');
+    useStore.getState().setAccounts?.([{ id: 'acc-work', email_address: 'me@example.org', enabled: true, aliases: [] }, { id: 'acc-home', email_address: 'home@example.org', enabled: true, aliases: [] }]);
+    await settle();
+    assert.match(nav.querySelector('footer [data-account-line]').textContent, /2 accounts$/);
+    useStore.getState().setAccounts?.([{ id: 'acc-work', email_address: 'me@example.org', enabled: true, aliases: [] }]);
+    await settle();
+    assert.match(nav.querySelector('footer').textContent, /Up to date/, 'one quiet status line');
+    await cleanup();
   });
 });
 

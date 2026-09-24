@@ -77,7 +77,7 @@ function FieldRow({ field: f, value, onChange, error, resettable, showEnv, datal
   if (f.type === 'boolean') {
     input = (
       <input id={id} type="checkbox" checked={Boolean(current)} onChange={(e) => onChange(e.target.checked)} disabled={cleared}
-        style={{ width: 18, height: 18, accentColor: 'var(--hw-ink, #1B1A17)' }} />
+        style={{ width: 16, height: 16, accentColor: 'var(--hw-accent, #007AFF)' }} />
     );
   } else if (f.type === 'enum') {
     input = (
@@ -86,7 +86,7 @@ function FieldRow({ field: f, value, onChange, error, resettable, showEnv, datal
       </Select>
     );
   } else if (f.type === 'number') {
-    input = <TextInput id={id} type="number" value={current ?? ''} min={f.min} max={f.max} step="any" onChange={(e) => onChange(e.target.value)} disabled={cleared} style={{ width: 140, fontFamily: T.mono }} />;
+    input = <TextInput id={id} type="number" value={current ?? ''} min={f.min} max={f.max} step="any" onChange={(e) => onChange(e.target.value)} disabled={cleared} style={{ width: 140, fontVariantNumeric: 'tabular-nums' }} />;
   } else if (f.type === 'json') {
     input = <TextArea id={id} value={current ?? ''} onChange={(e) => onChange(e.target.value)} disabled={cleared} rows={3} style={{ fontFamily: T.mono, fontSize: 12 }} />;
   } else if (f.type === 'secret') {
@@ -96,7 +96,7 @@ function FieldRow({ field: f, value, onChange, error, resettable, showEnv, datal
     input = <TextInput id={id} value={current ?? ''} list={datalist} onChange={(e) => onChange(e.target.value)} disabled={cleared} style={{ maxWidth: 420, fontFamily: datalist ? T.mono : undefined }} />;
   }
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 1fr) minmax(200px, 1.4fr)', gap: '4px 16px', alignItems: 'start', padding: '6px 0', borderTop: `1px solid ${T.raised}` }}>
+    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 1fr) minmax(200px, 1.4fr)', gap: '4px 16px', alignItems: 'start', padding: '6px 0', borderTop: `1px solid ${T.line}` }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
         <label htmlFor={id} style={{ fontSize: 13, fontWeight: 500 }}>{f.label || f.key}</label>
         {f.help && <span style={{ fontSize: 12, color: T.muted }}>{f.help}</span>}

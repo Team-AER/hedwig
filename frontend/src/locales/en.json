@@ -1716,7 +1716,8 @@
         "records": "Today, from your Records",
         "waiting": "Waiting on others",
         "file": "File",
-        "seeAll": "See all"
+        "seeAll": "See all",
+        "summary": "Today in short"
       },
       "cmd": {
         "allMail": "All mail (the classic list)",
@@ -1762,10 +1763,7 @@
         "empty": "Nobody is waiting on you.",
         "filter": "Show",
         "focusReply": "Focus and Reply",
-        "needYouMany": "{{n}} need you",
-        "needYouOne": "{{n}} needs you",
-        "needsYou": "Needs you",
-        "today": "{{n}} today"
+        "needsYou": "Needs you"
       },
       "power": {
         "dryRun": "Dry run",
@@ -1774,7 +1772,7 @@
         "hits": "{{n}} hits",
         "index": "Index",
         "indexSummary": "{{embedded}} of {{total}} messages searchable · {{pending}} to go",
-        "label": "Power",
+        "label": "Power mode",
         "matched": "Would match {{n}} messages",
         "noRouting": "The model routing is not known yet.",
         "noRules": "No rules yet. \"Always\" corrections become rules here.",
@@ -1784,9 +1782,7 @@
         "prompts": "Prompt versions",
         "readOnly": "read-only",
         "routing": "Routing",
-        "rules": "Rules",
-        "toPower": "Turn on Power",
-        "toSimple": "Back to Simple"
+        "rules": "Rules"
       },
       "question": {
         "count": "Question {{i}} of {{n}} today. Answers teach Hedwig.",
@@ -1890,8 +1886,6 @@
         "records": "Records",
         "sweep": "Sweep",
         "sweepFailed": "Could not mark them read",
-        "sweepHint": "Mark everything that does not need you as read",
-        "unread": "{{n}} unread",
         "more": "Show more"
       },
       "tab": {
@@ -1914,11 +1908,9 @@
         "earlierOne": "One earlier message",
         "empty": "Pick a conversation to read it here.",
         "gone": "That conversation is no longer there.",
-        "imagesBlocked": "Remote images blocked",
         "messagesMany": "{{n}} messages",
         "messagesOne": "1 message",
         "more": "More",
-        "myVoice": "My voice",
         "original": "Show original",
         "remind": "Remind me",
         "remindOn": "Remind me {{day}}",
@@ -1929,8 +1921,6 @@
         "setAside": "Set Aside",
         "snooze": "Snooze",
         "story": "The story so far",
-        "toName": "to {{name}}",
-        "toYou": "to you",
         "trackerMany": "Trackers blocked: {{n}}",
         "trackerOne": "1 tracker blocked",
         "wrong": "Wrong?",

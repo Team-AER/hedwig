@@ -3,7 +3,7 @@ import { useId, useMemo, useState } from 'react';
 import { useHedwig } from '../store.js';
 import { formatCount } from './helpers.js';
 import { isTypingTarget, useDebounced, useResource } from './hooks.js';
-import { Avatar, Chip, Empty, Loading, Pill, RelativeTime, StateView, T, TextInput } from './ui.jsx';
+import { Avatar, Chip, Empty, Loading, Pill, RelativeTime, NUM, StateView, T, TextInput } from './ui.jsx';
 import { tr } from './i18n.js';
 
 const KINDS = [{ id: '', label: 'All' }, { id: 'person', label: 'People' }, { id: 'org', label: 'Organisations' }];
@@ -76,7 +76,7 @@ export default function People() {
               </span>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', fontSize: 12, color: T.muted, flexShrink: 0 }}>
-              <span><strong style={{ fontFamily: T.mono, fontWeight: 500, color: T.ink }}>{formatCount(e.message_count)}</strong> mails</span>
+              <span><strong style={{ ...NUM, fontWeight: 600, color: T.ink }}>{formatCount(e.message_count)}</strong> mails</span>
               <RelativeTime value={e.last_seen} />
             </div>
           </div>

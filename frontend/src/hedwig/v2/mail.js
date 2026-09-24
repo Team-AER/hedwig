@@ -3,7 +3,7 @@
 // the mock the mail routes are not called and the action just reports success.
 import { api } from '../../utils/api.js';
 import { useStore } from '../../store/index.js';
-import { openReplyFromMessage } from '../../utils/composeFromMessage.js';
+import { openReplyFromMessage, openForwardFromMessage } from '../../utils/composeFromMessage.js';
 import { v2Api, isMockMode, announceSortChange } from './client.js';
 import { useV2 } from './state.js';
 import { tv, tvn } from './i18n.js';
@@ -244,4 +244,85 @@ export async function watchForReply(threadId, days) {
 export function settingValue(key, fallback) {
   const f = (useV2.getState().settingsFields || []).find((x) => x?.key === key);
   return f && f.value !== undefined && f.value !== null ? f.value : fallback;
+}
+
+// ── Reader toolbar actions (upstream's own routes; the mock only reports success) ──
+
+/** Reply all in upstream's composer (Cc edits and all), the body pre-filled when given. */
+export async function openReplyAllComposer(messageId, text = '') {
+  if (isMockMode()) { useStore.getState().openCompose?.({ subject: 'Re:', body: text, isReplyAll: true }); return; }
+  const message = await fullMessage(messageId);
+  const st = useStore.getState();
+  await openReplyFromMessage(message, {
+    accounts: st.accounts || [],
+    replyAll: true,
+    openCompose: (d) => st.openCompose({ ...d, ...(text ? { body: text } : {}) }),
+    getMessageBody: api.getMessageBody,
+  });
+}
+
+/** Forward in upstream's composer. */
+export async function openForwardComposer(messageId) {
+  if (isMockMode()) { useStore.getState().openCompose?.({ subject: 'Fwd:' }); return; }
+  const message = await fullMessage(messageId);
+  await openForwardFromMessage(message, { openCompose: useStore.getState().openCompose, getMessageBody: api.getMessageBody });
+}
+
+/** The account's folders for Move ([{ path, name, special_use }]). */
+export async function folderList(accountId) {
+  if (isMockMode() || !accountId) return [{ path: 'Archive', name: 'Archive' }, { path: 'Receipts', name: 'Receipts' }];
+  const data = await api.getFolders(accountId);
+  return Array.isArray(data) ? data : (data?.folders || []);
+}
+
+/** Move messages to a folder (upstream's bulk move). */
+export async function moveMessages(ids, folder, label) {
+  const list = (ids || []).filter(Boolean);
+  if (!list.length || !folder) return;
+  if (!isMockMode()) await api.bulkMove(list, folder);
+  notify('success', tv('hedwig.v2.thread.moved', 'Moved to {{folder}}.', { folder: label || folder }));
+  announceSortChange({ moved: list, folder });
+}
+
+/** Flag (star) one message on or off. */
+export async function flagMessage(id, on) {
+  if (!id) return;
+  if (!isMockMode()) await api.markStarred(id, Boolean(on));
+}
+
+/** Mark messages unread again. */
+export async function markUnread(ids) {
+  const list = (ids || []).filter(Boolean);
+  if (!list.length) return;
+  if (!isMockMode()) await api.bulkRead(list, false);
+  notify('success', tv('hedwig.v2.thread.markedUnread', 'Marked as unread.'));
+  announceSortChange({ unread: list });
+}
+
+/** Report spam: upstream moves it to the account's spam folder. */
+export async function reportSpam(id) {
+  if (!id) return;
+  if (!isMockMode()) await api.markSpam(id);
+  notify('success', tv('hedwig.v2.thread.spamDone', 'Reported as spam.'));
+  announceSortChange({ spam: id });
+}
+
+/** Unsubscribe through the message's List-Unsubscribe (upstream's route). */
+export async function unsubscribe(id) {
+  if (!id) return null;
+  const res = isMockMode() ? { type: 'one-click' } : await api.unsubscribeMessage(id);
+  if (!['one-click', 'url', 'mailto'].includes(res?.type)) throw new Error(tv('hedwig.v2.thread.unsubscribeNone', 'This message has no way to unsubscribe.'));
+  // A web or mailto unsubscribe finishes in the sender's own page or a new mail.
+  const target = res.type === 'url' ? res.url : res.type === 'mailto' ? res.mailto : null;
+  if (target && /^(https?:|mailto:)/i.test(target)) window.open(target, '_blank', 'noopener,noreferrer');
+  notify('success', tv('hedwig.v2.thread.unsubscribed', 'Unsubscribe requested.'));
+  return res;
+}
+
+/** Block a sender (upstream's block list). */
+export async function blockSender(email) {
+  if (!email) return;
+  if (!isMockMode()) await api.addToBlockList(email);
+  notify('success', tv('hedwig.v2.thread.blocked', 'Blocked {{email}}.', { email }));
+  announceSortChange({ blocked: email });
 }

@@ -8,7 +8,7 @@ import { formatAgo, formatCount, formatMonth } from './helpers.js';
 import { useAction, useResource } from './hooks.js';
 import { CommitmentList, FactsGrid, mergeById, removeById, replaceById } from './contextParts.jsx';
 import {
-  ActionError, Avatar, Button, Empty, Glyph, IconButton, Loading, Markdown, MessageLiteRow, SectionLabel, StateView, T,
+  ActionError, Avatar, Button, Empty, Glyph, IconButton, Loading, Markdown, MessageLiteRow, SectionLabel, NUM, StateView, T,
 } from './ui.jsx';
 import { tr } from './i18n.js';
 
@@ -152,8 +152,8 @@ function EntityBody({ card, reload, topic, compact, onCommitment, onFact, onFact
       </div>
       {stats && (
         <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 12, color: T.muted, paddingBottom: 12, borderBottom: `1px solid ${T.raised}` }}>
-          <span><strong style={{ color: T.ink, fontFamily: T.mono, fontWeight: 500 }}>{formatCount(stats.messages)}</strong> mails</span>
-          {stats.accounts && <span><strong style={{ color: T.ink, fontFamily: T.mono, fontWeight: 500 }}>{stats.accounts.length}</strong> account{stats.accounts.length === 1 ? '' : 's'}</span>}
+          <span><strong style={{ color: T.ink, ...NUM, fontWeight: 600 }}>{formatCount(stats.messages)}</strong> mails</span>
+          {stats.accounts && <span><strong style={{ color: T.ink, ...NUM, fontWeight: 600 }}>{stats.accounts.length}</strong> account{stats.accounts.length === 1 ? '' : 's'}</span>}
           {stats.first_seen && <span>since {formatMonth(stats.first_seen)}</span>}
         </div>
       )}
@@ -184,9 +184,9 @@ function EntityBody({ card, reload, topic, compact, onCommitment, onFact, onFact
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {allTopics.map((t) => (
               <button key={t.id} type="button" onClick={() => openTopic(t)} style={{
-                padding: '3px 9px', borderRadius: 999, border: 0, background: T.tealTint, color: T.tealText, font: 'inherit', fontSize: 12, cursor: 'pointer',
+                padding: '3px 9px', borderRadius: 6, border: 0, background: T.tealTint, color: T.tealText, font: 'inherit', fontSize: 12, cursor: 'pointer',
               }}>
-                {t.label}{t.message_count ? <span style={{ fontFamily: T.mono, marginLeft: 6, opacity: 0.8 }}>{t.message_count}</span> : null}
+                {t.label}{t.message_count ? <span style={{ ...NUM, marginLeft: 6, opacity: 0.8 }}>{t.message_count}</span> : null}
               </button>
             ))}
           </div>

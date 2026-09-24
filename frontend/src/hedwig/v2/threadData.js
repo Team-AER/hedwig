@@ -15,16 +15,28 @@ function parseList(raw) {
   try { return JSON.parse(raw || '[]'); } catch { return []; }
 }
 
+const nameOf = (a) => a?.name || a?.email || a?.address;
+
 export function normaliseMessage(m) {
-  const to = parseList(m.to_addresses).map((a) => a?.name || a?.email).filter(Boolean);
+  const to = parseList(m.to_addresses).map(nameOf).filter(Boolean);
+  const cc = parseList(m.cc_addresses).map(nameOf).filter(Boolean);
   return {
     id: m.id,
     from: m.from && typeof m.from === 'object' ? m.from : { name: m.from_name || '', email: m.from_email || '' },
     to: typeof m.to === 'string' ? m.to : to.join(', '),
+    cc: typeof m.cc === 'string' ? m.cc : cc.join(', '),
     date: m.date,
     folder: m.folder,
+    subject: m.subject || '',
     text: m.text ?? null,
+    // The mock can carry an HTML body; upstream rows never do (it comes from the body route).
+    html: typeof m.html === 'string' && m.html ? m.html : null,
     snippet: m.snippet || '',
+    // Unread only when upstream says so; the mock's messages are read.
+    unread: m.is_read === false || m.unread === true,
+    starred: Boolean(m.is_starred ?? m.starred),
+    hasAttachments: Boolean(m.has_attachments ?? m.hasAttachments),
+    inReplyTo: m.in_reply_to || m.inReplyTo || null,
     trackersBlocked: m.trackersBlocked ?? null,
     hasBlockedRemoteImages: Boolean(m.hasBlockedRemoteImages),
     accountId: m.account_id || m.accountId,
@@ -32,11 +44,25 @@ export function normaliseMessage(m) {
   };
 }
 
-/** The body of one message as plain text, new text only (quoted history dropped). */
+/** A body route result as plain text, new text only (quoted history dropped). */
+export function textOfBody(b) {
+  const text = b?.text ? String(b.text) : htmlToPlain(b?.html);
+  return newTextOf(text) || text.trim();
+}
+
+/** The body of one message as plain text, new text only (the story and TL;DR paths use this). */
 export async function loadBody(messageId) {
   const b = await api.getMessageBody(messageId);
-  const text = b?.text ? String(b.text) : htmlToPlain(b?.html);
-  return { text: newTextOf(text) || text.trim(), hasBlockedRemoteImages: Boolean(b?.hasBlockedRemoteImages), trackersBlocked: b?.trackersBlocked ?? null };
+  return { text: textOfBody(b), hasBlockedRemoteImages: Boolean(b?.hasBlockedRemoteImages), trackersBlocked: b?.trackersBlocked ?? null };
+}
+
+/**
+ * The whole body route result for the reader, untouched: { html, text, attachments,
+ * hasBlockedRemoteImages, senderEmail, senderName }. `remote` asks for remote images (only after
+ * the user said so). upstream's getMessageBody merges duplicate requests in flight.
+ */
+export function loadFullBody(messageId, remote = false) {
+  return api.getMessageBody(messageId, Boolean(remote));
 }
 
 function participantsOf(messages) {
@@ -151,12 +177,13 @@ export async function loadThread(item, { refresh = false } = {}) {
   const messages = rows.map(normaliseMessage).sort((a, b) => String(a.date).localeCompare(String(b.date)));
   const latest = messages[messages.length - 1];
 
+  // One request for the latest body: the reader renders it, and its text feeds the rest.
   const [body, extras, ctx] = await Promise.all([
-    loadBody(latest.id).catch(() => null),
+    loadFullBody(latest.id).catch(() => null),
     workThread(key, { refresh }),
     hedwigApi.get(`/context/messages/${encodeURIComponent(latest.id)}`).catch(() => null),
   ]);
-  if (body) Object.assign(latest, body);
+  if (body) Object.assign(latest, { body, text: textOfBody(body), hasBlockedRemoteImages: Boolean(body.hasBlockedRemoteImages), trackersBlocked: body.trackersBlocked ?? null });
   const extrasMissing = Boolean(extras?.__error);
   const ex = extrasOf(extrasMissing ? {} : (extras || {}));
   const people = participantsOf(messages);

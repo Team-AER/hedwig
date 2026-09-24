@@ -7,7 +7,7 @@ import { createPortal } from 'react-dom';
 import { useStore } from '../../store/index.js';
 import { v2Api, announceSortChange } from './client.js';
 import { useV2 } from './state.js';
-import { Btn, Hair, LinkBtn, Mono, Pick, Sheet, V, Why, usePhone } from './primitives.jsx';
+import { Btn, Hair, LinkBtn, Mono, Pick, Reason, Sheet, V, usePhone } from './primitives.jsx';
 import { tv } from './i18n.js';
 
 // Read inside "Decided by {{layer}}", so they are lower case mid-sentence.
@@ -138,7 +138,7 @@ export function WhyDoor({ item, anchor, onClose }) {
   useLayoutEffect(() => {
     if (phone || !anchor) { setPos(null); return; }
     const r = anchor.getBoundingClientRect();
-    const width = 380;
+    const width = 320;
     const left = Math.max(12, Math.min(r.left, window.innerWidth - width - 12));
     const below = window.innerHeight - r.bottom;
     const top = below > 360 ? r.bottom + 8 : Math.max(12, r.top - 8 - Math.min(460, window.innerHeight - 24));
@@ -189,6 +189,8 @@ export function WhyDoor({ item, anchor, onClose }) {
   const power = useV2((st) => st.prefs.powerMode);
   const detailed = power ? powerSignals(d) : [];
   const title = tv('hedwig.v2.why.title', 'Why Hedwig put it here');
+  // A model wrote the decision (sparkles) or a rule, your history or you made it (info).
+  const glyph = d?.layer === 'reflex' || d?.layer === 'reasoning' ? 'sparkles' : 'info';
 
   const body = (
     <Sheet
@@ -198,50 +200,50 @@ export function WhyDoor({ item, anchor, onClose }) {
       aria-modal={phone ? 'true' : 'false'}
       aria-label={title}
       phone={phone}
-      radius={phone ? 28 : 20}
+      material="content"
+      data-popover=""
+      radius={phone ? 14 : 12}
       className="hw-v2"
       style={{
-        // A floating sheet sits over busy content, so its glass is nearly opaque.
-        // On a phone it also covers the floating tab bar, which must not show through.
-        '--hw-glass': `color-mix(in srgb, var(--hw-paper) ${phone ? 97 : 90}%, transparent)`,
-        boxShadow: '0 30px 80px -30px var(--hw-shadow-color)',
-        position: 'fixed', zIndex: 9500, display: 'flex', flexDirection: 'column', gap: 12, padding: phone ? '20px 20px calc(24px + env(safe-area-inset-bottom, 0px))' : '18px 20px 18px',
-        maxHeight: phone ? '80vh' : (pos?.maxHeight || 'min(560px, calc(100vh - 24px))'), overflowY: 'auto', fontFamily: V.sans, fontSize: 14,
+        // Opaque content material with the popover shadow (spec §f); on a phone a bottom sheet
+        // that covers the tab bar.
+        position: 'fixed', zIndex: 9500, display: 'flex', flexDirection: 'column', gap: 10, padding: phone ? '16px 16px calc(20px + env(safe-area-inset-bottom, 0px))' : '14px 16px 16px',
+        maxHeight: phone ? '80vh' : (pos?.maxHeight || 'min(560px, calc(100vh - 24px))'), overflowY: 'auto', fontFamily: V.sans, fontSize: 13, lineHeight: 1.45,
         animation: 'hw-pop-in var(--motion-fast, 120ms) var(--ease-standard, ease) both',
-        ...(phone ? { left: 0, right: 0, bottom: 0, borderRadius: '28px 28px 0 0', borderBottom: 0 } : pos ? { top: pos.top, left: pos.left, width: pos.width } : { top: '20vh', left: 'calc(50% - 190px)', width: 380 }),
+        ...(phone ? { left: 0, right: 0, bottom: 0, borderRadius: '14px 14px 0 0' } : pos ? { top: pos.top, left: pos.left, width: pos.width } : { top: '20vh', left: 'calc(50% - 160px)', width: 320 }),
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-        <span style={{ fontFamily: V.serif, fontSize: 22, lineHeight: 1.1, flexGrow: 1 }}>{title}</span>
-        <LinkBtn muted hit={phone} onClick={onClose}>{tv('hedwig.v2.action.close', 'Close')}</LinkBtn>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: phone ? 44 : 24 }}>
+        <span style={{ fontSize: 13, fontWeight: 600, lineHeight: '18px', flexGrow: 1 }}>{title}</span>
+        <LinkBtn muted hit={phone} onClick={onClose} style={{ fontSize: 12 }}>{tv('hedwig.v2.action.close', 'Close')}</LinkBtn>
       </div>
-      {why.loading && <span style={{ color: V.muted, fontSize: 13 }}>{tv('hedwig.v2.loading', 'Loading…')}</span>}
+      {why.loading && <span style={{ color: V.muted, fontSize: 12 }}>{tv('hedwig.v2.loading', 'Loading…')}</span>}
       {why.error && (
-        <span role="alert" style={{ color: V.muted, fontSize: 13 }}>
+        <span role="alert" style={{ color: V.muted, fontSize: 12 }}>
           {why.error.status === 404 ? tv('hedwig.v2.why.none', 'Hedwig has no record of how this was sorted yet.') : (why.error.message || String(why.error))}
         </span>
       )}
       {d && (
         <>
-          <Why tone="ink" size={19}>{d.reason || item.reason}</Why>
-          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'baseline', fontSize: 13, color: V.muted }}>
+          <Reason glyph={glyph} tone="ink" size={13} as="p" style={{ margin: 0, lineHeight: '19px' }}>{d.reason || item.reason}</Reason>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'baseline', fontSize: 12, color: V.muted }}>
             {layer && <span>{tv('hedwig.v2.why.decidedBy', 'Decided by {{layer}}', { layer })}</span>}
             {conf != null && <Mono size={12}>{tv('hedwig.v2.why.confidence', '{{n}}% sure', { n: conf })}</Mono>}
           </div>
           {d.pending === 'reflex' && (
-            <span data-pending="reflex"><Why size={15}>{tv('hedwig.v2.why.pendingReflex', 'Waiting for Reflex: this is a first guess until the Reflex model has read it.')}</Why></span>
+            <span data-pending="reflex"><Reason glyph="hourglass">{tv('hedwig.v2.why.pendingReflex', 'Waiting for Reflex: this is a first guess until the Reflex model has read it.')}</Reason></span>
           )}
           {!power && signals.length > 0 && (
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               {signals.map((s) => (
-                <div key={s} style={{ padding: '8px 0', borderTop: `1px solid ${V.line}`, fontSize: 14 }}>{s}</div>
+                <div key={s} style={{ padding: '6px 0', borderTop: `1px solid ${V.line}`, fontSize: 12 }}>{s}</div>
               ))}
             </div>
           )}
           {power && detailed.length > 0 && (
             <div data-power-signals="" style={{ display: 'flex', flexDirection: 'column' }}>
               {detailed.map((s, i) => (
-                <div key={`${s.name}-${i}`} style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '8px 0', borderTop: `1px solid ${V.line}`, fontSize: 14 }}>
+                <div key={`${s.name}-${i}`} style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '6px 0', borderTop: `1px solid ${V.line}`, fontSize: 12 }}>
                   <span style={{ flexGrow: 1, minWidth: 0 }}>{s.text}</span>
                   {s.label && <Mono size={11}>{s.label}</Mono>}
                   {s.weight != null && <Mono size={11} color={V.ink}>{s.weight.toFixed(2)}</Mono>}
@@ -250,7 +252,7 @@ export function WhyDoor({ item, anchor, onClose }) {
             </div>
           )}
           {d.rule && (
-            <div style={{ fontSize: 13 }}>
+            <div style={{ fontSize: 12 }}>
               <span style={{ color: V.muted }}>{tv('hedwig.v2.why.rule', 'Rule')} </span>
               {typeof d.rule === 'string' ? d.rule : (d.rule.name || d.rule.id)}
             </div>
@@ -265,31 +267,31 @@ export function WhyDoor({ item, anchor, onClose }) {
       <Hair />
       {!changing ? (
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-          <Btn solid onClick={() => setChanging(true)}>{tv('hedwig.v2.why.change', 'Change this')}</Btn>
+          <Btn accent size={phone ? 'phone' : 'md'} onClick={() => setChanging(true)}>{tv('hedwig.v2.why.change', 'Change this')}</Btn>
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <Why>{tv('hedwig.v2.why.moveTo', 'Where it belongs')}</Why>
-          <Pick label={tv('hedwig.v2.why.moveTo', 'Where it belongs')} options={streamOptions()} value={stream} onChange={setStream} size={phone ? 44 : 36} />
+          <Reason glyph={null}>{tv('hedwig.v2.why.moveTo', 'Where it belongs')}</Reason>
+          <Pick label={tv('hedwig.v2.why.moveTo', 'Where it belongs')} options={streamOptions()} value={stream} onChange={setStream} size={phone ? 44 : 28} />
           <Pick
             label={tv('hedwig.v2.why.needsYouLabel', 'Does it need you?')}
             options={[{ id: 'yes', label: tv('hedwig.v2.why.needsMe', 'Needs me') }, { id: 'no', label: tv('hedwig.v2.why.notMe', 'Doesn’t need me') }]}
             value={needsYou}
             onChange={setNeedsYou}
-            size={phone ? 44 : 36}
+            size={phone ? 44 : 28}
           />
           <fieldset style={{ border: 0, margin: 0, padding: 0, display: 'flex', flexDirection: 'column' }}>
-            <legend style={{ padding: 0, marginBottom: 4 }}><Why>{tv('hedwig.v2.why.scopeLabel', 'Remember it for')}</Why></legend>
+            <legend style={{ padding: 0, marginBottom: 4 }}><Reason glyph={null}>{tv('hedwig.v2.why.scopeLabel', 'Remember it for')}</Reason></legend>
             {scopeOptions(why.data).map((o) => (
-              <label key={o.id} style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: phone ? 44 : 34, borderTop: `1px solid ${V.line}`, cursor: 'pointer', fontSize: 14 }}>
+              <label key={o.id} style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: phone ? 44 : 28, borderTop: `1px solid ${V.line}`, cursor: 'pointer', fontSize: 13 }}>
                 <input type="radio" name={`why-scope-${item.messageId}`} value={o.id} checked={scope === o.id} onChange={() => setScope(o.id)} style={{ accentColor: 'var(--hw-accent)' }} />
                 {o.label}
               </label>
             ))}
           </fieldset>
-          {saveError && <span role="alert" style={{ color: V.red, fontSize: 13 }}>{saveError.message || String(saveError)}</span>}
+          {saveError && <span role="alert" style={{ color: V.red, fontSize: 12 }}>{saveError.message || String(saveError)}</span>}
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-            <Btn solid disabled={saving} onClick={save}>{saving ? tv('hedwig.v2.saving', 'Saving…') : tv('hedwig.v2.why.apply', 'Change it')}</Btn>
+            <Btn accent size={phone ? 'phone' : 'md'} disabled={saving} onClick={save}>{saving ? tv('hedwig.v2.saving', 'Saving…') : tv('hedwig.v2.why.apply', 'Change it')}</Btn>
             <LinkBtn muted hit={phone} onClick={() => setChanging(false)}>{tv('hedwig.v2.action.cancel', 'Cancel')}</LinkBtn>
           </div>
         </div>

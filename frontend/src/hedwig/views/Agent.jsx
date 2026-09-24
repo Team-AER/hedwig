@@ -169,7 +169,7 @@ function Item({ item, onAction, resolveCite }) {
     );
   }
   if (item.kind === 'text') return item.text ? <Markdown text={item.text} resolveCite={resolveCite} /> : null;
-  if (item.kind === 'note') return <div style={{ alignSelf: 'center', fontSize: 12, color: T.muted, fontStyle: 'italic', textAlign: 'center', maxWidth: '85%' }}>{item.text}</div>;
+  if (item.kind === 'note') return <div style={{ alignSelf: 'center', fontSize: 12, color: T.muted, textAlign: 'center', maxWidth: '85%' }}>{item.text}</div>;
   if (item.kind === 'tool') return <ToolStep step={item} />;
   if (item.kind === 'action') return <ActionCard action={item.action} onChange={onAction} />;
   return null;

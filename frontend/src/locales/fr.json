@@ -1716,7 +1716,8 @@
         "records": "Aujourd’hui, dans vos justificatifs",
         "waiting": "En attente des autres",
         "file": "Fichier",
-        "seeAll": "Tout voir"
+        "seeAll": "Tout voir",
+        "summary": "Aujourd’hui en bref"
       },
       "cmd": {
         "allMail": "Tous les mails (la liste classique)",
@@ -1762,10 +1763,7 @@
         "empty": "Personne ne vous attend.",
         "filter": "Afficher",
         "focusReply": "Répondre au calme",
-        "needYouMany": "{{n}} vous attendent",
-        "needYouOne": "{{n}} vous attend",
-        "needsYou": "Vous attend",
-        "today": "{{n}} aujourd’hui"
+        "needsYou": "Vous attend"
       },
       "power": {
         "dryRun": "Essai à blanc",
@@ -1784,9 +1782,7 @@
         "prompts": "Versions des prompts",
         "readOnly": "lecture seule",
         "routing": "Routage",
-        "rules": "Règles",
-        "toPower": "Activer Power",
-        "toSimple": "Revenir à Simple"
+        "rules": "Règles"
       },
       "question": {
         "count": "Question {{i}} sur {{n}} aujourd’hui. Vos réponses instruisent Hedwig.",
@@ -1890,8 +1886,6 @@
         "records": "Justificatifs",
         "sweep": "Balayer",
         "sweepFailed": "Impossible de les marquer comme lus",
-        "sweepHint": "Marquer comme lu tout ce qui ne vous attend pas",
-        "unread": "{{n}} non lus",
         "more": "Afficher plus"
       },
       "tab": {
@@ -1914,11 +1908,9 @@
         "earlierOne": "Un message précédent",
         "empty": "Choisissez une conversation pour la lire ici.",
         "gone": "Cette conversation n’est plus là.",
-        "imagesBlocked": "Images distantes bloquées",
         "messagesMany": "{{n}} messages",
         "messagesOne": "1 message",
         "more": "Plus",
-        "myVoice": "Mon style",
         "original": "Voir l’original",
         "remind": "Me le rappeler",
         "remindOn": "Me le rappeler {{day}}",
@@ -1929,8 +1921,6 @@
         "setAside": "Mettre de côté",
         "snooze": "Mettre en pause",
         "story": "L’histoire jusqu’ici",
-        "toName": "à {{name}}",
-        "toYou": "à vous",
         "trackerMany": "Traqueurs bloqués : {{n}}",
         "trackerOne": "1 traqueur bloqué",
         "wrong": "Erroné ?",

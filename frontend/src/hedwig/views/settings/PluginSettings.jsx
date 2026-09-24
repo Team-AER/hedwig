@@ -101,7 +101,7 @@ export default function PluginSettings() {
           {directory.error && !directory.data && <StateView error={directory.error} onRetry={directory.reload} what="The plugin directory" />}
           {directory.data && !directory.data.length && <Empty title={tr('pluginSettings.theDirectoryIsEmpty', 'The directory is empty')} />}
           {(directory.data || []).map((d) => (
-            <div key={d.id} style={{ display: 'flex', gap: 14, alignItems: 'center', padding: '12px 16px', borderRadius: 10, background: T.surface, border: `1px solid ${T.border}` }}>
+            <div key={d.id} style={{ display: 'flex', gap: 14, alignItems: 'center', padding: '12px 14px', borderRadius: 10, background: T.field, border: `1px solid ${T.line}` }}>
               <Tile name={d.name} id={d.id} />
               <div style={{ flexGrow: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
                 <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
@@ -130,7 +130,7 @@ export default function PluginSettings() {
 function Tile({ name, id, size = 36 }) {
   return (
     <span aria-hidden="true" style={{
-      width: size, height: size, borderRadius: 9, background: TILE_COLORS[hashIndex(id, TILE_COLORS.length)], color: T.surface, flexShrink: 0,
+      width: size, height: size, borderRadius: 8, background: TILE_COLORS[hashIndex(id, TILE_COLORS.length)], color: T.surface, flexShrink: 0,
       display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600, fontSize: 13,
     }}>{pluginMonogram(name, id)}</span>
   );
@@ -153,7 +153,7 @@ function PluginRow({ p, isAdmin, onEnable, onDisable, onGrants, onReload, onRemo
   const state = failed ? { text: 'Error', tone: 'red' } : p.activated ? { text: 'Enabled', tone: 'ink' } : { text: 'Off', tone: 'neutral' };
   const perms = (p.permissions || []).map((x) => x.name).join(' · ') || 'none';
   return (
-    <div style={{ display: 'flex', gap: 14, alignItems: 'center', padding: '12px 16px', borderRadius: 10, background: T.surface, border: `1px solid ${T.border}`, flexWrap: 'wrap' }}>
+    <div style={{ display: 'flex', gap: 14, alignItems: 'center', padding: '12px 14px', borderRadius: 10, background: T.field, border: `1px solid ${T.line}`, flexWrap: 'wrap' }}>
       <Tile name={p.name} id={p.id} />
       <div style={{ flex: '1 1 300px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>

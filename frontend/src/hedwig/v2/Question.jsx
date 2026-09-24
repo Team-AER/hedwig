@@ -1,11 +1,12 @@
-// One of the day's questions (GET /labels/questions): a serif sentence on the accent tint and one
-// button per option. Answers go to POST /labels/questions/:id/answer with always: false: an
+// One of the day's questions (GET /labels/questions): a sentence in the summary box style (no
+// serif, no italic) and one button per option. Answers go to POST /labels/questions/:id/answer with always: false: an
 // answer is about this one message. An option the server marks `always` (it can become a rule)
 // gets a second, explicit button ("Yes, always"); with more than two options that would crowd the
 // row, so a single "Always for this sender" checkbox does the same. "Not now" skips it.
 import { useId, useState } from 'react';
 import { v2Api, announceSortChange } from './client.js';
 import { Btn, LinkBtn, Slip, V } from './primitives.jsx';
+import { Icon } from '../icons.jsx';
 import { tv } from './i18n.js';
 
 export function Question({ question, index, total, onDone, compact = false, phone = false }) {
@@ -41,12 +42,15 @@ export function Question({ question, index, total, onDone, compact = false, phon
   };
 
   return (
-    <Slip as="section" aria-label={tv('hedwig.v2.question.label', 'A question from Hedwig')} radius={18} style={{ gap: compact ? 10 : 14, padding: compact ? '16px 18px' : '22px 24px' }}>
-      <span style={{ fontFamily: V.serif, fontSize: compact ? 20 : 24, lineHeight: 1.2, textWrap: 'pretty' }}>{question.question}</span>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+    <Slip as="section" aria-label={tv('hedwig.v2.question.label', 'A question from Hedwig')} style={{ gap: 10, padding: compact ? '12px 14px' : '14px 16px' }}>
+      <span style={{ display: 'flex', alignItems: 'flex-start', gap: 6, fontSize: compact ? 13 : 14, lineHeight: compact ? '19px' : '20px', fontWeight: 600, textWrap: 'pretty' }}>
+        <span style={{ color: V.accent, display: 'inline-flex', paddingTop: 3, flexShrink: 0 }}><Icon name="sparkles" size={compact ? 13 : 14} /></span>
+        {question.question}
+      </span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         {options.map((o, i) => (
           <span key={o.id} style={{ display: 'contents' }}>
-            <Btn solid={i === 0} size={phone ? 'phone' : 'md'} disabled={Boolean(busy)} onClick={() => act('answer', o)}>{o.label}</Btn>
+            <Btn accent={i === 0} size={phone ? 'phone' : 'md'} disabled={Boolean(busy)} onClick={() => act('answer', o)}>{o.label}</Btn>
             {pairs && o.always && (
               <Btn size={phone ? 'phone' : 'md'} disabled={Boolean(busy)} onClick={() => act('answer', o, true)}>
                 {tv('hedwig.v2.question.always', '{{label}}, always', { label: o.label })}
@@ -55,7 +59,7 @@ export function Question({ question, index, total, onDone, compact = false, phon
           </span>
         ))}
         {!pairs && canAlways && (
-          <label htmlFor={boxId} style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minHeight: phone ? 44 : 36, fontSize: 13, cursor: 'pointer' }}>
+          <label htmlFor={boxId} style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minHeight: phone ? 44 : 28, fontSize: 13, cursor: 'pointer' }}>
             <input id={boxId} type="checkbox" checked={alwaysBox} onChange={(e) => setAlwaysBox(e.target.checked)} style={{ accentColor: 'var(--hw-accent)' }} />
             {tv('hedwig.v2.why.scope.sender', 'Always for this sender')}
           </label>
@@ -67,7 +71,7 @@ export function Question({ question, index, total, onDone, compact = false, phon
           </span>
         )}
       </div>
-      {error && <span role="alert" style={{ fontSize: 13, color: V.red }}>{error.message || String(error)}</span>}
+      {error && <span role="alert" style={{ fontSize: 12, color: V.red }}>{error.message || String(error)}</span>}
     </Slip>
   );
 }

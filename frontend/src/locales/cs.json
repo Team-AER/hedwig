@@ -1735,7 +1735,8 @@
         "records": "Dnes z vašich záznamů",
         "waiting": "Čekáte na ostatní",
         "file": "Soubor",
-        "seeAll": "Zobrazit vše"
+        "seeAll": "Zobrazit vše",
+        "summary": "Dnes ve zkratce"
       },
       "cmd": {
         "allMail": "Veškerá pošta (klasický seznam)",
@@ -1781,10 +1782,7 @@
         "empty": "Nikdo na vás nečeká.",
         "filter": "Zobrazit",
         "focusReply": "Soustředěně odpovídat",
-        "needYouMany": "Potřebují vás: {{n}}",
-        "needYouOne": "{{n}} vás potřebuje",
-        "needsYou": "Potřebuje vás",
-        "today": "Dnes: {{n}}"
+        "needsYou": "Potřebuje vás"
       },
       "power": {
         "dryRun": "Zkušební běh",
@@ -1803,9 +1801,7 @@
         "prompts": "Verze promptů",
         "readOnly": "jen pro čtení",
         "routing": "Směrování",
-        "rules": "Pravidla",
-        "toPower": "Zapnout Power",
-        "toSimple": "Zpět na jednoduchý režim"
+        "rules": "Pravidla"
       },
       "question": {
         "count": "Otázka {{i}} z {{n}} na dnes. Odpovědi učí Hedwiga.",
@@ -1909,8 +1905,6 @@
         "records": "Záznamy",
         "sweep": "Uklidit",
         "sweepFailed": "Nepodařilo se je označit jako přečtené",
-        "sweepHint": "Označit jako přečtené vše, co vás nepotřebuje",
-        "unread": "Nepřečtené: {{n}}",
         "more": "Zobrazit další"
       },
       "tab": {
@@ -1933,11 +1927,9 @@
         "earlierOne": "Jedna starší zpráva",
         "empty": "Vyberte vlákno a přečtěte si ho tady.",
         "gone": "Toto vlákno už tu není.",
-        "imagesBlocked": "Vzdálené obrázky zablokovány",
         "messagesMany": "Zprávy: {{n}}",
         "messagesOne": "1 zpráva",
         "more": "Další",
-        "myVoice": "Můj styl",
         "original": "Zobrazit originál",
         "remind": "Připomenout mi",
         "remindOn": "Připomenout mi: {{day}}",
@@ -1948,8 +1940,6 @@
         "setAside": "Odložit",
         "snooze": "Uspat",
         "story": "Příběh zatím",
-        "toName": "pro: {{name}}",
-        "toYou": "pro vás",
         "trackerMany": "Zablokované sledovače: {{n}}",
         "trackerOne": "Zablokován 1 sledovač",
         "wrong": "Chyba?",

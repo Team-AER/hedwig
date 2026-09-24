@@ -23,22 +23,21 @@ export default function SettingsFrame({ active, title, sub, right, children, lab
     <section aria-label={label || title} style={{
       // On a phone the floating tab bar covers the bottom: the last setting scrolls clear of it.
       height: '100%', minHeight: 0, overflowY: 'auto', boxSizing: 'border-box', padding: phone ? '16px 16px calc(24px + var(--hw-tabbar-space, 0px))' : '20px 28px calc(28px + var(--hw-tabbar-space, 0px))', display: 'flex', flexDirection: 'column', gap: 18,
-      background: 'transparent', color: T.ink, fontFamily: T.body, fontSize: 14, lineHeight: 1.45,
+      background: 'transparent', color: T.ink, fontFamily: T.body, fontSize: 13, lineHeight: 1.45,
     }}>
       <nav aria-label={tr('settingsFrame.hedwigSettings', 'Hedwig settings')} style={{ display: 'flex', gap: 4, flexWrap: 'wrap', fontSize: 13 }}>
         {PAGES.filter((p) => !p.admin || isAdmin).map((p) => (
           <button key={p.id} type="button" aria-current={p.id === active ? 'page' : undefined} onClick={() => openView(p.id, {})} style={{
-            padding: '5px 10px', borderRadius: 8, border: 0, font: 'inherit', cursor: 'pointer', color: T.ink,
-            background: p.id === active ? T.surface : 'transparent', fontWeight: p.id === active ? 600 : 400,
-            boxShadow: p.id === active ? `0 1px 0 ${T.border}` : 'none',
+            minHeight: phone ? 44 : 28, padding: '0 10px', borderRadius: 6, border: 0, font: 'inherit', cursor: 'pointer', color: T.ink,
+            background: p.id === active ? 'var(--hw-select, rgba(0,0,0,0.07))' : 'transparent', fontWeight: p.id === active ? 600 : 400,
           }}>{p.label}</button>
         ))}
-        <button type="button" onClick={openMailSettings} style={{ padding: '5px 10px', borderRadius: 8, border: 0, font: 'inherit', cursor: 'pointer', color: T.muted, background: 'transparent' }}>
+        <button type="button" onClick={openMailSettings} style={{ minHeight: phone ? 44 : 28, padding: '0 10px', borderRadius: 6, border: 0, font: 'inherit', cursor: 'pointer', color: T.muted, background: 'transparent' }}>
           Mail settings…
         </button>
       </nav>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
-        <h1 style={{ margin: 0, fontFamily: T.display, fontSize: phone ? 32 : 40, fontWeight: 400, lineHeight: 1, letterSpacing: '-0.015em' }}>{title}</h1>
+        <h1 style={{ margin: 0, fontFamily: T.display, fontSize: phone ? 28 : 22, fontWeight: phone ? 700 : 600, lineHeight: 1.2, letterSpacing: '-0.01em' }}>{title}</h1>
         {sub && <span style={{ fontSize: 12, color: T.muted }}>{sub}</span>}
         {right && <><span style={{ flexGrow: 1 }} />{right}</>}
       </div>

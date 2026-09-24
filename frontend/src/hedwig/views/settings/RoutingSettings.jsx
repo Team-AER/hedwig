@@ -14,7 +14,7 @@ import { useIsAdmin } from '../hooks.js';
 import SettingsFrame from './SettingsFrame.jsx';
 import { v2Api, listOf } from '../../v2/client.js';
 import { useV2Resource, isMissing } from '../../v2/hooks.js';
-import { Btn, ErrorLine, Mono, Quiet, V, Why } from '../../v2/primitives.jsx';
+import { Btn, Code, ErrorLine, Mono, Quiet, Reason, SectionLabel, V, Why } from '../../v2/primitives.jsx';
 import { tierLabel } from '../../v2/tiers.js';
 import { tv } from '../../v2/i18n.js';
 
@@ -115,18 +115,19 @@ export function servingLine(s) {
 
 const fmt = (n) => (n == null ? '' : Number(n).toLocaleString());
 const pct = (part, whole) => (part == null || !whole ? '' : `${Math.round((part / whole) * 100)}%`);
-const rowStyle = { display: 'flex', flexWrap: 'wrap', gap: '8px 16px', padding: '14px 0', borderTop: `1px solid ${V.line}`, alignItems: 'baseline' };
-const selectStyle = { font: 'inherit', fontSize: 13, color: V.ink, background: 'transparent', border: 0, borderBottom: `1px solid ${V.line2}`, borderRadius: 0, padding: '4px 2px', minWidth: 0, maxWidth: '100%' };
+const rowStyle = { display: 'flex', flexWrap: 'wrap', gap: '8px 16px', padding: '12px 0', borderTop: `1px solid ${V.line}`, alignItems: 'baseline' };
+// A field: 28px, radius 8, the --hw-field fill with a hairline, 13px text.
+const selectStyle = { font: 'inherit', fontSize: 13, color: V.ink, background: V.field, border: `1px solid ${V.line}`, borderRadius: 8, height: 28, boxSizing: 'border-box', padding: '0 8px', minWidth: 0, maxWidth: '100%' };
 
 function Section({ title, sub, right, children }) {
   return (
     <section style={{ display: 'flex', flexDirection: 'column', gap: 6, maxWidth: 980 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
-        <h2 style={{ margin: 0, fontFamily: V.serif, fontWeight: 400, fontSize: 26, lineHeight: 1.1 }}>{title}</h2>
+        <SectionLabel as="h2" style={{ padding: 0 }}>{title}</SectionLabel>
         <span style={{ flexGrow: 1 }} />
         {right}
       </div>
-      {sub && <Why size={15}>{sub}</Why>}
+      {sub && <Why>{sub}</Why>}
       {children}
     </section>
   );
@@ -170,7 +171,7 @@ function TierRow({ tier, role, entry, models, serving, probed, onPut }) {
   return (
     <div data-tier-row={role} style={rowStyle}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: '1 1 200px' }}>
-        <span style={{ fontSize: 15, fontWeight: 600 }}>{tierLabel(role)}</span>
+        <span style={{ fontSize: 13, fontWeight: 600 }}>{tierLabel(role)}</span>
         <span style={{ fontSize: 12, color: V.muted }}>{help}</span>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0, flex: '2 1 240px' }}>
@@ -222,7 +223,7 @@ function TiersSection({ runtime, catalog, onPut, error, notes }) {
       )}
     >
       {status?.notice?.text && (
-        <span role="status" data-runtime-notice="" title={status.notice.detail || undefined} style={{ fontFamily: V.why, fontStyle: 'italic', fontSize: 15, color: V.accentInk }}>{status.notice.text}</span>
+        <span role="status" data-runtime-notice="" title={status.notice.detail || undefined}><Reason glyph="bolt" tone="attention">{status.notice.text}</Reason></span>
       )}
       {runtime.error && (isMissing(runtime.error)
         ? <Quiet><Why>{tv('hedwig.v2.routing.noRuntime', 'The model runtime settings are not available on this server yet.')}</Why></Quiet>
@@ -235,7 +236,7 @@ function TiersSection({ runtime, catalog, onPut, error, notes }) {
       {rt && (
         <div style={rowStyle}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: '1 1 200px' }}>
-            <span style={{ fontSize: 15, fontWeight: 600 }}>{tv('hedwig.v2.routing.fallback', 'Lighter model')}</span>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>{tv('hedwig.v2.routing.fallback', 'Lighter model')}</span>
             <span style={{ fontSize: 12, color: V.muted }}>{tv('hedwig.v2.routing.fallbackHelp', 'Answers when a tier’s model does not respond in time. Its answers are labelled.')}</span>
           </div>
           <div style={{ minWidth: 0, flex: '2 1 240px' }}>
@@ -281,7 +282,7 @@ function RoutingTableSection() {
         return (
           <div key={f.feature} data-feature={f.feature} style={{ ...rowStyle, padding: '12px 0', opacity: saving === f.feature ? 0.6 : 1 }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: '1 1 150px' }}>
-              <span style={{ fontSize: 15, fontWeight: 500 }}>{f.feature}</span>
+              <span style={{ fontSize: 13, fontWeight: 500 }}>{f.feature}</span>
               {f.cadence && <span style={{ fontSize: 12, color: V.muted }}>{f.cadence}</span>}
             </div>
             <div style={{ minWidth: 0, flex: '1 1 200px' }}>
@@ -301,7 +302,7 @@ function RoutingTableSection() {
                     type="number" min={0} max={1} step={0.05} defaultValue={f.escalateBelow ?? ''} key={`e-${f.escalateBelow}`}
                     aria-label={tv('hedwig.v2.routing.escalateFor', 'Escalate {{feature}} to Tier 2 below this confidence', { feature: f.feature })}
                     onBlur={(e) => { const v = e.target.value === '' ? null : Number(e.target.value); if (v !== f.escalateBelow) put(f.feature, { escalateBelow: v }); }}
-                    style={{ ...selectStyle, width: 64, fontFamily: V.mono }}
+                    style={{ ...selectStyle, width: 64, fontVariantNumeric: 'tabular-nums' }}
                   />
                 </label>
               )}
@@ -312,7 +313,7 @@ function RoutingTableSection() {
                     type="number" min={0} step={1000} defaultValue={f.budget ?? ''} key={`b-${f.budget}`}
                     aria-label={tv('hedwig.v2.routing.budgetFor', 'Daily token budget per person for {{feature}}', { feature: f.feature })}
                     onBlur={(e) => { const v = e.target.value === '' ? null : Number(e.target.value); if (v !== f.budget) put(f.feature, { budget: v }); }}
-                    style={{ ...selectStyle, width: 110, fontFamily: V.mono }}
+                    style={{ ...selectStyle, width: 110, fontVariantNumeric: 'tabular-nums' }}
                   />
                 </label>
               )}
@@ -367,20 +368,20 @@ function UsageSection() {
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
-              <tr style={{ color: V.muted, textAlign: 'right' }}>
-                <th scope="col" style={{ textAlign: 'left', fontWeight: 400, padding: '6px 0' }}>{tv('hedwig.v2.routing.colFeature', 'Feature')}</th>
-                <th scope="col" style={{ fontWeight: 400 }}>{tv('hedwig.v2.routing.colCalls', 'Calls')}</th>
-                <th scope="col" style={{ fontWeight: 400 }}>{tv('hedwig.v2.routing.colFailed', 'Failed')}</th>
-                {hasTokens && <th scope="col" style={{ fontWeight: 400 }}>{tv('hedwig.v2.routing.colTokens', 'Tokens')}</th>}
-                <th scope="col" style={{ fontWeight: 400 }}>{tv('hedwig.v2.routing.colLatency', 'Average ms')}</th>
-                {hasFb && <th scope="col" style={{ fontWeight: 400 }}>{tv('hedwig.v2.routing.colFallback', 'Lighter model')}</th>}
-                {hasEsc && <th scope="col" style={{ fontWeight: 400 }}>{tv('hedwig.v2.routing.colEscalated', 'To Tier 2')}</th>}
+              <tr style={{ color: V.muted, textAlign: 'right', fontSize: 11 }}>
+                <th scope="col" style={{ textAlign: 'left', fontWeight: 600, padding: '6px 0' }}>{tv('hedwig.v2.routing.colFeature', 'Feature')}</th>
+                <th scope="col" style={{ fontWeight: 600 }}>{tv('hedwig.v2.routing.colCalls', 'Calls')}</th>
+                <th scope="col" style={{ fontWeight: 600 }}>{tv('hedwig.v2.routing.colFailed', 'Failed')}</th>
+                {hasTokens && <th scope="col" style={{ fontWeight: 600 }}>{tv('hedwig.v2.routing.colTokens', 'Tokens')}</th>}
+                <th scope="col" style={{ fontWeight: 600 }}>{tv('hedwig.v2.routing.colLatency', 'Average ms')}</th>
+                {hasFb && <th scope="col" style={{ fontWeight: 600 }}>{tv('hedwig.v2.routing.colFallback', 'Lighter model')}</th>}
+                {hasEsc && <th scope="col" style={{ fontWeight: 600 }}>{tv('hedwig.v2.routing.colEscalated', 'To Tier 2')}</th>}
               </tr>
             </thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={r.feature} data-usage-row={r.feature} style={{ borderTop: `1px solid ${V.line}`, textAlign: 'right', fontFamily: V.mono, fontSize: 12 }}>
-                  <td style={{ textAlign: 'left', fontFamily: V.sans, fontSize: 14, padding: '8px 0' }}>{r.feature}</td>
+                <tr key={r.feature} data-usage-row={r.feature} style={{ borderTop: `1px solid ${V.line}`, textAlign: 'right', fontFamily: V.sans, fontVariantNumeric: 'tabular-nums', fontSize: 12 }}>
+                  <td style={{ textAlign: 'left', fontSize: 13, padding: '8px 0' }}>{r.feature}</td>
                   <td>{fmt(r.calls)}</td>
                   <td style={{ color: r.errors ? V.red : undefined }}>{fmt(r.errors)}{r.errors ? ` · ${pct(r.errors, r.calls)}` : ''}</td>
                   {hasTokens && <td>{fmt(r.tokens)}</td>}
@@ -407,8 +408,8 @@ function EnabledModelsSection({ runtime, catalog, onPut }) {
       {models.map((m) => (
         <label key={m.id} style={{ display: 'flex', alignItems: 'baseline', gap: 12, padding: '10px 0', borderTop: `1px solid ${V.line}`, cursor: 'pointer' }}>
           <input type="checkbox" checked={enabled.has(m.id)} onChange={(e) => toggle(m.id, e.target.checked)} style={{ accentColor: 'var(--hw-accent)', width: 16, height: 16, margin: 0 }} />
-          <span style={{ fontSize: 14, flexGrow: 1, minWidth: 0 }}>{m.displayName || m.display_name || m.id}</span>
-          <Mono size={11}>{m.id}</Mono>
+          <span style={{ fontSize: 13, flexGrow: 1, minWidth: 0 }}>{m.displayName || m.display_name || m.id}</span>
+          <Code size={11} color={V.muted}>{m.id}</Code>
         </label>
       ))}
     </Section>

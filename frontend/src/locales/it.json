@@ -1716,7 +1716,8 @@
         "records": "Oggi, dalle tue ricevute",
         "waiting": "In attesa di altri",
         "file": "Documento",
-        "seeAll": "Vedi tutto"
+        "seeAll": "Vedi tutto",
+        "summary": "Oggi in breve"
       },
       "cmd": {
         "allMail": "Tutta la posta (l'elenco classico)",
@@ -1762,10 +1763,7 @@
         "empty": "Nessuno ti sta aspettando.",
         "filter": "Mostra",
         "focusReply": "Rispondi con calma",
-        "needYouMany": "{{n}} hanno bisogno di te",
-        "needYouOne": "{{n}} ha bisogno di te",
-        "needsYou": "Ha bisogno di te",
-        "today": "{{n}} oggi"
+        "needsYou": "Ha bisogno di te"
       },
       "power": {
         "dryRun": "Prova a vuoto",
@@ -1784,9 +1782,7 @@
         "prompts": "Versioni dei prompt",
         "readOnly": "sola lettura",
         "routing": "Instradamento",
-        "rules": "Regole",
-        "toPower": "Attiva Power",
-        "toSimple": "Torna a Semplice"
+        "rules": "Regole"
       },
       "question": {
         "count": "Domanda {{i}} di {{n}} oggi. Le risposte insegnano a Hedwig.",
@@ -1890,8 +1886,6 @@
         "records": "Ricevute",
         "sweep": "Ripulisci",
         "sweepFailed": "Impossibile segnarli come letti",
-        "sweepHint": "Segna come letto tutto ciò che non ha bisogno di te",
-        "unread": "{{n}} da leggere",
         "more": "Mostra altri"
       },
       "tab": {
@@ -1914,11 +1908,9 @@
         "earlierOne": "Un messaggio precedente",
         "empty": "Scegli una conversazione per leggerla qui.",
         "gone": "Quella conversazione non c'è più.",
-        "imagesBlocked": "Immagini remote bloccate",
         "messagesMany": "{{n}} messaggi",
         "messagesOne": "1 messaggio",
         "more": "Altro",
-        "myVoice": "Il mio stile",
         "original": "Mostra l'originale",
         "remind": "Ricordamelo",
         "remindOn": "Ricordamelo {{day}}",
@@ -1929,8 +1921,6 @@
         "setAside": "Metti da parte",
         "snooze": "Posticipa",
         "story": "La storia finora",
-        "toName": "a {{name}}",
-        "toYou": "a te",
         "trackerMany": "Tracker bloccati: {{n}}",
         "trackerOne": "1 tracker bloccato",
         "wrong": "Sbagliato?",

@@ -9,7 +9,7 @@ import { v2Api, listOf, announceSortChange } from './client.js';
 import { openThread } from './nav.js';
 import { useV2 } from './state.js';
 import { nudgeThread } from './mail.js';
-import { ErrorLine, Hair, LinkBtn, Mono, Quiet, V, ViewBody, ViewHead, Why, usePhone } from './primitives.jsx';
+import { Avatar, ErrorLine, Hair, LinkBtn, Num, Quiet, V, ViewBody, ViewHead, Why, usePhone } from './primitives.jsx';
 import { tv, tvn } from './i18n.js';
 
 function notify(type, title, body) {
@@ -24,27 +24,35 @@ export function askedLabel(days) {
 }
 
 export function WaitingRow({ w, phone, busy, onNudge, onResolve }) {
-  const title = [w.who, w.subject].filter(Boolean).join(' · ');
+  const av = phone ? 40 : 36;
+  const open = () => openThread({ threadId: w.threadId, messageId: w.messageId, subject: w.subject });
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: phone ? '12px 4px' : '14px 12px' }}>
-      <button
-        type="button"
-        onClick={() => openThread({ threadId: w.threadId, messageId: w.messageId, subject: w.subject })}
-        className="hw-link"
-        style={{ padding: 0, border: 0, background: 'none', color: V.ink, font: 'inherit', fontSize: phone ? 16 : 15, fontWeight: 500, textAlign: 'left', cursor: 'pointer', textDecorationColor: 'transparent', overflowWrap: 'anywhere', minHeight: phone ? 44 : undefined }}
-      >
-        {title}
-      </button>
-      {w.reason && <Why size={15}>{w.reason}</Why>}
-      <div style={{ display: 'flex', alignItems: 'center', gap: phone ? 4 : 16, paddingTop: 2 }}>
-        <Mono size={12}>{askedLabel(w.days)}</Mono>
-        <span style={{ flexGrow: 1 }} />
-        <LinkBtn hit={phone} disabled={Boolean(busy)} onClick={() => onNudge(w)} style={phone ? { minHeight: 44, padding: '0 12px' } : undefined}>
-          {busy === 'nudge' ? tv('hedwig.v2.thread.drafting', 'Drafting…') : tv('hedwig.v2.brief.nudge', 'Nudge')}
-        </LinkBtn>
-        <LinkBtn muted hit={phone} disabled={Boolean(busy)} onClick={() => onResolve(w)} style={phone ? { minHeight: 44, padding: '0 0 0 12px' } : undefined}>
-          {tv('hedwig.v2.waiting.resolve', 'Resolve')}
-        </LinkBtn>
+    <div style={{ display: 'grid', gridTemplateColumns: `8px ${av}px minmax(0, 1fr)`, columnGap: 10, alignItems: 'start', padding: phone ? '12px 8px' : '10px 14px 10px 8px', minHeight: phone ? 88 : 76, boxSizing: 'border-box' }}>
+      <span aria-hidden="true" />
+      <Avatar name={w.who} email={w.email || w.to?.email} size={av} />
+      <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+          <span style={{ flex: '1 1 auto', minWidth: 0, fontSize: phone ? 15 : 13, lineHeight: phone ? '20px' : '16px', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{w.who || w.subject}</span>
+          <Num size={phone ? 13 : 11}>{askedLabel(w.days)}</Num>
+        </span>
+        <button
+          type="button"
+          onClick={open}
+          className="hw-link"
+          aria-label={[w.who, w.subject].filter(Boolean).join(' · ')}
+          style={{ padding: 0, border: 0, background: 'none', color: V.ink, font: 'inherit', fontSize: phone ? 15 : 13, lineHeight: phone ? '20px' : '18px', textAlign: 'left', cursor: 'pointer', textDecorationColor: 'transparent', overflowWrap: 'anywhere', minHeight: phone ? 44 : undefined }}
+        >
+          {w.subject || w.who}
+        </button>
+        {w.reason && <Why size={phone ? 13 : 12}>{w.reason}</Why>}
+        <div style={{ display: 'flex', alignItems: 'center', gap: phone ? 4 : 14, paddingTop: 4 }}>
+          <LinkBtn hit={phone} disabled={Boolean(busy)} onClick={() => onNudge(w)} style={{ fontSize: phone ? 15 : 12, color: V.accentInk, textDecorationColor: 'transparent', ...(phone ? { minHeight: 44, padding: '0 12px 0 0' } : {}) }}>
+            {busy === 'nudge' ? tv('hedwig.v2.thread.drafting', 'Drafting…') : tv('hedwig.v2.brief.nudge', 'Nudge')}
+          </LinkBtn>
+          <LinkBtn muted hit={phone} disabled={Boolean(busy)} onClick={() => onResolve(w)} style={{ fontSize: phone ? 15 : 12, textDecorationColor: 'transparent', ...(phone ? { minHeight: 44, padding: '0 12px' } : {}) }}>
+            {tv('hedwig.v2.waiting.resolve', 'Resolve')}
+          </LinkBtn>
+        </div>
       </div>
     </div>
   );
@@ -84,7 +92,7 @@ export default function Waiting() {
       {res.data && !rows.length && <Quiet><Why>{tv('hedwig.v2.waiting.empty', 'Nobody owes you a reply.')}</Why></Quiet>}
       {rows.map((w, i) => (
         <div key={w.threadId}>
-          {i > 0 && <Hair inset={phone ? 0 : 12} />}
+          {i > 0 && <Hair style={{ margin: `0 0 0 ${phone ? 66 : 62}px` }} />}
           <WaitingRow w={w} phone={phone} busy={busy[w.threadId]} onNudge={onNudge} onResolve={onResolve} />
         </div>
       ))}
@@ -95,14 +103,14 @@ export default function Waiting() {
     return (
       <ViewBody phone label={title} padded={false}>
         <ViewHead phone title={title} sub={sub} />
-        <div style={{ padding: '0 16px' }}>{body}</div>
+        <div style={{ padding: '0 8px' }}>{body}</div>
       </ViewBody>
     );
   }
   return (
-    <ViewBody label={title}>
+    <ViewBody label={title} padded={false} style={{ padding: '14px 0 16px' }}>
       <ViewHead title={title} sub={sub} />
-      {body}
+      <div style={{ padding: '0 6px' }}>{body}</div>
     </ViewBody>
   );
 }

@@ -1716,7 +1716,8 @@
         "records": "Hoy, de tus comprobantes",
         "waiting": "Esperando a otros",
         "file": "Archivo",
-        "seeAll": "Ver todo"
+        "seeAll": "Ver todo",
+        "summary": "Hoy, en breve"
       },
       "cmd": {
         "allMail": "Todo el correo (la lista clásica)",
@@ -1762,10 +1763,7 @@
         "empty": "Nadie te está esperando.",
         "filter": "Mostrar",
         "focusReply": "Responder con calma",
-        "needYouMany": "{{n}} te necesitan",
-        "needYouOne": "{{n}} te necesita",
-        "needsYou": "Te necesita",
-        "today": "{{n}} hoy"
+        "needsYou": "Te necesita"
       },
       "power": {
         "dryRun": "Prueba en seco",
@@ -1784,9 +1782,7 @@
         "prompts": "Versiones de los prompts",
         "readOnly": "solo lectura",
         "routing": "Enrutamiento",
-        "rules": "Reglas",
-        "toPower": "Activar Power",
-        "toSimple": "Volver a Sencillo"
+        "rules": "Reglas"
       },
       "question": {
         "count": "Pregunta {{i}} de {{n}} hoy. Tus respuestas enseñan a Hedwig.",
@@ -1890,8 +1886,6 @@
         "records": "Comprobantes",
         "sweep": "Barrer",
         "sweepFailed": "No se pudieron marcar como leídos",
-        "sweepHint": "Marcar como leído todo lo que no te necesita",
-        "unread": "{{n}} sin leer",
         "more": "Mostrar más"
       },
       "tab": {
@@ -1914,11 +1908,9 @@
         "earlierOne": "Un mensaje anterior",
         "empty": "Elige una conversación para leerla aquí.",
         "gone": "Esa conversación ya no está.",
-        "imagesBlocked": "Imágenes remotas bloqueadas",
         "messagesMany": "{{n}} mensajes",
         "messagesOne": "1 mensaje",
         "more": "Más",
-        "myVoice": "Mi estilo",
         "original": "Ver el original",
         "remind": "Recuérdamelo",
         "remindOn": "Recuérdamelo el {{day}}",
@@ -1929,8 +1921,6 @@
         "setAside": "Apartar",
         "snooze": "Posponer",
         "story": "La historia hasta ahora",
-        "toName": "para {{name}}",
-        "toYou": "para ti",
         "trackerMany": "Rastreadores bloqueados: {{n}}",
         "trackerOne": "1 rastreador bloqueado",
         "wrong": "¿Es un error?",

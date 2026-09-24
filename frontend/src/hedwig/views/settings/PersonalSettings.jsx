@@ -8,7 +8,7 @@ import { formatCount } from '../helpers.js';
 import { useResource } from '../hooks.js';
 import ConfigForm from './ConfigForm.jsx';
 import SettingsFrame from './SettingsFrame.jsx';
-import { Card, Loading, Meter, SectionLabel, StateView, T } from '../ui.jsx';
+import { Card, Loading, Meter, SectionLabel, NUM, StateView, T } from '../ui.jsx';
 import { tr } from '../i18n.js';
 import HedwigSettingsV2 from '../../v2/HedwigSettings.jsx';
 import { useV2 } from '../../v2/state.js';
@@ -45,7 +45,7 @@ export default function PersonalSettings() {
       <HedwigSettingsV2 />
       {power ? all : (
         <details style={{ maxWidth: 900 }}>
-          <summary style={{ cursor: 'pointer', fontFamily: T.display, fontSize: 20, padding: '6px 0' }}>{tv('hedwig.v2.settings.all', 'All settings and usage')}</summary>
+          <summary style={{ cursor: 'pointer', fontFamily: T.body, fontSize: 13, fontWeight: 600, padding: '6px 0' }}>{tv('hedwig.v2.settings.all', 'All settings and usage')}</summary>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 18, paddingTop: 12 }}>{all}</div>
         </details>
       )}
@@ -82,7 +82,7 @@ function Usage({ res }) {
             <div key={f} style={{ display: 'contents' }}>
               <span>{f}</span>
               {budget ? <Meter value={ratio} color={color} width="100%" label={`${f} budget used`} /> : <span style={{ fontSize: 12, color: T.muted }}>{tr('personalSettings.noBudget', 'no budget')}</span>}
-              <span style={{ fontFamily: T.mono, fontSize: 12, whiteSpace: 'nowrap', color: ratio >= 1 ? T.red : T.ink }}>
+              <span style={{ ...NUM, fontSize: 12, whiteSpace: 'nowrap', color: ratio >= 1 ? T.red : T.ink }}>
                 {formatCount(u.calls)}{budget ? ` / ${formatCount(budget)}` : ''}
                 {u.errors ? <span style={{ color: T.red }}> · {u.errors} err</span> : null}
               </span>

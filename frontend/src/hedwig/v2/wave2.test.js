@@ -114,7 +114,7 @@ async function click(el) {
   await settle();
 }
 async function type(input, value) {
-  const proto = input.tagName === 'SELECT' ? dom.window.HTMLSelectElement.prototype : dom.window.HTMLInputElement.prototype;
+  const proto = input.tagName === 'SELECT' ? dom.window.HTMLSelectElement.prototype : input.tagName === 'TEXTAREA' ? dom.window.HTMLTextAreaElement.prototype : dom.window.HTMLInputElement.prototype;
   await React.act(async () => {
     Object.getOwnPropertyDescriptor(proto, 'value').set.call(input, value);
     input.dispatchEvent(new dom.window.Event(input.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true }));
@@ -463,7 +463,7 @@ describe('Waiting on', () => {
     assert.equal(askedLabel(6), 'asked 6 days ago');
     await render(h(Waiting));
     assert.equal(document.querySelector('h1').textContent, 'Waiting on');
-    assert.match(text(), /Tom Ellis · the signed contract/);
+    assert.ok(byLabel('Tom Ellis · the signed contract'), 'the row opens the thread, named by who and what');
     assert.match(text(), /asked 6 days ago/);
     assert.match(text(), /No reply in 3 days, as you asked to be reminded/);
     await click(all('button').filter((b) => b.textContent === 'Nudge')[0]);
@@ -501,6 +501,10 @@ describe('Waiting on', () => {
     useV2.setState({ settingsFields: [{ key: 'work.waitingDefaultDays', value: 7 }] });
     await render(h(Thread, { props: { item: await peopleItem('m-anna') } }));
     await settle(60);
+    // The reply field grows on focus; the reminder sits in its toolbar.
+    const field = byLabel('Reply to Anna');
+    await React.act(async () => { field.focus(); field.dispatchEvent(new dom.window.FocusEvent('focusin', { bubbles: true })); });
+    await settle();
     const days = byLabel('Remind me after');
     assert.equal(days.value, '7');
     await type(days, '5');
