@@ -8,6 +8,8 @@
 // field that grows on focus with Draft in my voice, Remind me if no reply and Send (⌘↩).
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../../store/index.js';
+import { buildKeyMap } from '../../utils/defaultShortcuts.js';
+import { shortcutBus } from '../../utils/shortcutBus.js';
 import { hedwigApi } from '../api.js';
 import { useHedwig } from '../store.js';
 import { Icon } from '../icons.jsx';
@@ -46,6 +48,27 @@ const NARROW_READER = 900;
 const FOLD_OVER = 4;
 const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform || '');
 const SEND_KEYS = IS_MAC ? '⌘↩' : 'Ctrl+↩';
+
+/**
+ * Whether upstream's own global keymap acts on this key right now: the key is bound to one of
+ * its actions (defaults E archive, R/A/F reply, S star, or the user's overrides), a component that
+ * handles that action is mounted (the classic list or reading pane in a pane) and upstream has a
+ * message selected. The reader then leaves the key alone, so one press never runs two actions
+ * (E archiving upstream's message and Hedwig's thread both).
+ */
+export function upstreamOwnsKey(key, { shortcuts = {}, selectedMessageId = null, hasListener = () => false } = {}) {
+  if (!selectedMessageId || !key) return false;
+  const action = buildKeyMap(shortcuts || {})[key];
+  return Boolean(action) && Boolean(hasListener(action));
+}
+
+/** True when the element, or an ancestor, is display:none (a pane hidden beside a wide view). */
+export function hiddenInPage(el) {
+  for (let p = el; p; p = p.parentElement) {
+    if (p.hidden || p.style?.display === 'none') return true;
+  }
+  return false;
+}
 
 function useThread(item) {
   const [state, setState] = useState({ data: null, error: null, loading: Boolean(item) });
@@ -96,11 +119,15 @@ function useInlineQuestion(messageId) {
   return [question, setQuestion];
 }
 
-/** The reader column's width, so the toolbar can fold its middle groups (null until measured). */
-function useWidth(ref) {
+/**
+ * The reader column's width, so the toolbar can fold its middle groups (null until measured).
+ * Returns [width, callbackRef]: the element is tracked in state, so the observer follows the
+ * section even when it first appears after mount (the reader starts on "Pick a conversation").
+ */
+function useWidth() {
+  const [el, setEl] = useState(null);
   const [width, setWidth] = useState(null);
   useEffect(() => {
-    const el = ref.current;
     if (!el || typeof ResizeObserver === 'undefined') return undefined;
     const ro = new ResizeObserver((entries) => {
       const w = entries[0]?.contentRect?.width;
@@ -108,8 +135,8 @@ function useWidth(ref) {
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, [ref]);
-  return width;
+  }, [el]);
+  return [width, setEl];
 }
 
 // ── Summary block ─────────────────────────────────────────────────────────────
@@ -467,6 +494,25 @@ function MessageItem({ m, n, you, open, onToggle, phone, tldr = null, cards = fa
   );
 }
 
+/**
+ * Which messages fold away: each unbroken run of more than `over` collapsed messages becomes one
+ * "N earlier messages" row where the run starts. An unread (open) message between two runs keeps
+ * its place, so nothing is shown out of order. `collapsed[i]` says message i would be a 44px row.
+ * Returns Map(index → { start, count }) for every folded index.
+ */
+export function foldRuns(collapsed, over = FOLD_OVER) {
+  const out = new Map();
+  let i = 0;
+  while (i < collapsed.length) {
+    if (!collapsed[i]) { i += 1; continue; }
+    let j = i;
+    while (j < collapsed.length && collapsed[j]) j += 1;
+    if (j - i > over) for (let k = i; k < j; k += 1) out.set(k, { start: i, count: j - i });
+    i = j;
+  }
+  return out;
+}
+
 function FoldRow({ count, onOpen, phone }) {
   return (
     <div style={{ borderTop: `1px solid ${V.line}` }}>
@@ -549,7 +595,8 @@ export default function Thread({ props }) {
   const t = useThread(item);
   const door = useWhyDoor();
   const sectionRef = useRef(null);
-  const width = useWidth(sectionRef);
+  const [width, measure] = useWidth();
+  const setSection = useCallback((node) => { sectionRef.current = node; measure(node); }, [measure]);
   const [toggled, setToggled] = useState({});         // messageId → open / closed, over the default
   const [unfolded, setUnfolded] = useState(false);
   const [draft, setDraft] = useState('');
@@ -718,6 +765,11 @@ export default function Thread({ props }) {
       const el = e.target;
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable || el.closest?.('[role="dialog"], [role="menu"], [contenteditable="true"]'))) return;
       if (document.querySelector('[role="dialog"][aria-modal="true"], [role="menu"]')) return;
+      // A reader in a hidden pane (display:none beside a wide view, while the overlay reader has
+      // the thread) stays quiet, so the overlay's keys run once.
+      if (!sectionRef.current || hiddenInPage(sectionRef.current)) return;
+      // Upstream's keymap acts on its own selection with the same letters: it wins, once.
+      if (upstreamOwnsKey(e.key, { shortcuts: st.shortcuts, selectedMessageId: st.selectedMessageId, hasListener: shortcutBus.has })) return;
       const key = String(e.key || '').toLowerCase();
       const now = Date.now();
       if (key === 'g') { lastG = now; return; }
@@ -890,13 +942,13 @@ export default function Thread({ props }) {
   const lastIdx = messages.length - 1;
   const defaultOpen = (m, i) => i === lastIdx || m.unread;
   const isOpen = (m, i) => toggled[m.id] ?? defaultOpen(m, i);
-  const foldable = messages.map((m, i) => (!defaultOpen(m, i) && toggled[m.id] !== true ? i : -1)).filter((i) => i >= 0);
-  const folded = !unfolded && foldable.length > FOLD_OVER ? new Set(foldable) : null;
+  const folds = unfolded ? new Map() : foldRuns(messages.map((m, i) => !defaultOpen(m, i) && toggled[m.id] !== true), FOLD_OVER);
   const messageList = (
     <div data-messages="" style={{ display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
       {messages.map((m, i) => {
-        if (folded?.has(i)) {
-          return i === foldable[0] ? <FoldRow key="fold" count={foldable.length} phone={phone} onOpen={() => setUnfolded(true)} /> : null;
+        const fold = folds.get(i);
+        if (fold) {
+          return fold.start === i ? <FoldRow key={`fold-${i}`} count={fold.count} phone={phone} onOpen={() => setUnfolded(true)} /> : null;
         }
         const latestOne = i === lastIdx;
         return (
@@ -1028,7 +1080,7 @@ export default function Thread({ props }) {
   if (phone) {
     const barBtn = { width: 44, height: 44, minWidth: 44, flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', borderRadius: 10, border: 0, background: 'transparent', color: V.ink, cursor: 'pointer', padding: 0 };
     return (
-      <section ref={sectionRef} className="hw-v2" aria-label={title} style={{ flex: 1, minHeight: 0, minWidth: 0, display: 'flex', flexDirection: 'column', position: 'relative', color: V.ink, fontFamily: V.sans, background: V.content }}>
+      <section ref={setSection} className="hw-v2" aria-label={title} style={{ flex: 1, minHeight: 0, minWidth: 0, display: 'flex', flexDirection: 'column', position: 'relative', color: V.ink, fontFamily: V.sans, background: V.content }}>
         <Sheet as="header" phone material="bar" radius={0} style={{ position: 'relative', zIndex: 3, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4, padding: 'calc(var(--sat, env(safe-area-inset-top, 0px)) + 4px) 4px 4px', borderBottom: `0.5px solid ${V.line2}` }}>
           <IconButton icon="chevron-left" size={44} label={tv('hedwig.v2.thread.back', 'Back')} onClick={() => phoneCtx?.back?.()} />
           <span style={{ flexGrow: 1 }} />
@@ -1064,7 +1116,7 @@ export default function Thread({ props }) {
 
   return (
     <section
-      ref={sectionRef}
+      ref={setSection}
       className="hw-v2 hw-scroll"
       aria-label={title}
       style={{ flex: 1, minHeight: 0, minWidth: 0, display: 'flex', flexDirection: 'column', overflowY: 'auto', overflowX: 'hidden', color: V.ink, fontFamily: V.sans, fontSize: 13, lineHeight: 1.45, fontVariantNumeric: 'tabular-nums', position: 'relative' }}

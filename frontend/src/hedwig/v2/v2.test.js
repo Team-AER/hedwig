@@ -76,6 +76,8 @@ const P = await import('./primitives.jsx');
 const StreamView = (await import('./StreamView.jsx')).default;
 const Screener = (await import('./Screener.jsx')).default;
 const Thread = (await import('./Thread.jsx')).default;
+const { foldRuns, upstreamOwnsKey, hiddenInPage } = await import('./Thread.jsx');
+const { shortcutBus } = await import('../../utils/shortcutBus.js');
 const Brief = (await import('./Brief.jsx')).default;
 const Today = (await import('./Today.jsx')).default;
 const HedwigSettingsV2 = (await import('./HedwigSettings.jsx')).default;
@@ -510,6 +512,26 @@ describe('Screener', () => {
     assert.equal(rescueLine(''), 'In your spam folder, but it looks real.');
     assert.equal(rescueLine('He replied in May.'), 'In your spam folder, but it looks real: he replied in May.');
   });
+
+  test('clicking a sender row opens their latest message in the reader; the decisions and Accept are not inside that button', async () => {
+    await cleanup();
+    useV2.setState({ selected: null });
+    await render(h(Screener));
+    const nordlys = document.querySelector('article[aria-label="Nordlys Travel"]');
+    const row = nordlys.querySelector('[data-row-button]');
+    assert.ok(row, 'the sender, subject and preview are one row button');
+    assert.equal(row.querySelectorAll('button').length, 0, 'no button inside the row button');
+    assert.ok(!row.contains(byLabel('Accept: Records', nordlys)), 'Accept is a sibling');
+    assert.ok(!row.contains(nordlys.querySelector('[role="radiogroup"]')), 'the decisions are siblings');
+    assert.ok(row.contains(nordlys.querySelector('[data-tldr]')), 'the preview opens it too');
+    await click(row);
+    assert.equal(useV2.getState().selected.messageId, 'm-nordlys');
+    assert.equal(document.querySelector('article[aria-label="Nordlys Travel"]').getAttribute('aria-current'), 'true');
+    await click(all('[role="radio"]', nordlys).find((r) => r.textContent === 'People'));
+    assert.equal(useV2.getState().selected.messageId, 'm-nordlys', 'a decision does not open anything else');
+    assert.equal(all('[role="radio"]', nordlys).find((r) => r.textContent === 'People').getAttribute('aria-checked'), 'true');
+    await cleanup();
+  });
 });
 
 describe('Thread', () => {
@@ -657,6 +679,81 @@ describe('Thread', () => {
     assert.equal(bar.style.flexShrink, '0');
     assert.equal(bar.style.position, 'sticky');
     assert.ok(list.compareDocumentPosition(bar) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
+  // Regression: E/R/A/F/S are upstream's keys too. With upstream's list or reading pane mounted
+  // and a message selected there, one press ran both upstream's action and the reader's.
+  test('keys: a letter upstream acts on (a listener mounted, a message selected there) is left to upstream', async () => {
+    await cleanup();
+    await render(h(Thread, { props: { item: await annaItem() } }));
+    await settle(60);
+    const key = async (k) => { await React.act(async () => { document.body.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true })); }); await settle(); };
+    const star = () => {};
+    shortcutBus.on('toggleStar', star);
+    useStore.setState({ selectedMessageId: 'upstream-1' });
+    try {
+      notifications.length = 0;
+      await key('s');
+      assert.equal(notifications.length, 0, 'S is upstream\'s star here, not Set Aside as well');
+    } finally {
+      shortcutBus.off('toggleStar', star);
+      useStore.setState({ selectedMessageId: null });
+    }
+    await key('s');
+    assert.equal(notifications.at(-1).title, 'Set aside.', 'with nobody upstream listening, S is Set Aside');
+    assert.equal(upstreamOwnsKey('e', { selectedMessageId: 'x', hasListener: (a) => a === 'archive' }), true);
+    assert.equal(upstreamOwnsKey('e', { selectedMessageId: null, hasListener: () => true }), false, 'no upstream selection: nothing to act on');
+    assert.equal(upstreamOwnsKey('e', { shortcuts: { archive: 'y' }, selectedMessageId: 'x', hasListener: () => true }), false, 'the user moved archive off E');
+    assert.equal(upstreamOwnsKey('h', { selectedMessageId: 'x', hasListener: () => true }), false, 'H is not upstream\'s');
+  });
+
+  // Regression: a reader left mounted in a pane hidden beside a wide view (display:none) ran its
+  // keys beside the overlay reader, so E archived twice.
+  test('keys: a reader in a hidden pane stays quiet', async () => {
+    await cleanup();
+    await render(h('div', { style: { display: 'none' } }, h(Thread, { props: { item: await annaItem() } })));
+    await settle(60);
+    notifications.length = 0;
+    await React.act(async () => { document.body.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 's', bubbles: true, cancelable: true })); });
+    await settle();
+    assert.equal(notifications.length, 0);
+    assert.equal(hiddenInPage(document.querySelector('section.hw-v2')), true);
+  });
+
+  // Regression: the width observer attached once at mount, when the reader showed "Pick a
+  // conversation" (no section), so the toolbar never folded after the first selection.
+  test('the toolbar folds at a narrow reader width even when the reader mounted empty', async () => {
+    await cleanup();
+    const RO = globalThis.ResizeObserver;
+    const observed = [];
+    globalThis.ResizeObserver = class { constructor(cb) { this.cb = cb; } observe(el) { observed.push(el); this.cb([{ contentRect: { width: 600 } }]); } unobserve() {} disconnect() {} };
+    try {
+      await render(h(Thread, { props: {} }));
+      const item = await annaItem();
+      await React.act(async () => { root.render(h(Thread, { props: { item } })); });
+      await settle(60);
+      assert.ok(observed.some((el) => el.tagName === 'SECTION'), 'the reader section is observed');
+      const bar = document.querySelector('[role="toolbar"]');
+      assert.ok(byLabel('Done (E)', bar));
+      assert.equal(byLabel('Reply Later (L)', bar), null, 'Reply Later folds into More below 900px');
+      assert.equal(byLabel('Move (V)', bar), null, 'Move folds into More below 900px');
+    } finally { globalThis.ResizeObserver = RO; }
+  });
+});
+
+// Regression: unread messages between read ones made the fold hide messages from both sides of
+// the unread one and show the fold row before it, out of order.
+describe('foldRuns', () => {
+  test('only an unbroken run of more than four collapsed messages folds, where it starts', () => {
+    const T = true; const F = false;
+    assert.equal(foldRuns([T, T, T, F, T, T, F]).size, 0, 'five collapsed but split by an unread one: nothing folds');
+    const two = foldRuns([T, T, T, T, T, F, T, T, T, T, T, T, F]);
+    assert.deepEqual(two.get(0), { start: 0, count: 5 });
+    assert.deepEqual(two.get(4), { start: 0, count: 5 });
+    assert.equal(two.has(5), false);
+    assert.deepEqual(two.get(6), { start: 6, count: 6 });
+    assert.equal(two.has(12), false);
+    assert.equal(foldRuns([T, T, T, T, F]).size, 0, 'four do not fold');
   });
 });
 
