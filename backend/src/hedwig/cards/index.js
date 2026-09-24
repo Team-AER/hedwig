@@ -1,14 +1,16 @@
 // cards module (v2 stream G): Records cards from mail — receipts, invoices, subscriptions, deliveries,
 // travel, events, one-time codes, and deadlines (the commitments view). Deterministic detectors
 // first, the Reflex model for sorted Records mail they miss; routes for the list, one message's
-// cards, edits (corrections), dismissals, ledger views, the Brief's "Today" figures and card actions.
+// cards, edits (corrections), dismissals, "Not a subscription" / "Not a <kind>" and their undo, the
+// owner's feedback, ledger views, the Brief's "Today" figures and card actions.
 import { getConfig } from '../config.js';
 import { defineJob } from '../jobs.js';
 import { defineSchedule } from '../schedule.js';
 import { validTimezone } from '../insights/time.js';
 import { isUuid } from '../context/util.js';
 import { CARD_KINDS } from './kinds.js';
-import { listCards, getCard, patchCard, dismissCard, cardsForMessages } from './store.js';
+import { listCards, getCard, patchCard, dismissCard, restoreCard, cardsForMessages } from './store.js';
+import { listFeedback, feedbackCount } from './feedback.js';
 import { ledger, LEDGERS } from './ledger.js';
 import { cardsToday } from './today.js';
 import { cardActions } from './actions.js';
@@ -62,7 +64,16 @@ export default {
       }),
     })));
 
-    r.get('/cards/today', handle(async (req) => cardsToday(req.session.userId)));
+    // An array of figures (the Brief's shape). ?feedback=1 wraps it with how much feedback the owner
+    // has given: { figures, feedback: { count, recent } } (recent: the last 7 days).
+    r.get('/cards/today', handle(async (req) => {
+      const figures = await cardsToday(req.session.userId);
+      if (req.query.feedback !== '1' && req.query.feedback !== 'true') return figures;
+      return { figures, feedback: await feedbackCount(req.session.userId) };
+    }));
+
+    // The owner's corrections, dismissals and "Not a …" verdicts, newest first: { count, recent, feedback: [...] }.
+    r.get('/cards/feedback', handle(async (req) => listFeedback(req.session.userId, { limit: req.query.limit })));
 
     r.get('/cards/ledger/:kind', handle(async (req, res) => {
       if (!LEDGERS[req.params.kind]) return res.status(400).json({ error: `ledger must be one of ${Object.keys(LEDGERS).join(', ')}` });
@@ -93,6 +104,12 @@ export default {
     }, { idParam: 'id' }));
 
     r.post('/cards/:id/dismiss', handle((req) => dismissCard(req.session.userId, req.params.id), { idParam: 'id' }));
+    // A subscription that is not one: hidden, and its merchant is never derived as a subscription again.
+    r.post('/cards/:id/not-recurring', handle((req) => dismissCard(req.session.userId, req.params.id, 'not_recurring'), { idParam: 'id' }));
+    // "Not a receipt / an event / …": hidden, and that kind is not made again for its merchant.
+    r.post('/cards/:id/not-kind', handle((req) => dismissCard(req.session.userId, req.params.id, 'not_this_kind'), { idParam: 'id' }));
+    // The undo of the three above.
+    r.post('/cards/:id/restore', handle((req) => restoreCard(req.session.userId, req.params.id), { idParam: 'id' }));
   },
 
   api({ imapManager }) {

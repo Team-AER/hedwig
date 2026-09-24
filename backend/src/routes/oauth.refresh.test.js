@@ -7,7 +7,7 @@ vi.mock('../services/db.js', () => ({ query: vi.fn(), withTransaction: vi.fn() }
 vi.mock('../services/encryption.js', () => ({ encrypt: (v) => v, decrypt: (v) => v }));
 
 const { query } = await import('../services/db.js');
-const { refreshMicrosoftToken } = await import('./oauth.js');
+const { refreshMicrosoftToken, refreshGoogleToken } = await import('./oauth.js');
 
 const OK_TOKENS = { access_token: 'new-access', refresh_token: 'new-refresh', expires_in: 3600 };
 const res = (ok, body) => ({ ok, json: async () => body });
@@ -110,5 +110,50 @@ describe('Microsoft token refresh — public (device-code) vs confidential (auth
     await expect(refreshMicrosoftToken({ id: 'a5', oauth_refresh_token: 'stored-rt', oauth_public_client: false }))
       .rejects.toThrow(/refresh token expired/);
     expect(fetchMock).toHaveBeenCalledTimes(1); // no retry on a non-AADSTS90023 error
+  });
+});
+
+describe('token refresh goes to the endpoint of the account provider', () => {
+  const ALIASES = ['MICROSOFT_TENANT', 'MICROSOFT_CLIENT_ID', 'MS_TENANT_ID', 'MS_CLIENT_ID', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'];
+  let saved;
+  beforeEach(() => {
+    query.mockReset();
+    query.mockResolvedValue({ rows: [] });
+    saved = Object.fromEntries(ALIASES.map(k => [k, process.env[k]]));
+    for (const k of ALIASES) delete process.env[k];
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    for (const k of ALIASES) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  });
+
+  it('Microsoft: posts to the tenant from MICROSOFT_TENANT with the MICROSOFT_CLIENT_ID alias', async () => {
+    process.env.MICROSOFT_CLIENT_ID = 'alias-client';
+    process.env.MICROSOFT_TENANT = 'contoso.onmicrosoft.com';
+    const fetchMock = vi.fn().mockResolvedValue(res(true, OK_TOKENS));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await refreshMicrosoftToken({ id: 'm1', oauth_refresh_token: 'stored-rt', oauth_public_client: true });
+
+    expect(fetchMock.mock.calls[0][0]).toBe('https://login.microsoftonline.com/contoso.onmicrosoft.com/oauth2/v2.0/token');
+    expect(bodyOf(fetchMock.mock.calls[0]).get('client_id')).toBe('alias-client');
+    expect(bodyOf(fetchMock.mock.calls[0]).get('scope')).toMatch(/IMAP\.AccessAsUser\.All/);
+  });
+
+  it('Google: posts to the Google token endpoint without a scope', async () => {
+    process.env.GOOGLE_CLIENT_ID = 'g-client';
+    process.env.GOOGLE_CLIENT_SECRET = 'g-secret';
+    const fetchMock = vi.fn().mockResolvedValue(res(true, { access_token: 'a', expires_in: 3600 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await refreshGoogleToken({ id: 'g1', oauth_refresh_token: 'stored-rt' });
+
+    expect(fetchMock.mock.calls[0][0]).toBe('https://oauth2.googleapis.com/token');
+    expect(bodyOf(fetchMock.mock.calls[0]).get('client_secret')).toBe('g-secret');
+    expect(bodyOf(fetchMock.mock.calls[0]).has('scope')).toBe(false);
+    expect(result.oauth_access_token).toBe('a');
   });
 });

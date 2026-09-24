@@ -8,7 +8,7 @@
 // Reply Later and Delete, which go through the optimistic layer (actions.js) with Undo. The row's main area is one real button (Enter opens the thread); the reason, the
 // quiet door and the hover buttons are siblings, never nested in it. A reminder row (synthetic, no
 // message) has nothing to open or explain.
-import { memo, useCallback, useEffect, useId, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import i18n from 'i18next';
 import { useStore } from '../../store/index.js';
 import { useHedwig } from '../store.js';
@@ -20,7 +20,7 @@ import { useV2, liveRows } from './state.js';
 import { snoozeTimes } from './mail.js';
 import { performAction } from './actions.js';
 import { Avatar, Hair, IconButton, Num, Reason, SectionLabel, V } from './primitives.jsx';
-import { senderName, tldrOf, tldrLighter } from './format.js';
+import { fullTime, senderName, tldrOf, tldrLighter } from './format.js';
 import { tv } from './i18n.js';
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
@@ -113,6 +113,10 @@ export const StreamRow = memo(function StreamRow({ item, onOpen, onWhy, phone = 
   const [hot, setHot] = useState(false);
   const [within, setWithin] = useState(false);
   const [ring, setRing] = useState(false);
+  // The selection can move without the pointer (the reader's Done and Delete go on to the next
+  // row, j / k, a notification): keep the selected row on screen, clear of the sticky header.
+  const rowRef = useRef(null);
+  useEffect(() => { if (selected) rowRef.current?.scrollIntoView?.({ block: 'nearest' }); }, [selected]);
   const synthetic = Boolean(item.synthetic || !item.messageId);
   const name = senderName(item.from) || tv('hedwig.v2.row.unknownSender', 'Unknown sender');
   const subject = item.subject || tv('hedwig.v2.row.noSubject', '(no subject)');
@@ -132,6 +136,7 @@ export const StreamRow = memo(function StreamRow({ item, onOpen, onWhy, phone = 
 
   return (
     <article
+      ref={rowRef}
       className="hw-row"
       aria-current={selected ? 'true' : undefined}
       data-selected={selected ? 'true' : undefined}
@@ -141,7 +146,7 @@ export const StreamRow = memo(function StreamRow({ item, onOpen, onWhy, phone = 
       onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setWithin(false); }}
       style={{
         position: 'relative', display: 'flex', flexDirection: 'column', boxSizing: 'border-box',
-        minHeight: phone ? 88 : 76, padding: phone ? '12px 8px' : '10px 14px 10px 8px', borderRadius: 8,
+        minHeight: phone ? 88 : 76, padding: phone ? '12px 8px' : '10px 14px 10px 8px', borderRadius: 8, scrollMarginTop: phone ? 0 : 28,
         background: selected ? V.accentTint : undefined,
         boxShadow: ring ? `inset 0 0 0 2px ${V.accent}` : undefined,
       }}
@@ -170,7 +175,7 @@ export const StreamRow = memo(function StreamRow({ item, onOpen, onWhy, phone = 
               {meta.flagged && <Icon name="flag" size={12} style={{ color: V.attention }} title={tv('hedwig.v2.row.flagged', 'Flagged')} />}
               {meta.attachments && <Icon name="paperclip" size={12} title={tv('hedwig.v2.row.attachments', 'Has attachments')} />}
               {meta.count > 0 && <Num size={phone ? 13 : 11} title={tv('hedwig.v2.row.messages', '{{n}} messages', { n: meta.count })}>{meta.count}</Num>}
-              <Num size={phone ? 13 : 11}>{rowDate(item.date)}</Num>
+              <Num size={phone ? 13 : 11} title={fullTime(item.date) || undefined}>{rowDate(item.date)}</Num>
             </span>
           </span>
           <span style={{ fontSize: phone ? 15 : 13, lineHeight: phone ? '20px' : '18px', fontWeight: 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: quietWhy ? 20 : 0 }}>

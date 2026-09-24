@@ -12,6 +12,7 @@ import { detectDeterministic, calendarAttachments, dataSignal, needsFill } from 
 import { findSubscriptions } from './subscriptions.js';
 import { upsertCard } from './store.js';
 import { normFields, normField, dedupeKey } from './kinds.js';
+import { loadBlocks, isBlocked, feedbackForMessages } from './feedback.js';
 
 // v2 (audit 2026-09-24): order/booking/invoice patterns, the Reflex fill for partial pattern cards and
 // for People/Records mail with data signals whatever its bundle. Bumping it rescans sorted mail.
@@ -174,6 +175,9 @@ export async function runCardsJob({ userId, messageIds = [] }, { now = new Date(
   const candidates = [];
   let stored = 0;
   let money = false;
+  // A kind the owner rejected for a merchant ("Not a subscription", "Not an event") is not made again.
+  const blocks = rows.length ? await loadBlocks(userId) : null;
+  let blocked = 0;
   for (const row of rows) {
     const cal = calendarAttachments(row.attachments, { maxBytes: cfg['cards.icsMaxBytes'] });
     const fetched = parts.get(row.id) || [];
@@ -183,7 +187,9 @@ export async function runCardsJob({ userId, messageIds = [] }, { now = new Date(
       waiting.push(row.id);
       continue;
     }
-    const cards = detectDeterministic(row, { icsParts: fetched.filter((p) => p.text).map((p) => ({ text: p.text, filename: p.filename })), tz });
+    const detected = detectDeterministic(row, { icsParts: fetched.filter((p) => p.text).map((p) => ({ text: p.text, filename: p.filename })), tz });
+    const cards = detected.filter((c) => !isBlocked(c, blocks, row));
+    blocked += detected.length - cards.length;
     for (const c of cards) {
       if (await upsertCard(userId, c, { messageDate: row.date })) { stored++; if (c.kind === 'receipt' || c.kind === 'invoice') money = true; }
     }
@@ -208,6 +214,8 @@ export async function runCardsJob({ userId, messageIds = [] }, { now = new Date(
   let partial = null;
   for (let i = 0; i < toAsk.length; i += size) {
     const batch = toAsk.slice(i, i + size);
+    // The owner's recent corrections of cards from each sender, shown to the model with its mail.
+    const corrections = await feedbackForMessages(userId, batch);
     const view = batch.map((r, k) => ({
       id: `m${k + 1}`, row: r,
       text: messageText(r, { maxChars: cfg['cards.textChars'], stripQuotes: false }),
@@ -220,6 +228,7 @@ export async function runCardsJob({ userId, messageIds = [] }, { now = new Date(
         items: view.map((v) => ({
           id: v.id, from: v.row.from_name ? `${v.row.from_name} <${v.row.from_email}>` : v.row.from_email, date: v.row.date ? new Date(v.row.date).toISOString() : '',
           subject: v.row.subject, bundle: v.row.bundle, text: v.text, attachments: v.attachments,
+          feedback: corrections.get(v.row.id) || [],
         })),
       }, { userId, feature: 'cards', lane: 'background' });
     } catch (err) {
@@ -248,6 +257,7 @@ export async function runCardsJob({ userId, messageIds = [] }, { now = new Date(
           layer: (res.provenance.servedTier || (res.provenance.escalated ? 'reasoning' : 'reflex')) === 'reasoning' ? 'reasoning' : 'reflex',
         });
         if (!card) continue;
+        if (isBlocked(card, blocks, v.row)) { blocked++; continue; }
         const twin = twinOf(card, v.row.patternCards);
         if (twin) card.dedupeKey = dedupeKey(twin); // fill the pattern card rather than make a second one
         if (await upsertCard(userId, card, { messageDate: v.row.date })) { n++; stored++; if (card.kind === 'receipt' || card.kind === 'invoice') money = true; }
@@ -263,30 +273,45 @@ export async function runCardsJob({ userId, messageIds = [] }, { now = new Date(
   await markScan(userId, [...new Set(deferred)], 'deferred', { error: partial });
   if (gone.length) await markScan(userId, gone, 'done');
   if (money) await syncSubscriptions(userId, { cfg, now });
-  const note = `${rows.length} messages, ${stored} cards, ${reflexed.size} via reflex, ${waiting.length} waiting for calendar parts, ${deferred.length} deferred`;
+  const note = `${rows.length} messages, ${stored} cards, ${reflexed.size} via reflex, ${waiting.length} waiting for calendar parts, ${deferred.length} deferred${blocked ? `, ${blocked} left out by the owner's feedback` : ''}`;
   return partial || deferred.length ? { status: 'partial', note: `${note}${partial ? ` (${partial})` : ''}` } : { status: 'done', note };
 }
 
-/** Recompute subscription cards from the user's receipts and invoices. */
+/**
+ * Recompute subscription cards from the user's receipts and invoices. Derived cards the finder no
+ * longer finds are hidden (dismissed_reason 'not_recurring'; they come back if the charges do),
+ * except ones the owner confirmed or gave a cadence; the owner's own cards are never touched.
+ * Merchants the owner called one-off are never derived.
+ */
 export async function syncSubscriptions(userId, { cfg = null, now = new Date() } = {}) {
   const config = cfg || await getConfig(userId);
   const { rows } = await query(
-    `SELECT c.id, c.kind, c.message_id, c.fields, c.sources, m.date
+    `SELECT c.id, c.kind, c.message_id, c.fields, c.sources, m.date, m.subject, LEFT(m.snippet, 300) AS snippet,
+            ARRAY(SELECT DISTINCT k.kind FROM hedwig_cards k
+                   WHERE k.user_id = c.user_id AND k.id <> c.id AND k.dismissed_at IS NULL
+                     AND (k.message_id = c.message_id OR c.message_id = ANY(k.message_ids))) AS sibling_kinds
        FROM hedwig_cards c LEFT JOIN messages m ON m.id = c.message_id
       WHERE c.user_id = $1 AND c.kind IN ('receipt', 'invoice') AND c.dismissed_at IS NULL`,
     [userId],
   );
   const charges = rows.map((r) => ({
     cardId: r.id,
+    kind: r.kind,
     messageId: r.message_id,
     merchant: r.fields.merchant || r.fields.issuer,
     amount: r.fields.total ?? r.fields.amount,
     currency: r.fields.currency || null,
     date: r.fields.date || r.fields.issuedDate || (r.date ? new Date(r.date).toISOString().slice(0, 10) : null),
+    orderNumber: r.kind === 'receipt' ? r.fields.orderNumber || null : null,
+    siblingKinds: r.sibling_kinds || [],
+    subject: r.subject || null,
+    snippet: r.snippet || null,
     sources: r.sources,
   }));
-  const subs = findSubscriptions(charges, { minCharges: config['cards.subscriptionMinCharges'], now });
+  const { oneOff } = await loadBlocks(userId);
+  const subs = findSubscriptions(charges, { minCharges: config['cards.subscriptionMinCharges'], now, oneOff });
   const byCard = new Map(charges.map((c) => [c.cardId, c]));
+  const kept = [];
   let n = 0;
   for (const s of subs) {
     const last = byCard.get(s.cardIds[s.cardIds.length - 1]) || {};
@@ -301,10 +326,26 @@ export async function syncSubscriptions(userId, { cfg = null, now = new Date() }
     const res = await upsertCard(userId, { kind: 'subscription', messageId: s.lastMessageId, fields, sources, confidence: 0.8, layer: 'derived' }, {});
     if (res) {
       n++;
-      await query('UPDATE hedwig_cards SET message_ids = (SELECT ARRAY(SELECT DISTINCT unnest(message_ids || $2::uuid[]))) WHERE id = $1', [res.id, s.messageIds]);
+      kept.push(res.id);
+      // A card this finder hid earlier comes back when the charges show it again; the owner's dismissals stay.
+      await query(
+        `UPDATE hedwig_cards SET message_ids = (SELECT ARRAY(SELECT DISTINCT unnest(message_ids || $2::uuid[]))),
+                dismissed_at = CASE WHEN dismissed_reason = 'not_recurring' THEN NULL ELSE dismissed_at END,
+                dismissed_reason = CASE WHEN dismissed_reason = 'not_recurring' THEN NULL ELSE dismissed_reason END
+          WHERE id = $1`,
+        [res.id, s.messageIds],
+      );
     }
   }
-  return n;
+  const { rowCount } = await query(
+    `UPDATE hedwig_cards c SET dismissed_at = NOW(), dismissed_reason = 'not_recurring', updated_at = NOW()
+      WHERE c.user_id = $1 AND c.kind = 'subscription' AND c.layer = 'derived' AND c.dismissed_at IS NULL
+        AND NOT (c.id = ANY($2::uuid[]))
+        AND NOT (c.user_edited AND c.sources->'cadence'->>'via' = 'user' AND c.fields ? 'cadence')
+        AND NOT EXISTS (SELECT 1 FROM hedwig_card_feedback f WHERE f.user_id = c.user_id AND f.card_id = c.id AND f.verdict = 'confirmed')`,
+    [userId, kept],
+  );
+  return { found: n, hidden: rowCount || 0 };
 }
 
 // ── Scheduling ──────────────────────────────────────────────────────────────

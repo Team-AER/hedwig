@@ -70,16 +70,20 @@ export function sortRows(rows, field, dir = 'desc') {
   });
 }
 
-/** Totals per currency. Pure. */
+/**
+ * Totals per currency. Pure. With `monthly`, a subscription without a known cadence adds nothing
+ * to the monthly figure (it was "₹0 a month") and is counted in unknownCadence instead.
+ */
 export function totalsByCurrency(rows, { monthly = false } = {}) {
   const by = new Map();
   for (const r of rows) {
     if (r.amount == null) continue;
     const cur = r.currency || '?';
-    const t = by.get(cur) || { currency: r.currency || null, total: 0, count: 0, ...(monthly ? { monthly: 0 } : {}) };
+    const t = by.get(cur) || { currency: r.currency || null, total: 0, count: 0, ...(monthly ? { monthly: 0, unknownCadence: 0 } : {}) };
     t.total += Number(r.amount);
     t.count++;
-    if (monthly && r.cadence) t.monthly += Number(r.amount) * (MONTHLY[r.cadence] || 0);
+    if (monthly && MONTHLY[r.cadence]) t.monthly += Number(r.amount) * MONTHLY[r.cadence];
+    else if (monthly) t.unknownCadence++;
     by.set(cur, t);
   }
   return [...by.values()].map((t) => ({ ...t, total: round2(t.total), ...(monthly ? { monthly: round2(t.monthly) } : {}) }))

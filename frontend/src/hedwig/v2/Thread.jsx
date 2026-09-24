@@ -21,13 +21,13 @@ import MessageHeaderModal from '../../components/MessageHeaderModal.jsx';
 import AttachmentChips from '../../components/AttachmentChips.jsx';
 import { mailDarkWanted, normaliseMailDark, senderMailDark, setSenderMailDark, subscribeSenderMailDark } from '../../utils/mailDarkMode.js';
 import { useV2 } from './state.js';
-import { v2Api, isMockMode, SORT_EVENTS } from './client.js';
+import { v2Api, isMockMode, SORT_EVENTS, announceSortChange } from './client.js';
 import { isMissing, useRegenerate, useWork } from './hooks.js';
 import { loadThread, loadFullBody, regenerateStory, regenerateTldr, isRewriting } from './threadData.js';
 import { putTldr } from './tldrs.js';
 import { isDraftMessage, openDraft, getReplyDraft, setReplyDraft, clearReplyDraft } from './drafts.js';
 import {
-  snooze, snoozeTimes, prepareReply, guardReply, sendPrepared, watchForReply, settingValue,
+  snooze, snoozeTimes, prepareReply, guardReply, sendPrepared, watchForReply, settingValue, markRead,
   openReplyComposer, openReplyAllComposer, openForwardComposer, folderList, unsubscribe, blockSender,
 } from './mail.js';
 import { performAction } from './actions.js';
@@ -68,6 +68,20 @@ export function upstreamOwnsKey(key, { shortcuts = {}, selectedMessageId = null,
   if (!selectedMessageId || !key) return false;
   const action = buildKeyMap(shortcuts || {})[key];
   return Boolean(action) && Boolean(hasListener(action));
+}
+
+/**
+ * The reader's people line: the other senders (up to three, by address, so your own name never
+ * shows), then "and you"; "You" when every message is yours. `isMine(m)` tells yours apart.
+ */
+export function threadPeople(messages, isMine) {
+  const others = [];
+  for (const m of messages || []) {
+    const n = isMine(m) ? '' : senderName(m.from);
+    if (n && !others.includes(n)) others.push(n);
+  }
+  if (!others.length) return tv('hedwig.v2.thread.you', 'You');
+  return tv('hedwig.v2.thread.andYou', '{{names}} and you', { names: others.slice(0, 3).join(', ') });
 }
 
 /** True when the element, or an ancestor, is display:none (a pane hidden beside a wide view). */
@@ -971,6 +985,8 @@ export default function Thread({ props }) {
     clearReplyDraft(threadKey);
     setSavedText(null);
     setWarnings(null);
+    // Send was disabled while it ran, which drops focus to the page: give it back to the field.
+    requestAnimationFrame(() => inputRef.current?.focus());
     if (watchOn) { setWatchOn(false); await watchForReply(threadId, remindDays); }
   });
   const warned = warnings && warnings.body === draft.trim() ? warnings.list : null;
@@ -1022,6 +1038,28 @@ export default function Thread({ props }) {
   }, [keysOn]);
 
   // The reply field grows while anything in the bar has focus, and while there is a draft.
+  // Opening a conversation reads it, as upstream's reading pane does: at once, after the delay
+  // in Settings, or not at all (markReadBehavior). Once per opening, so Mark as unread (U) sticks.
+  const readFor = useRef(null);
+  useEffect(() => {
+    if (!item?.messageId || !data || readFor.current === threadKey) return undefined;
+    const ids = messages.filter((m) => m.unread && m.id && !isDraft(m)).map((m) => m.id);
+    const rowUnread = useV2.getState().patches[item.messageId]?.unread ?? item.unread;
+    if (!ids.length && !rowUnread) return undefined;
+    const { markReadBehavior, markReadDelay } = useStore.getState();
+    if (markReadBehavior === 'manual') return undefined;
+    const go = () => {
+      readFor.current = threadKey;
+      const all = [...new Set([...ids, item.messageId])];
+      const before = useV2.getState().patchRows(all, { unread: false });
+      if (isMockMode()) return;
+      markRead(all).then(() => announceSortChange({ read: all, on: true })).catch(() => useV2.getState().restorePatches(before));
+    };
+    if (markReadBehavior !== 'delay') { go(); return undefined; }
+    const timer = setTimeout(go, (Number(markReadDelay) || 1) * 1000);
+    return () => clearTimeout(timer);
+  }, [threadKey, data]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const expanded = focused || Boolean(draft) || watchOn || Boolean(warned);
   useLayoutEffect(() => {
     const el = inputRef.current;
@@ -1040,10 +1078,9 @@ export default function Thread({ props }) {
   }
 
   const title = data?.subject || item.subject || '';
-  const people = data?.participants || (data?.people?.length
-    ? tv('hedwig.v2.thread.andYou', '{{names}} and you', { names: data.people.filter((p) => !myEmails.has(String(p).toLowerCase())).slice(0, 3).join(', ') || senderName(item.from) })
-    : senderName(item.from));
-  const meta = [people, messages.length ? tvn(messages.length, ['hedwig.v2.thread.messagesOne', '1 message'], ['hedwig.v2.thread.messagesMany', '{{n}} messages']) : null, !phone ? data?.label : null].filter(Boolean).join(' · ');
+  const people = data?.participants || (messages.length ? threadPeople(messages, isMine) : senderName(item.from));
+  // A count only when there is more than one message: "1 message" says nothing.
+  const meta = [people, messages.length > 1 ? tvn(messages.length, ['hedwig.v2.thread.messagesOne', '1 message'], ['hedwig.v2.thread.messagesMany', '{{n}} messages']) : null, !phone ? data?.label : null].filter(Boolean).join(' · ');
   const replyTo = firstName(latest?.from || item.from);
   const narrow = !phone && width != null && width < NARROW_READER;
   const tight = !phone && width != null && width < TIGHT_READER;

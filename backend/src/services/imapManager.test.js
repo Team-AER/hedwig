@@ -69,11 +69,24 @@ describe('providerProfile — host detection', () => {
 
   it.each([
     ['outlook.office365.com'],
+    ['outlook.office.com'],
+    ['contoso-com.mail.protection.outlook.com'],
     ['imap.hotmail.com'],
     ['imap.live.com'],
   ])('detects microsoft for %s', host => {
     expect(providerProfile(account(host)).speculativeFetch).toBe(true);
     expect(providerProfile(account(host)).pushesFlags).toBe(true);
+    expect(providerProfile(account(host))).toBe(providerProfile(account('', 'microsoft')));
+  });
+
+  it('microsoft re-issues IDLE before Exchange ends it at 30 min, with a gentle NOOP fallback', () => {
+    const p = providerProfile(account('outlook.office365.com'));
+    expect(p.usesIdle).toBe(true);
+    expect(p.idleKeepaliveMs).toBeLessThanOrEqual(29 * 60 * 1000);
+    expect(p.idleKeepaliveMs).toBeGreaterThanOrEqual(10 * 60 * 1000);
+    expect(p.keepaliveNoopMs).toBeGreaterThanOrEqual(5 * 60 * 1000);
+    expect(p.keepaliveNoopMs).toBeLessThan(30 * 60 * 1000);
+    expect(p.disableCompression).toBeFalsy();
   });
 
   it.each([
@@ -261,6 +274,24 @@ describe('makeClientCfg — per-provider compression opt-out', () => {
     expect(profile.disableCompression).toBe(true);
     expect(profile.keepaliveNoopMs).toBeGreaterThan(0);
     expect(profile.keepaliveNoopMs).toBeLessThan(300 * 1000);
+  });
+});
+
+// ── makeClientCfg — Microsoft XOAUTH2 ───────────────────────────────────────
+
+describe('makeClientCfg — Microsoft 365 / Outlook.com OAuth', () => {
+  it('authenticates with the stored UPN and access token (SASL XOAUTH2), not a password', async () => {
+    const { decrypt } = await import('./encryption.js');
+    decrypt.mockImplementation(v => (v === 'enc-token' ? 'plain-token' : 'pw'));
+    const cfg = makeClientCfg({
+      ...baseAccount, imap_host: 'outlook.office365.com', imap_port: 993,
+      oauth_provider: 'microsoft', oauth_access_token: 'enc-token',
+      auth_user: 'jane@contoso.onmicrosoft.com', email_address: 'jane@contoso.com',
+    }, resolved, { enableIdle: true, idleKeepaliveMs: providerProfile({ imap_host: 'outlook.office365.com' }).idleKeepaliveMs });
+    expect(cfg.auth).toEqual({ user: 'jane@contoso.onmicrosoft.com', accessToken: 'plain-token' });
+    expect(cfg.maxIdleTime).toBeLessThanOrEqual(29 * 60 * 1000);
+    expect(cfg.disableCompression).toBeUndefined();
+    decrypt.mockReset();
   });
 });
 

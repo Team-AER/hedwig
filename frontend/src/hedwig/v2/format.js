@@ -24,7 +24,7 @@ export function listTime(value, now = new Date()) {
   if (diff <= 0) return d.toLocaleTimeString(locale(), { hour: '2-digit', minute: '2-digit', hour12: false });
   if (diff === 1) return tv('hedwig.v2.time.yesterday', 'Yesterday');
   if (diff < 7) return d.toLocaleDateString(locale(), { weekday: 'short' });
-  return d.toLocaleDateString(locale(), { day: 'numeric', month: 'short' });
+  return d.toLocaleDateString(locale(), { day: 'numeric', month: 'short', ...(d.getFullYear() !== now.getFullYear() ? { year: 'numeric' } : {}) });
 }
 
 /** "4 days" style age, for Waiting on and Needs you rows in the Brief. */
@@ -98,10 +98,12 @@ export function money(amount, currency) {
   return currency ? `${num} ${currency}` : num;
 }
 
-export function fullTime(value) {
+/** "Wed 24 Sep, 09:14"; the year too when it is not this year's ("Mon 12 Sep 2025, 09:14"). */
+export function fullTime(value, now = new Date()) {
   const d = toDate(value);
   if (!d) return '';
-  return d.toLocaleString(locale(), { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
+  const year = d.getFullYear() !== now.getFullYear() ? { year: 'numeric' } : {};
+  return d.toLocaleString(locale(), { weekday: 'short', day: 'numeric', month: 'short', ...year, hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
 export function senderName(from) {

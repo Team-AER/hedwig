@@ -5,11 +5,16 @@ vi.mock('../../services/db.js', () => ({ query: vi.fn(async () => ({ rows: [] })
 vi.mock('../config.js', () => ({ getConfig: vi.fn(async () => ({ enabled: true, 'insights.timezone': 'UTC', 'cards.scanEverySec': 60 })) }));
 vi.mock('./store.js', () => ({
   listCards: vi.fn(async () => []), getCard: vi.fn(async () => null), patchCard: vi.fn(async () => null), dismissCard: vi.fn(async () => null),
+  restoreCard: vi.fn(async () => null),
+}));
+vi.mock('./feedback.js', () => ({
+  listFeedback: vi.fn(async () => ({ count: 2, recent: 1, feedback: [{ verdict: 'not_recurring' }] })), feedbackCount: vi.fn(async () => ({ count: 2, recent: 1 })),
 }));
 vi.mock('./today.js', () => ({ cardsToday: vi.fn(async () => [{ kind: 'delivery', figure: 'Today', title: 'Shoes', caption: 'DHL, out for delivery', messageId: 'm', cardId: 'c' }]) }));
 vi.mock('../ask2/history.js', () => ({ getAnswer: vi.fn(async () => null), answerFeedback: vi.fn(async () => ({ ok: true, feedback: { wrong: true } })) }));
 
 const store = await import('./store.js');
+const feedback = await import('./feedback.js');
 const history = await import('../ask2/history.js');
 const cardsModule = (await import('./index.js')).default;
 const ask2Module = (await import('../ask2/index.js')).default;
@@ -67,6 +72,30 @@ describe('cards routes', () => {
     expect((await send('POST', `/cards/${ID}/dismiss`)).status).toBe(200);
     store.patchCard.mockRejectedValueOnce(Object.assign(new Error('total is not a field'), { status: 400 }));
     expect((await send('PATCH', `/cards/${ID}`, { fields: { x: 1 } })).status).toBe(400);
+  });
+
+  it('"Not a subscription", "Not a <kind>" and their undo hide and restore the card with the owner\'s reason', async () => {
+    store.dismissCard.mockResolvedValue({ ok: true, id: ID, verdict: 'not_recurring', feedbackId: 'f' });
+    expect((await send('POST', `/cards/${ID}/not-recurring`)).status).toBe(200);
+    expect(store.dismissCard).toHaveBeenLastCalledWith(USER, ID, 'not_recurring');
+    expect((await send('POST', `/cards/${ID}/not-kind`)).status).toBe(200);
+    expect(store.dismissCard).toHaveBeenLastCalledWith(USER, ID, 'not_this_kind');
+    await send('POST', `/cards/${ID}/dismiss`);
+    expect(store.dismissCard).toHaveBeenLastCalledWith(USER, ID);
+    store.restoreCard.mockResolvedValueOnce({ id: ID, dismissedAt: null });
+    expect(await (await send('POST', `/cards/${ID}/restore`)).json()).toEqual({ id: ID, dismissedAt: null });
+    expect((await send('POST', '/cards/nope/restore')).status).toBe(400);
+    expect((await send('POST', `/cards/${ID}/restore`)).status).toBe(404);
+    store.dismissCard.mockRejectedValueOnce(Object.assign(new Error('only a subscription card can be marked as not recurring'), { status: 400 }));
+    expect((await send('POST', `/cards/${ID}/not-recurring`)).status).toBe(400);
+  });
+
+  it('lists the owner\'s feedback, and counts it on Today when asked', async () => {
+    expect(await (await send('GET', '/cards/feedback?limit=5')).json()).toEqual({ count: 2, recent: 1, feedback: [{ verdict: 'not_recurring' }] });
+    expect(feedback.listFeedback).toHaveBeenCalledWith(USER, { limit: '5' });
+    const today = await (await send('GET', '/cards/today?feedback=1')).json();
+    expect(today).toEqual({ figures: [expect.objectContaining({ kind: 'delivery' })], feedback: { count: 2, recent: 1 } });
+    expect(Array.isArray(await (await send('GET', '/cards/today')).json())).toBe(true);
   });
 
   it('returns card actions as payloads', async () => {

@@ -48,7 +48,7 @@ export function providerOf({ imap_host: imapHost, oauth_provider: oauthProvider 
   if (host.includes('.gmail.com') || host.includes('.googlemail.com')) return 'google';
   if (host.includes('.yahoo.com') || host.includes('.ymail.com')) return 'yahoo';
   if (host.includes('.icloud.com') || host.includes('.apple.com') || host.includes('.me.com')) return 'apple';
-  if (host.includes('.outlook.com') || host.includes('office365.com') || host.includes('.hotmail.com') || host.includes('.live.com') || oauthProvider === 'microsoft') return 'microsoft';
+  if (host.includes('.outlook.com') || host.includes('office365.com') || host.includes('outlook.office.com') || host.includes('.hotmail.com') || host.includes('.live.com') || oauthProvider === 'microsoft') return 'microsoft';
   if (host.includes('purelymail.com')) return 'purelymail';
   return 'generic';
 }

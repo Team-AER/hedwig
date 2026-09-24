@@ -216,6 +216,14 @@
       "armed": "{{label}} — fai di nuovo clic per scaricare comunque"
     },
     "downloadAll": "Scarica tutto",
+    "downloadAllZip": "Scarica tutto (zip)",
+    "preview": {
+      "previous": "Immagine precedente",
+      "next": "Immagine successiva",
+      "download": "Scarica",
+      "close": "Chiudi",
+      "failed": "Impossibile mostrare questa immagine."
+    },
     "reply": "Rispondi",
     "replyAll": "Rispondi a tutti",
     "replyOptions": "Opzioni di risposta",
@@ -786,6 +794,15 @@
       "presetYahoo": "Yahoo Mail",
       "presetIcloud": "iCloud",
       "presetCustom": "Personalizzato",
+      "presetOutlook": "Outlook / Microsoft 365",
+      "presetExchange": "Exchange",
+      "exchangeHostPh": "mail.example.com",
+      "exchangeNote": "Chiedi all’amministratore di Exchange di abilitare IMAP e SMTP AUTH per la tua casella. Il nome utente è di solito il tuo indirizzo email o DOMINIO\\utente.",
+      "exchangeCertNote": "Se il server usa un certificato autofirmato, un amministratore deve prima attivare «{{setting}}»; sotto la password comparirà poi un interruttore per saltare la verifica del certificato.",
+      "outlookPasswordNote": "Outlook.com e Microsoft 365 non accettano più password per IMAP; l’amministratore deve configurare l’accesso Microsoft (vedi la documentazione)",
+      "signInMicrosoft": "Accedi con Microsoft",
+      "signInMicrosoftNote": "Outlook.com e Microsoft 365 si collegano tramite l’accesso Microsoft, non con una password. Si apre una nuova scheda; l’account compare qui al termine.",
+      "signInMicrosoftWaiting": "In attesa di Microsoft…",
       "errorRequired": "Email, nome utente e host IMAP sono obbligatori",
       "errorPasswordRequired": "La password è richiesta per i nuovi account",
       "microsoftImapUnsupported": "Outlook.com / Hotmail richiede OAuth2 (Modern Auth)",
@@ -1805,7 +1822,16 @@
         "replyLater": "Rispondi dopo",
         "screener": "Smistamento",
         "setAside": "Messi da parte",
-        "snoozed": "Posticipati"
+        "snoozed": "Posticipati",
+        "countScreenerOne": "1 nuovo mittente da smistare",
+        "countScreenerMany": "{{n}} nuovi mittenti da smistare",
+        "countNeedsYouOne": "1 ha bisogno di te",
+        "countNeedsYouMany": "{{n}} hanno bisogno di te",
+        "countUnread": "{{n}} da leggere",
+        "countConversationsOne": "1 conversazione",
+        "countConversationsMany": "{{n}} conversazioni",
+        "countDraftsOne": "1 bozza",
+        "countDraftsMany": "{{n}} bozze"
       },
       "records": {
         "hide": "Nascondi",

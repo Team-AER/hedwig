@@ -2,6 +2,10 @@
 // caption ("Today" / "DHL, out for delivery"), the fields Hedwig read, each tappable to show the
 // sentence it came from, an edit form (PATCH /cards/:id), Dismiss, and the card's actions from
 // GET /cards/:id/actions (calendar download, a reminder through the work module, tracking, copy).
+// The owner's verdicts teach Hedwig (backend cards/feedback.js): "Not a subscription" on a
+// subscription (POST /cards/:id/not-recurring; also the Correct form's "Not recurring" cadence) and
+// "Not a <kind>" in the card's menu (POST /cards/:id/not-kind) hide the card with an Undo toast
+// whose Undo is POST /cards/:id/restore.
 // A route that is not there, or a message with no cards, shows nothing.
 import { useCallback, useEffect, useState } from 'react';
 import { useStore } from '../../store/index.js';
@@ -10,9 +14,12 @@ import { useV2 } from './state.js';
 import { openThread } from './nav.js';
 import {
   actionLabel, cardFields, cardFigure, downloadIcs, editPatch, fieldLabel, fieldSource, fieldText, fieldType, inputValue,
-  reminderBody, safeUrl, statusLabel, cadenceLabel, CARD_FIELDS,
+  reminderBody, safeUrl, statusLabel, cadenceLabel, notKindLabel, CARD_FIELDS, NOT_RECURRING,
 } from './cards.js';
+import { performAction } from './actions.js';
 import { Btn, IconButton, LinkBtn, Slip, V, Why } from './primitives.jsx';
+import { MenuButton } from '../shell/Menu.jsx';
+import { Icon } from '../icons.jsx';
 import { tv } from './i18n.js';
 
 function notify(type, title, body) {
@@ -86,6 +93,27 @@ export function CardSlip({ card, messageId, phone = false, onChange }) {
     notify('success', tv('hedwig.v2.card.dismissed', 'Card dismissed. Hedwig will not show it again.'));
   });
 
+  // The owner telling Hedwig it read the wrong thing: the card goes at once, the toast has Undo.
+  const verdict = (route, title) => {
+    setEditing(false);
+    setError(null);
+    const id = encodeURIComponent(card.id);
+    performAction({
+      kind: 'custom',
+      items: [{ messageId: messageId || card.messageId, cardId: card.id }],
+      title,
+      failTitle: tv('hedwig.v2.card.verdictFailed', 'Could not tell Hedwig. The card is back.'),
+      run: () => v2Api.post(`/cards/${id}/${route}`),
+      undo: () => v2Api.post(`/cards/${id}/restore`),
+      onApply: () => onChange?.({ ...card, dismissedAt: new Date().toISOString() }),
+      onRevert: () => onChange?.({ ...card, dismissedAt: null }),
+    });
+  };
+  const notRecurring = () => verdict('not-recurring', tv('hedwig.v2.card.notRecurringDone', 'Not a subscription. Hedwig will not list {{merchant}} as one again.', { merchant: card.fields?.merchant || tv('hedwig.v2.card.thisMerchant', 'this merchant') }));
+  const notKind = () => (card.kind === 'subscription'
+    ? notRecurring()
+    : verdict('not-kind', tv('hedwig.v2.card.notKindDone', '{{label}}. Hedwig will remember that for this sender.', { label: notKindLabel(card.kind) })));
+
   const doAction = (a) => run(a.id, async () => {
     if (a.id === 'calendar') { downloadIcs(a); return; }
     if (a.id === 'copy') { await copyText(a.text); return; }
@@ -131,7 +159,7 @@ export function CardSlip({ card, messageId, phone = false, onChange }) {
           ))}
         </dl>
       )}
-      {editing && <EditForm card={card} phone={phone} onCancel={() => setEditing(false)} onSaved={(c) => { onChange?.(c); setEditing(false); notify('success', tv('hedwig.v2.card.saved', 'Card corrected.')); }} />}
+      {editing && <EditForm card={card} phone={phone} onCancel={() => setEditing(false)} onNotRecurring={notRecurring} onSaved={(c) => { onChange?.(c); setEditing(false); notify('success', tv('hedwig.v2.card.saved', 'Card corrected.')); }} />}
       {!editing && (
         <div style={{ display: 'flex', gap: phone ? 4 : 14, flexWrap: 'wrap', alignItems: 'center' }}>
           {shownActions.map((a) => (
@@ -140,7 +168,23 @@ export function CardSlip({ card, messageId, phone = false, onChange }) {
           <span style={{ flexGrow: 1 }} />
           <span style={{ display: 'inline-flex', gap: phone ? 0 : 12, marginRight: phone ? -10 : -4 }}>
             <IconButton icon="pencil" data-card-correct="" label={tv('hedwig.v2.card.edit', 'Correct')} size={phone ? 44 : 28} disabled={Boolean(busy)} onClick={() => setEditing(true)} style={{ color: V.muted }} />
+            {card.kind === 'subscription' && (
+              <IconButton icon="ban" data-card-not-recurring="" label={tv('hedwig.v2.card.notRecurring', 'Not a subscription')} size={phone ? 44 : 28} disabled={Boolean(busy)} onClick={notRecurring} style={{ color: V.muted }} />
+            )}
             <IconButton icon="x" data-card-dismiss="" label={tv('hedwig.v2.card.dismiss', 'Dismiss')} size={phone ? 44 : 28} disabled={Boolean(busy)} onClick={dismiss} style={{ color: V.muted }} />
+            <MenuButton
+              label={tv('hedwig.v2.card.more', 'More for this card')}
+              align="right"
+              width={220}
+              buttonClassName="hw-icon-btn"
+              sheet={phone}
+              buttonStyle={{ width: phone ? 44 : 28, height: phone ? 44 : 28, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0, border: 0, borderRadius: 6, background: 'transparent', color: V.muted, cursor: 'pointer' }}
+              items={() => [
+                { id: 'not-kind', label: notKindLabel(card.kind), icon: 'ban', description: tv('hedwig.v2.card.notKindHint', 'Hedwig will not read mail from this sender as this kind again.'), onSelect: notKind },
+              ]}
+            >
+              <Icon name="ellipsis" size={phone ? 20 : 16} />
+            </MenuButton>
           </span>
         </div>
       )}
@@ -188,7 +232,7 @@ function FieldRow({ card, field, phone, open, onToggle, messageId }) {
   );
 }
 
-function EditForm({ card, phone, onCancel, onSaved }) {
+function EditForm({ card, phone, onCancel, onSaved, onNotRecurring }) {
   const keys = CARD_FIELDS[card.kind] || [];
   const [draft, setDraft] = useState(() => Object.fromEntries(keys.map((k) => [k, inputValue(card, k)])));
   const [saving, setSaving] = useState(false);
@@ -197,6 +241,7 @@ function EditForm({ card, phone, onCancel, onSaved }) {
     e.preventDefault();
     const patch = editPatch(card, draft);
     if (!patch) { onCancel(); return; }
+    if (patch.notRecurring) { onNotRecurring?.(); return; }
     setSaving(true);
     setError(null);
     try {
@@ -224,6 +269,7 @@ function EditForm({ card, phone, onCancel, onSaved }) {
                   <select id={id} value={draft[k]} onChange={(e) => set(e.target.value)} style={inputStyle}>
                     <option value="">{tv('hedwig.v2.card.none', 'Not set')}</option>
                     {t.options.map((o) => <option key={o} value={o}>{k === 'cadence' ? cadenceLabel(o) : statusLabel(o)}</option>)}
+                    {card.kind === 'subscription' && k === 'cadence' && <option value={NOT_RECURRING}>{cadenceLabel(NOT_RECURRING)}</option>}
                   </select>
                 )
                 : (

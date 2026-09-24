@@ -32,8 +32,29 @@ function rfc5987(str) {
 
 // A `Content-Disposition` value for an attachment download that always survives res.setHeader:
 // an ASCII-only quoted fallback plus the RFC 5987 `filename*` carrying the true name.
-export function attachmentDisposition(rawName) {
+export function attachmentDisposition(rawName, type = 'attachment') {
   const safe = safeFilename(rawName);
   const ascii = safe.replace(/[^\u0020-\u007e]/g, '_').replace(/["\\]/g, '_') || 'attachment';
-  return `attachment; filename="${ascii}"; filename*=UTF-8''${rfc5987(safe)}`;
+  return `${type === 'inline' ? 'inline' : 'attachment'}; filename="${ascii}"; filename*=UTF-8''${rfc5987(safe)}`;
+}
+
+// The only types an attachment may be served as inline (?inline=1): raster pictures the browser
+// draws and PDF, which it shows in its viewer. Never HTML, SVG, XML or anything else that could
+// run script on this origin. The extension decides first (the declared type is sender-controlled
+// and often application/octet-stream); the Content-Type sent is always the one from this table,
+// and the global nosniff header stops the browser second-guessing it.
+const INLINE_BY_EXT = {
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', jpe: 'image/jpeg', png: 'image/png', gif: 'image/gif',
+  webp: 'image/webp', bmp: 'image/bmp', heic: 'image/heic', heif: 'image/heif', avif: 'image/avif',
+  pdf: 'application/pdf',
+};
+const INLINE_MIME = new Set(Object.values(INLINE_BY_EXT));
+
+/** The safe Content-Type to serve this attachment inline, or null when it must download. */
+export function inlineContentType(filename, declaredType) {
+  const m = /\.([a-z0-9]{1,8})$/i.exec(String(filename || '').trim());
+  const ext = m ? m[1].toLowerCase() : '';
+  if (ext) return INLINE_BY_EXT[ext] || null;
+  const mime = String(declaredType || '').toLowerCase().split(';')[0].trim().replace('image/jpg', 'image/jpeg');
+  return INLINE_MIME.has(mime) ? mime : null;
 }

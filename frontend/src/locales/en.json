@@ -216,6 +216,14 @@
       "armed": "{{label}} — click again to download anyway"
     },
     "downloadAll": "Download all",
+    "downloadAllZip": "Download all (zip)",
+    "preview": {
+      "previous": "Previous picture",
+      "next": "Next picture",
+      "download": "Download",
+      "close": "Close",
+      "failed": "This picture could not be shown."
+    },
     "reply": "Reply",
     "replyAll": "Reply All",
     "replyOptions": "Reply options",
@@ -788,6 +796,15 @@
       "presetYahoo": "Yahoo Mail",
       "presetIcloud": "iCloud",
       "presetCustom": "Custom",
+      "presetOutlook": "Outlook / Microsoft 365",
+      "presetExchange": "Exchange",
+      "exchangeHostPh": "mail.example.com",
+      "exchangeNote": "Ask your Exchange admin to enable IMAP and SMTP AUTH for your mailbox. The username is usually your email address or DOMAIN\\username.",
+      "exchangeCertNote": "If the server uses a self-signed certificate, an admin must first turn on \"{{setting}}\"; a switch to skip certificate verification then appears below the password.",
+      "outlookPasswordNote": "Outlook.com and Microsoft 365 no longer accept passwords for IMAP; your admin must configure Microsoft sign-in (see docs)",
+      "signInMicrosoft": "Sign in with Microsoft",
+      "signInMicrosoftNote": "Outlook.com and Microsoft 365 connect through Microsoft sign-in, not a password. A new tab opens; the account appears here when you finish.",
+      "signInMicrosoftWaiting": "Waiting for Microsoft…",
       "errorRequired": "Email, username, and IMAP host are required",
       "errorPasswordRequired": "Password is required for new accounts",
       "microsoftImapUnsupported": "Outlook.com / Hotmail requires OAuth2 (Modern Auth)",
@@ -1805,7 +1822,16 @@
         "replyLater": "Reply Later",
         "screener": "Screener",
         "setAside": "Set Aside",
-        "snoozed": "Snoozed"
+        "snoozed": "Snoozed",
+        "countScreenerOne": "1 new sender to screen",
+        "countScreenerMany": "{{n}} new senders to screen",
+        "countNeedsYouOne": "1 needs you",
+        "countNeedsYouMany": "{{n}} need you",
+        "countUnread": "{{n}} unread",
+        "countConversationsOne": "1 conversation",
+        "countConversationsMany": "{{n}} conversations",
+        "countDraftsOne": "1 draft",
+        "countDraftsMany": "{{n}} drafts"
       },
       "records": {
         "hide": "Hide",

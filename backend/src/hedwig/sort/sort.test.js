@@ -1035,4 +1035,21 @@ describe('streamList: work Needs You (seam with work/)', () => {
       db.handler = null;
     }
   });
+  it('a row carries its paperclip and flag, so the list can show them and filter by attachments', async () => {
+    const service = await import('./service.js');
+    const base = { from_name: 'Priya', from_email: 'priya@example.org', subject: 'Hi', snippet: '', date: new Date(), is_read: true, reason: null, bundle: null, spam: 'clean', layer: 'reflex', confidence: 0.9, held: false, labels: [], needs_you: false, account_id: 'acc' };
+    db.handler = (sql) => (/WITH latest AS/.test(sql)
+      ? { rows: [
+        { ...base, id: '00000000-0000-4000-8000-00000000e101', thread_key: 't1', has_attachments: true, is_starred: false },
+        { ...base, id: '00000000-0000-4000-8000-00000000e102', thread_key: 't2', has_attachments: false, is_starred: true },
+      ] }
+      : null);
+    try {
+      const out = await service.streamList(USER, 'reading', { limit: 10 });
+      expect(db.calls.find((c) => /WITH latest AS/.test(c.sql)).sql).toMatch(/m\.has_attachments, m\.is_starred/);
+      expect(out.items.map((i) => [i.hasAttachments, i.flagged])).toEqual([[true, false], [false, true]]);
+    } finally {
+      db.handler = null;
+    }
+  });
 });

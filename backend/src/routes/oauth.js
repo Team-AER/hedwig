@@ -5,13 +5,18 @@ import { query, withTransaction } from '../services/db.js';
 import { imapManager } from '../index.js';
 import { encrypt, decrypt } from '../services/encryption.js';
 import { redactEmail } from '../utils/redact.js';
+import {
+  OAUTH_PROVIDERS, MICROSOFT_SCOPE, MICROSOFT_LOGIN_BASE,
+  getMicrosoftConfig, getGoogleConfig,
+  buildAuthorizeUrl, buildCodeExchangeBody, buildRefreshBody, microsoftLoginName,
+} from '../services/oauthProviders.js';
 
 // Cache JWKS fetchers per tenant — createRemoteJWKSet handles caching internally.
 const jwksCache = new Map();
 function getMsJwks(tenantId) {
   if (!jwksCache.has(tenantId)) {
     jwksCache.set(tenantId, createRemoteJWKSet(
-      new URL(`https://login.microsoftonline.com/${tenantId}/discovery/v2.0/keys`)
+      new URL(`${MICROSOFT_LOGIN_BASE}/${tenantId}/discovery/v2.0/keys`)
     ));
   }
   return jwksCache.get(tenantId);
@@ -19,28 +24,24 @@ function getMsJwks(tenantId) {
 
 const router = Router();
 
-const MICROSOFT_AUTH_URL = 'https://login.microsoftonline.com';
+const MICROSOFT = OAUTH_PROVIDERS.microsoft;
+const GOOGLE = OAUTH_PROVIDERS.google;
 
 // In-memory store for pending device code flows — keyed by userId.
 // Device codes expire in 15 minutes so no persistence is needed.
 const deviceFlows = new Map();
 
-function getMsConfig() {
-  return {
-    clientId: process.env.MS_CLIENT_ID,
-    clientSecret: process.env.MS_CLIENT_SECRET,
-    tenantId: process.env.MS_TENANT_ID || 'common',
-    redirectUri: process.env.MS_REDIRECT_URI,
-  };
-}
+// MS_* (upstream, and what the Integrations tab writes) or the MICROSOFT_* .env aliases;
+// the redirect URI defaults to ${APP_URL}/oauth/microsoft/callback. See oauthProviders.js.
+const getMsConfig = getMicrosoftConfig;
 
 // Step 1: redirect user to Microsoft login
 router.get('/microsoft', async (req, res) => {
   if (!req.session?.userId) return res.status(401).json({ error: 'Not authenticated' });
 
-  const { clientId, tenantId, redirectUri } = getMsConfig();
-  if (!clientId || !tenantId || !redirectUri) {
-    return res.status(500).json({ error: 'Microsoft OAuth not configured. Set MS_CLIENT_ID, MS_CLIENT_SECRET, MS_TENANT_ID, MS_REDIRECT_URI in .env' });
+  const msConfig = getMsConfig();
+  if (!msConfig.clientId || !msConfig.redirectUri) {
+    return res.status(500).json({ error: 'Microsoft OAuth not configured. Set MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET, MICROSOFT_TENANT and APP_URL (or MICROSOFT_REDIRECT_URI) in .env, or fill in Settings → Integrations → Microsoft. See docs/hedwig/ACCOUNTS-MICROSOFT.md' });
   }
 
   // Generate a random CSRF nonce for the state parameter and store it alongside
@@ -49,20 +50,10 @@ router.get('/microsoft', async (req, res) => {
   req.session.oauthNonce  = oauthNonce;
   req.session.oauthUserId = req.session.userId;
 
-  const params = new URLSearchParams({
-    client_id: clientId,
-    response_type: 'code',
-    redirect_uri: redirectUri,
-    response_mode: 'query',
-    scope: 'https://outlook.office.com/IMAP.AccessAsUser.All https://outlook.office.com/SMTP.Send offline_access openid email profile',
-    state: oauthNonce,
-    prompt: 'select_account',
-  });
-
   // Save session before redirecting so the nonce is committed to the store
   // before the external provider redirects back with the authorization code.
   await new Promise((resolve, reject) => req.session.save(err => err ? reject(err) : resolve()));
-  res.redirect(`${MICROSOFT_AUTH_URL}/${tenantId}/oauth2/v2.0/authorize?${params}`);
+  res.redirect(buildAuthorizeUrl('microsoft', { state: oauthNonce, config: msConfig }));
 });
 
 // Step 2: Microsoft redirects back here with auth code
@@ -83,20 +74,15 @@ router.get('/microsoft/callback', async (req, res) => {
   delete req.session.oauthNonce;
   delete req.session.oauthUserId;
 
-  const { clientId, clientSecret, tenantId, redirectUri } = getMsConfig();
+  const msConfig = getMsConfig();
+  const { clientId, tenantId } = msConfig;
 
   try {
     // Exchange code for tokens
-    const tokenRes = await fetch(`${MICROSOFT_AUTH_URL}/${tenantId}/oauth2/v2.0/token`, {
+    const tokenRes = await fetch(MICROSOFT.tokenUrl(msConfig), {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id: clientId,
-        client_secret: clientSecret,
-        code,
-        redirect_uri: redirectUri,
-        grant_type: 'authorization_code',
-      }),
+      body: buildCodeExchangeBody('microsoft', { code, config: msConfig }),
       signal: AbortSignal.timeout(10000),
     });
 
@@ -127,6 +113,7 @@ async function processMicrosoftTokens(userId, tokens, { tenantId, clientId, publ
   // with graph.microsoft.com, so id_token is the right source for email/name.
   let email = null;
   let displayName = null;
+  let loginName = null;
   if (id_token) {
     const jwks = getMsJwks(tenantId);
     const verifyOpts = { audience: clientId };
@@ -151,6 +138,8 @@ async function processMicrosoftTokens(userId, tokens, { tenantId, clientId, publ
       }
       email = payload.email || payload.preferred_username || null;
       displayName = payload.name || null;
+      // XOAUTH2 user= must name the token's principal: the UPN, not an alias.
+      loginName = microsoftLoginName(payload, email);
     } catch (jwtErr) {
       console.error('Microsoft id_token validation failed:', jwtErr.message);
       throw new Error('Could not validate Microsoft identity token — please try again', { cause: jwtErr });
@@ -158,6 +147,8 @@ async function processMicrosoftTokens(userId, tokens, { tenantId, clientId, publ
   }
 
   if (!email) throw new Error('Could not retrieve email address from Microsoft profile — ensure the openid, email, and profile scopes are granted');
+  if (!loginName) loginName = email;
+  const mbx = MICROSOFT.mailbox;
 
   // Serialize the check-then-insert per (user, email) with a transaction-scoped
   // advisory lock. Two OAuth callbacks racing for the same mailbox would otherwise
@@ -175,12 +166,20 @@ async function processMicrosoftTokens(userId, tokens, { tenantId, clientId, publ
     let accountId;
     if (existing.rows.length) {
       accountId = existing.rows[0].id;
+      // Re-point an existing row (e.g. one first added with a password, which Microsoft no
+      // longer accepts) at the Exchange Online endpoints the token is valid for, and mark it
+      // as OAuth so makeClientCfg/createAccountSmtpTransport switch to XOAUTH2.
       await client.query(`
         UPDATE email_accounts SET
+          oauth_provider = 'microsoft',
           oauth_access_token = $1, oauth_refresh_token = $2, oauth_token_expiry = $3,
-          name = $4, oauth_public_client = $5, sync_error = NULL
+          name = $4, oauth_public_client = $5, sync_error = NULL,
+          auth_user = $7,
+          imap_host = $8, imap_port = $9, imap_tls = $10,
+          smtp_host = $11, smtp_port = $12, smtp_tls = $13
         WHERE id = $6
-      `, [encrypt(access_token), encrypt(refresh_token), expiry, displayName || email, publicClient, accountId]);
+      `, [encrypt(access_token), encrypt(refresh_token), expiry, displayName || email, publicClient, accountId,
+          loginName, mbx.imap_host, mbx.imap_port, mbx.imap_tls, mbx.smtp_host, mbx.smtp_port, mbx.smtp_tls]);
     } else {
       const colors = ['#0078d4', '#106ebe', '#005a9e', '#004578'];
       const color = colors[Math.floor(Math.random() * colors.length)];
@@ -193,13 +192,14 @@ async function processMicrosoftTokens(userId, tokens, { tenantId, clientId, publ
           oauth_provider, oauth_access_token, oauth_refresh_token, oauth_token_expiry,
           oauth_public_client
         ) VALUES ($1,$2,$3,$4,'imap',
-          'outlook.office365.com', 993, true,
-          'smtp.office365.com', 587, 'STARTTLS',
-          $3,
+          $10, $11, $12,
+          $13, $14, $15,
+          $9,
           'microsoft', $5, $6, $7,
           $8)
         RETURNING *
-      `, [userId, displayName, email, color, encrypt(access_token), encrypt(refresh_token), expiry, publicClient]);
+      `, [userId, displayName, email, color, encrypt(access_token), encrypt(refresh_token), expiry, publicClient,
+          loginName, mbx.imap_host, mbx.imap_port, mbx.imap_tls, mbx.smtp_host, mbx.smtp_port, mbx.smtp_tls]);
       accountId = result.rows[0].id;
     }
 
@@ -216,18 +216,19 @@ async function processMicrosoftTokens(userId, tokens, { tenantId, clientId, publ
 // Step 1: initiate device code flow — returns user_code + verification_uri to the frontend.
 router.post('/microsoft/device', async (req, res) => {
   if (!req.session?.userId) return res.status(401).json({ error: 'Not authenticated' });
-  const { clientId, tenantId } = getMsConfig();
+  const msConfig = getMsConfig();
+  const { clientId, tenantId } = msConfig;
   if (!clientId || !tenantId) {
     return res.status(400).json({ error: 'Microsoft integration not configured. Set Client ID and Tenant ID in the Integrations tab.' });
   }
 
   try {
-    const dcRes = await fetch(`${MICROSOFT_AUTH_URL}/${tenantId}/oauth2/v2.0/devicecode`, {
+    const dcRes = await fetch(MICROSOFT.deviceCodeUrl(msConfig), {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
         client_id: clientId,
-        scope: 'https://outlook.office.com/IMAP.AccessAsUser.All https://outlook.office.com/SMTP.Send offline_access openid email profile',
+        scope: MICROSOFT_SCOPE,
       }),
       signal: AbortSignal.timeout(10000),
     });
@@ -266,7 +267,7 @@ router.get('/microsoft/device/poll', async (req, res) => {
   }
 
   try {
-    const tokenRes = await fetch(`${MICROSOFT_AUTH_URL}/${flow.tenantId}/oauth2/v2.0/token`, {
+    const tokenRes = await fetch(MICROSOFT.tokenUrl({ tenantId: flow.tenantId }), {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -318,7 +319,8 @@ export function refreshMicrosoftToken(account) {
 
 // Refresh an expired Microsoft token
 async function doRefreshMicrosoftToken(account) {
-  const { clientId, clientSecret, tenantId } = getMsConfig();
+  const msConfig = getMsConfig();
+  const { clientSecret } = msConfig;
 
   const storedRefreshToken = decrypt(account.oauth_refresh_token);
   if (!storedRefreshToken) throw new Error('OAuth refresh token is missing or corrupted — please reconnect your account');
@@ -328,22 +330,13 @@ async function doRefreshMicrosoftToken(account) {
   // can't send a client secret"). Confidential clients (auth-code flow) must send it.
   // Key this on the account's recorded flow, not on whether a secret is configured
   // globally, since one instance can host both kinds. (#216)
-  const tokenUrl = `${MICROSOFT_AUTH_URL}/${tenantId}/oauth2/v2.0/token`;
-  const postRefresh = (withSecret) => {
-    const params = new URLSearchParams({
-      client_id: clientId,
-      refresh_token: storedRefreshToken,
-      grant_type: 'refresh_token',
-      scope: 'https://outlook.office.com/IMAP.AccessAsUser.All https://outlook.office.com/SMTP.Send offline_access',
-    });
-    if (withSecret) params.set('client_secret', clientSecret);
-    return fetch(tokenUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: params,
-      signal: AbortSignal.timeout(10000),
-    });
-  };
+  const tokenUrl = MICROSOFT.tokenUrl(msConfig);
+  const postRefresh = (withSecret) => fetch(tokenUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: buildRefreshBody('microsoft', { refreshToken: storedRefreshToken, withSecret, config: msConfig }),
+    signal: AbortSignal.timeout(10000),
+  });
 
   const sendSecret = !!clientSecret && !account.oauth_public_client;
   let tokenRes = await postRefresh(sendSecret);
@@ -386,34 +379,16 @@ async function doRefreshMicrosoftToken(account) {
 // mailboxes. makeClientCfg() and createAccountSmtpTransport() already accept
 // oauth_provider === 'google'; this supplies the tokens they expect.
 
-const GOOGLE_AUTH_URL  = 'https://accounts.google.com/o/oauth2/v2/auth';
-const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
-// https://mail.google.com/ is the full IMAP/SMTP scope, and it is *restricted*,
-// which constrains how the consent screen must be configured:
-//   - User Type "Internal" (project owned by a Workspace org): no verification,
-//     refresh tokens do not expire. This is the practical option for self-hosting.
-//   - "External" + Testing: works immediately, but Google revokes refresh tokens
-//     after 7 days, so the account must be reconnected weekly.
-//   - "External" + In production: needs full verification including a security
-//     audit before restricted scopes are granted long-lived tokens.
-const GOOGLE_SCOPE = 'https://mail.google.com/ openid email profile';
-
+// Endpoints, scope and authorize parameters live in services/oauthProviders.js
+// (OAUTH_PROVIDERS.google), shared with the Microsoft flow's request builders.
 const googleJwks = createRemoteJWKSet(new URL('https://www.googleapis.com/oauth2/v3/certs'));
-
-function getGoogleConfig() {
-  return {
-    clientId: process.env.GOOGLE_CLIENT_ID,
-    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-    redirectUri: process.env.GOOGLE_REDIRECT_URI,
-  };
-}
 
 // Step 1: redirect user to Google consent
 router.get('/google', async (req, res) => {
   if (!req.session?.userId) return res.status(401).json({ error: 'Not authenticated' });
 
-  const { clientId, redirectUri } = getGoogleConfig();
-  if (!clientId || !redirectUri) {
+  const googleConfig = getGoogleConfig();
+  if (!googleConfig.clientId || !googleConfig.redirectUri) {
     return res.status(500).json({ error: 'Google OAuth not configured. Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI in .env' });
   }
 
@@ -421,21 +396,8 @@ router.get('/google', async (req, res) => {
   req.session.oauthNonce  = oauthNonce;
   req.session.oauthUserId = req.session.userId;
 
-  const params = new URLSearchParams({
-    client_id: clientId,
-    response_type: 'code',
-    redirect_uri: redirectUri,
-    scope: GOOGLE_SCOPE,
-    state: oauthNonce,
-    // Google only issues a refresh token when both of these are set, and only on
-    // the first consent unless prompt=consent forces re-issue. Without them a
-    // reconnect silently yields an access-token-only grant that dies in an hour.
-    access_type: 'offline',
-    prompt: 'consent select_account',
-  });
-
   await new Promise((resolve, reject) => req.session.save(err => err ? reject(err) : resolve()));
-  res.redirect(`${GOOGLE_AUTH_URL}?${params}`);
+  res.redirect(buildAuthorizeUrl('google', { state: oauthNonce, config: googleConfig }));
 });
 
 // Step 2: Google redirects back here with auth code
@@ -455,19 +417,14 @@ router.get('/google/callback', async (req, res) => {
   delete req.session.oauthNonce;
   delete req.session.oauthUserId;
 
-  const { clientId, clientSecret, redirectUri } = getGoogleConfig();
+  const googleConfig = getGoogleConfig();
+  const { clientId } = googleConfig;
 
   try {
-    const tokenRes = await fetch(GOOGLE_TOKEN_URL, {
+    const tokenRes = await fetch(GOOGLE.tokenUrl(googleConfig), {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id: clientId,
-        client_secret: clientSecret,
-        code,
-        redirect_uri: redirectUri,
-        grant_type: 'authorization_code',
-      }),
+      body: buildCodeExchangeBody('google', { code, config: googleConfig }),
       signal: AbortSignal.timeout(10000),
     });
 
@@ -583,20 +540,15 @@ export function refreshGoogleToken(account) {
 }
 
 async function doRefreshGoogleToken(account) {
-  const { clientId, clientSecret } = getGoogleConfig();
+  const googleConfig = getGoogleConfig();
 
   const storedRefreshToken = decrypt(account.oauth_refresh_token);
   if (!storedRefreshToken) throw new Error('OAuth refresh token is missing or corrupted — please reconnect your account');
 
-  const tokenRes = await fetch(GOOGLE_TOKEN_URL, {
+  const tokenRes = await fetch(GOOGLE.tokenUrl(googleConfig), {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      client_id: clientId,
-      client_secret: clientSecret,
-      refresh_token: storedRefreshToken,
-      grant_type: 'refresh_token',
-    }),
+    body: buildRefreshBody('google', { refreshToken: storedRefreshToken, config: googleConfig }),
     signal: AbortSignal.timeout(10000),
   });
 

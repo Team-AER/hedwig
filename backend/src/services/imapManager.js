@@ -951,8 +951,15 @@ const PROVIDERS = {
     skipFolderNames: [],
   },
   microsoft: {
+    // Exchange Online / Microsoft 365 / Outlook.com (outlook.office365.com, outlook.office.com).
     batchSize: 100, batchDelay: 1500, errorDelay: 15000, batchesPerConn: 15,
     fetchBody: false,
+    // IDLE works, but Exchange ends an IDLE at 30 min and closes an authenticated session
+    // that has been quiet for 30 min (IMAP4 AuthenticatedConnectionTimeout). Re-issue IDLE
+    // at 25 min (must stay under 29) and, when IDLE did not start, NOOP every 10 min.
+    usesIdle: true,
+    idleKeepaliveMs: 25 * 60 * 1000,
+    keepaliveNoopMs: 10 * 60 * 1000,
     pushesFlags: true,
     snippetIndex: true,
     speculativeFetch: true,
@@ -1121,7 +1128,7 @@ export function providerProfile(account) {
   if (host.includes('.gmail.com') || host.includes('.googlemail.com')) return PROVIDERS.google;
   if (host.includes('.yahoo.com') || host.includes('.ymail.com')) return PROVIDERS.yahoo;
   if (host.includes('.icloud.com') || host.includes('.apple.com') || host.includes('.me.com')) return PROVIDERS.apple;
-  if (host.includes('.outlook.com') || host.includes('office365.com') || host.includes('.hotmail.com') || host.includes('.live.com') || (account.oauth_provider === 'microsoft')) return PROVIDERS.microsoft;
+  if (host.includes('.outlook.com') || host.includes('office365.com') || host.includes('outlook.office.com') || host.includes('.hotmail.com') || host.includes('.live.com') || (account.oauth_provider === 'microsoft')) return PROVIDERS.microsoft;
   if (host.includes('purelymail.com')) return PROVIDERS.purelymail;
   return PROVIDERS.generic;
 }

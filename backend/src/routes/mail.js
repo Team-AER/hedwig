@@ -16,7 +16,7 @@ import { recordSyncSignal } from '../services/diagnosticsRing.js';
 import { resolveAccountScope } from '../services/unifiedInbox.js';
 import { validateHost } from '../services/hostValidation.js';
 import { safeFetch } from '../services/safeFetch.js';
-import { safeFilename, attachmentDisposition } from '../utils/contentDisposition.js';
+import { safeFilename, attachmentDisposition, inlineContentType } from '../utils/contentDisposition.js';
 import { tokenize, extractFlagFeatures } from '../services/spamTokenizer.js';
 import { updateIncrementalForUser } from '../services/spamModelStore.js';
 
@@ -692,8 +692,19 @@ router.get('/messages/:id/attachments/:part', async (req, res) => {
 
     if (!buffer) return res.status(404).json({ error: 'Could not fetch attachment' });
 
-    res.setHeader('Content-Type', att.type || 'application/octet-stream');
-    res.setHeader('Content-Disposition', attachmentDisposition(att.filename));
+    // ?inline=1 (the reader's thumbnails, lightbox and PDF tab): shown in the browser when the
+    // file is a picture or a PDF, as the type inlineContentType vouches for; anything else still
+    // downloads. A picture also gets a sandbox CSP, so even a mislabelled file cannot script this
+    // origin (not a PDF: Chrome's viewer refuses to load under a sandbox).
+    const inlineType = req.query.inline === '1' ? inlineContentType(att.filename, att.type) : null;
+    if (inlineType) {
+      res.setHeader('Content-Type', inlineType);
+      res.setHeader('Content-Disposition', attachmentDisposition(att.filename, 'inline'));
+      if (inlineType !== 'application/pdf') res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'; img-src 'self'; style-src 'unsafe-inline'");
+    } else {
+      res.setHeader('Content-Type', att.type || 'application/octet-stream');
+      res.setHeader('Content-Disposition', attachmentDisposition(att.filename));
+    }
     res.setHeader('Content-Length', buffer.length);
     res.send(buffer);
   } catch (err) {

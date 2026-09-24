@@ -92,14 +92,36 @@ export function statusLabel(status) {
   return L[status] ? L[status]() : String(status || '');
 }
 
+// The Correct form's cadence choice that is not a cadence: it sends POST /cards/:id/not-recurring.
+export const NOT_RECURRING = 'not_recurring';
+
 export function cadenceLabel(cadence) {
   const L = {
     weekly: () => tv('hedwig.v2.card.cadence.weekly', 'weekly'),
     monthly: () => tv('hedwig.v2.card.cadence.monthly', 'monthly'),
     quarterly: () => tv('hedwig.v2.card.cadence.quarterly', 'quarterly'),
     yearly: () => tv('hedwig.v2.card.cadence.yearly', 'yearly'),
+    [NOT_RECURRING]: () => tv('hedwig.v2.card.cadence.notRecurring', 'Not recurring'),
   };
-  return L[cadence] ? L[cadence]() : String(cadence || '');
+  return L[cadence] ? L[cadence]() : (cadence ? String(cadence) : tv('hedwig.v2.card.cadence.unknown', 'cadence unknown'));
+}
+
+/** Whether a subscription's cadence is one Hedwig can turn into a monthly figure. */
+export const knownCadence = (c) => ['weekly', 'monthly', 'quarterly', 'yearly'].includes(c);
+
+/** "Not a receipt", "Not an event", … : the card menu's way to say Hedwig read the wrong kind. */
+export function notKindLabel(kind) {
+  const L = {
+    receipt: () => tv('hedwig.v2.card.notKind.receipt', 'Not a receipt'),
+    invoice: () => tv('hedwig.v2.card.notKind.invoice', 'Not a bill'),
+    subscription: () => tv('hedwig.v2.card.notKind.subscription', 'Not a subscription'),
+    delivery: () => tv('hedwig.v2.card.notKind.delivery', 'Not a delivery'),
+    travel: () => tv('hedwig.v2.card.notKind.travel', 'Not a booking'),
+    event: () => tv('hedwig.v2.card.notKind.event', 'Not an event'),
+    code: () => tv('hedwig.v2.card.notKind.code', 'Not a code'),
+    deadline: () => tv('hedwig.v2.card.notKind.deadline', 'Not a deadline'),
+  };
+  return L[kind] ? L[kind]() : tv('hedwig.v2.card.notKind.other', 'Not this kind');
 }
 
 /** One field's value as the slip shows it. */
@@ -148,9 +170,10 @@ export function cardFigure(card, now = new Date()) {
     case 'receipt':
       return { figure: money(f.total, f.currency) || tv('hedwig.v2.card.receipt', 'Receipt'), caption: join(f.merchant, f.date ? shortDate(f.date, now) : null), sub: f.orderNumber ? tv('hedwig.v2.card.orderNo', 'Order {{n}}', { n: f.orderNumber }) : null };
     case 'subscription':
+      // No cadence: say so, never a per-month figure (it read "₹0 a month").
       return {
         figure: money(f.amount, f.currency) || tv('hedwig.v2.card.subscription', 'Subscription'),
-        caption: join(f.merchant, f.cadence ? cadenceLabel(f.cadence) : null),
+        caption: join(f.merchant, cadenceLabel(knownCadence(f.cadence) ? f.cadence : null)),
         sub: f.nextRenewal ? tv('hedwig.v2.card.renews', 'Renews {{day}}', { day: relDay(f.nextRenewal, now) }) : null,
       };
     case 'event': {
@@ -204,6 +227,8 @@ export function inputValue(card, key) {
  * Local datetime-local values go out as ISO instants. Returns null when nothing changed.
  */
 export function editPatch(card, draft) {
+  // "Not recurring" is not an edit: the card goes, and Hedwig stops deriving that merchant.
+  if (card?.kind === 'subscription' && draft?.cadence === NOT_RECURRING) return { notRecurring: true };
   const out = {};
   for (const [k, raw] of Object.entries(draft || {})) {
     const before = inputValue(card, k);
@@ -282,9 +307,21 @@ export function bundleCardSummary(cards, now = new Date()) {
   if (by.travel) parts.push(tvn(by.travel.length, ['hedwig.v2.card.sum.tripOne', '1 booking'], ['hedwig.v2.card.sum.tripMany', '{{n}} bookings']));
   if (by.event) parts.push(tvn(by.event.length, ['hedwig.v2.card.sum.eventOne', '1 event'], ['hedwig.v2.card.sum.eventMany', '{{n}} events']));
   if (by.receipt) parts.push(tvn(by.receipt.length, ['hedwig.v2.card.sum.receiptOne', '1 receipt'], ['hedwig.v2.card.sum.receiptMany', '{{n}} receipts']));
-  if (by.subscription) parts.push(tvn(by.subscription.length, ['hedwig.v2.card.sum.subscriptionOne', '1 subscription'], ['hedwig.v2.card.sum.subscriptionMany', '{{n}} subscriptions']));
+  if (by.subscription) {
+    const n = by.subscription.length;
+    parts.push(tvn(n, ['hedwig.v2.card.sum.subscriptionOne', '1 subscription'], ['hedwig.v2.card.sum.subscriptionMany', '{{n}} subscriptions'])
+      + cadenceUnknownNote(n, by.subscription.filter((c) => !knownCadence(c.fields?.cadence)).length));
+  }
   if (by.code) parts.push(tvn(by.code.length, ['hedwig.v2.card.sum.codeOne', '1 code'], ['hedwig.v2.card.sum.codeMany', '{{n}} codes']));
   return parts.join(' · ');
+}
+
+/** ", cadence unknown" (all of them) or ", 2 cadence unknown" (some); '' when every cadence is known. */
+export function cadenceUnknownNote(count, unknown) {
+  if (!unknown) return '';
+  return unknown >= count
+    ? `, ${tv('hedwig.v2.card.cadence.unknown', 'cadence unknown')}`
+    : `, ${tv('hedwig.v2.card.sum.cadenceUnknownSome', '{{n}} cadence unknown', { n: unknown })}`;
 }
 
 /** Cards by the message ids they were read from (a card names every message it merged). */

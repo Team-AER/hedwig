@@ -177,7 +177,8 @@ describe('Download all asks first when an attachment is risky', () => {
   }
 
   const downloadAllLink = () => {
-    const link = [...document.querySelectorAll('a')].find(a => a.textContent.includes('message.downloadAll'));
+    // An icon button now: found by its hook, named by its tooltip ("Download all (zip)").
+    const link = document.querySelector('a[data-download-all]');
     assert.ok(link, 'the Download all link is rendered');
     return link;
   };

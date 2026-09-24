@@ -21,6 +21,8 @@ import { ComposerLink } from '../utils/editorLink.js';
 import { copyToClipboard } from '../utils/clipboard.js';
 import { resolveInitialFrom } from '../utils/defaultSender.js';
 import { Icon } from '../hedwig/icons.jsx';
+import { AttachmentThumb, MiddleName } from './AttachmentChips.jsx';
+import { THUMB_MAX_BYTES, isPreviewableImage } from '../utils/attachmentPreview.js';
 
 // Resize an image blob/file to max maxW pixels wide, preserving aspect ratio.
 // Returns a Promise<string> of a base64 data URL.
@@ -730,7 +732,8 @@ export default function ComposeModal() {
         const base64 = String(ev.target.result || '').split(',')[1] || '';
         setAttachments(prev => {
           if (prev.some(a => a.name === file.name)) return prev;
-          return [...prev, { name: file.name, size: file.size, type: file.type, data: base64 }];
+          // `file` stays for the chip's thumbnail (an object URL); the send and the draft use `data`.
+          return [...prev, { name: file.name, size: file.size, type: file.type, data: base64, file }];
         });
       };
       // A dropped folder cannot be read; skip it rather than attaching an empty file.
@@ -1621,7 +1624,7 @@ export default function ComposeModal() {
           )}
 
           {fwdAttachments.length > 0 && (
-            <AttachmentChips attachments={fwdAttachments.map(a => ({ name: a.filename, size: a.size }))} onRemove={i => setFwdAttachments(prev => prev.filter((_, j) => j !== i))} mobile />
+            <AttachmentChips attachments={fwdAttachments.map(a => ({ name: a.filename, size: a.size, type: a.type, messageId: a.messageId, part: a.part }))} onRemove={i => setFwdAttachments(prev => prev.filter((_, j) => j !== i))} mobile />
           )}
           {attachments.length > 0 && (
             <AttachmentChips attachments={attachments} onRemove={i => setAttachments(prev => prev.filter((_, j) => j !== i))} mobile />
@@ -2185,7 +2188,7 @@ export default function ComposeModal() {
         </div>
       )}
       {fwdAttachments.length > 0 && (
-        <AttachmentChips attachments={fwdAttachments.map(a => ({ name: a.filename, size: a.size }))} onRemove={i => setFwdAttachments(prev => prev.filter((_, j) => j !== i))} />
+        <AttachmentChips attachments={fwdAttachments.map(a => ({ name: a.filename, size: a.size, type: a.type, messageId: a.messageId, part: a.part }))} onRemove={i => setFwdAttachments(prev => prev.filter((_, j) => j !== i))} />
       )}
       {attachments.length > 0 && (
         <AttachmentChips attachments={attachments} onRemove={i => setAttachments(prev => prev.filter((_, j) => j !== i))} />
@@ -3414,6 +3417,33 @@ function formatBytes(bytes) {
   return `${(bytes / 1048576).toFixed(1)}MB`;
 }
 
+// A picture's thumbnail in a composer chip: the local file through an object URL (revoked when
+// the chip goes), or a forwarded picture through the reader's cached fetch.
+function ComposeThumb({ attachment: a }) {
+  const [url, setUrl] = useState(null);
+  const file = a.file;
+  useEffect(() => {
+    if (!file || typeof URL.createObjectURL !== 'function') return undefined;
+    const u = URL.createObjectURL(file);
+    setUrl(u);
+    return () => URL.revokeObjectURL(u);
+  }, [file]);
+  const style = { width: 18, height: 18, borderRadius: 4, flexShrink: 0 };
+  if (a.messageId && a.part) {
+    return <AttachmentThumb messageId={a.messageId} part={a.part} size={18} radius={4} fill="var(--bg-secondary)" fallback={<PaperclipGlyph />} />;
+  }
+  if (!url) return <span style={{ ...style, background: 'var(--bg-secondary)' }} />;
+  return <img data-compose-thumb="" src={url} alt="" style={{ ...style, objectFit: 'cover', display: 'block' }} />;
+}
+
+function PaperclipGlyph() {
+  return (
+    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ flexShrink: 0 }}>
+      <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/>
+    </svg>
+  );
+}
+
 function AttachmentChips({ attachments, onRemove, mobile }) {
   const { t } = useTranslation();
   return (
@@ -3430,11 +3460,11 @@ function AttachmentChips({ attachments, onRemove, mobile }) {
           borderRadius: 6, padding: '3px 6px 3px 8px', fontSize: 11,
           color: 'var(--text-secondary)', maxWidth: 240,
         }}>
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ flexShrink: 0 }}>
-            <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/>
-          </svg>
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{a.name}</span>
-          <span style={{ color: 'var(--text-tertiary)', flexShrink: 0 }}>{formatBytes(a.size)}</span>
+          {isPreviewableImage(a) && (a.file || (a.messageId && a.part && (!a.size || a.size <= THUMB_MAX_BYTES)))
+            ? <ComposeThumb attachment={a} />
+            : <PaperclipGlyph />}
+          <MiddleName name={a.name} />
+          {a.size > 0 && <span style={{ color: 'var(--text-tertiary)', flexShrink: 0 }}>{formatBytes(a.size)}</span>}
           <button
             type="button"
             onClick={() => onRemove(i)}

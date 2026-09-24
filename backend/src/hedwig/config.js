@@ -273,7 +273,7 @@ export const SCHEMA = [
   { key: 'cards.maxAgeDays', type: 'number', default: 400, min: 1, max: 3650, group: 'cards', label: 'Make cards from mail up to (days) old' },
   { key: 'cards.reflexMaxAgeDays', type: 'number', default: 365, min: 0, max: 3650, group: 'cards', label: 'Ask the Reflex model about mail up to (days) old' },
   { key: 'cards.textChars', type: 'number', default: 3000, min: 300, max: 20000, group: 'cards', label: 'Characters of each message sent to the Reflex model' },
-  { key: 'cards.subscriptionMinCharges', type: 'number', default: 2, min: 2, max: 12, group: 'cards', label: 'Receipts from one merchant at a steady interval before it counts as a subscription' },
+  { key: 'cards.subscriptionMinCharges', type: 'number', default: 3, min: 3, max: 12, group: 'cards', label: 'Receipts from one merchant at a steady interval before it counts as a subscription (at least 3: two charges cannot show a cadence)' },
   { key: 'cards.codeFreshMin', type: 'number', default: 15, min: 1, max: 1440, group: 'cards', label: 'Show a one-time code on the Brief for (min) after it arrives' },
   { key: 'cards.billDueDays', type: 'number', default: 7, min: 1, max: 60, group: 'cards', label: 'Show bills due within (days) on the Brief' },
   { key: 'cards.icsMaxBytes', type: 'number', default: 262144, min: 1024, max: 5242880, group: 'cards', label: 'Largest calendar attachment fetched (bytes)' },

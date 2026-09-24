@@ -218,6 +218,14 @@
       "armed": "{{label}} — kliknij ponownie, aby mimo to pobrać"
     },
     "downloadAll": "Pobierz wszystko",
+    "downloadAllZip": "Pobierz wszystko (zip)",
+    "preview": {
+      "previous": "Poprzedni obraz",
+      "next": "Następny obraz",
+      "download": "Pobierz",
+      "close": "Zamknij",
+      "failed": "Nie można wyświetlić tego obrazu."
+    },
     "reply": "Odpowiedz",
     "replyAll": "Odpowiedz wszystkim",
     "replyOptions": "Opcje odpowiedzi",
@@ -804,6 +812,15 @@
       "presetYahoo": "Yahoo Mail",
       "presetIcloud": "iCloud",
       "presetCustom": "Niestandardowe",
+      "presetOutlook": "Outlook / Microsoft 365",
+      "presetExchange": "Exchange",
+      "exchangeHostPh": "mail.example.com",
+      "exchangeNote": "Poproś administratora Exchange o włączenie IMAP i SMTP AUTH dla Twojej skrzynki. Nazwa użytkownika to zwykle adres e-mail lub DOMENA\\użytkownik.",
+      "exchangeCertNote": "Jeśli serwer używa certyfikatu z podpisem własnym, administrator musi najpierw włączyć „{{setting}}”; pod hasłem pojawi się wtedy przełącznik pomijania weryfikacji certyfikatu.",
+      "outlookPasswordNote": "Outlook.com i Microsoft 365 nie akceptują już haseł dla IMAP; administrator musi skonfigurować logowanie Microsoft (zobacz dokumentację)",
+      "signInMicrosoft": "Zaloguj się przez Microsoft",
+      "signInMicrosoftNote": "Outlook.com i Microsoft 365 łączą się przez logowanie Microsoft, a nie hasłem. Otworzy się nowa karta; konto pojawi się tutaj po zakończeniu.",
+      "signInMicrosoftWaiting": "Oczekiwanie na Microsoft…",
       "errorRequired": "Adres e-mail, nazwa użytkownika i serwer IMAP są wymagane",
       "errorPasswordRequired": "Hasło jest wymagane dla nowych kont",
       "microsoftImapUnsupported": "Outlook.com / Hotmail wymaga OAuth2 (Modern Auth)",
@@ -1824,7 +1841,16 @@
         "replyLater": "Odpowiedz później",
         "screener": "Sito",
         "setAside": "Odłożone",
-        "snoozed": "Uśpione"
+        "snoozed": "Uśpione",
+        "countScreenerOne": "1 nowy nadawca do przesiania",
+        "countScreenerMany": "Nowi nadawcy do przesiania: {{n}}",
+        "countNeedsYouOne": "1 czeka na ciebie",
+        "countNeedsYouMany": "Czekają na ciebie: {{n}}",
+        "countUnread": "Nieprzeczytane: {{n}}",
+        "countConversationsOne": "1 rozmowa",
+        "countConversationsMany": "Rozmowy: {{n}}",
+        "countDraftsOne": "1 wersja robocza",
+        "countDraftsMany": "Wersje robocze: {{n}}"
       },
       "records": {
         "hide": "Ukryj",

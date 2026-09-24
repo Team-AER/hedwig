@@ -124,6 +124,9 @@ const SAME_VALUE_ALLOWED = {
   'admin.accounts.presetGmail':             'any', // Gmail
   'admin.accounts.presetIcloud':            'any', // iCloud
   'admin.accounts.presetYahoo':             'any', // Yahoo Mail
+  'admin.accounts.presetOutlook':           'any', // Outlook / Microsoft 365 — brand names
+  'admin.accounts.presetExchange':          'any', // Exchange — product name
+  'admin.accounts.exchangeHostPh':          'any', // mail.example.com
   'admin.accounts.smtpHostPh':              'any', // smtp.gmail.com
   'admin.ai.baseUrlPh':                      'any', // http://localhost:11434/v1
   'admin.ai.chatgptModelPh':                 'any', // gpt-5.6-luna

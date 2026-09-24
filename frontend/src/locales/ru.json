@@ -216,6 +216,14 @@
       "armed": "{{label}} — нажмите ещё раз, чтобы всё равно скачать"
     },
     "downloadAll": "Скачать все",
+    "downloadAllZip": "Скачать все (zip)",
+    "preview": {
+      "previous": "Предыдущее изображение",
+      "next": "Следующее изображение",
+      "download": "Скачать",
+      "close": "Закрыть",
+      "failed": "Не удалось показать это изображение."
+    },
     "reply": "Ответить",
     "replyAll": "Ответить всем",
     "replyOptions": "Параметры ответа",
@@ -786,6 +794,15 @@
       "presetYahoo": "Yahoo Mail",
       "presetIcloud": "iCloud",
       "presetCustom": "Другое",
+      "presetOutlook": "Outlook / Microsoft 365",
+      "presetExchange": "Exchange",
+      "exchangeHostPh": "mail.example.com",
+      "exchangeNote": "Попросите администратора Exchange включить IMAP и SMTP AUTH для вашего почтового ящика. Имя пользователя — обычно ваш адрес почты или ДОМЕН\\пользователь.",
+      "exchangeCertNote": "Если сервер использует самоподписанный сертификат, администратор должен сначала включить «{{setting}}»; после этого под паролем появится переключатель для пропуска проверки сертификата.",
+      "outlookPasswordNote": "Outlook.com и Microsoft 365 больше не принимают пароли для IMAP; администратор должен настроить вход через Microsoft (см. документацию)",
+      "signInMicrosoft": "Войти через Microsoft",
+      "signInMicrosoftNote": "Outlook.com и Microsoft 365 подключаются через вход Microsoft, а не по паролю. Откроется новая вкладка; учётная запись появится здесь, когда вы закончите.",
+      "signInMicrosoftWaiting": "Ожидание Microsoft…",
       "errorRequired": "Требуются адрес электронной почты, имя пользователя и IMAP-сервер",
       "errorPasswordRequired": "Для новых аккаунтов требуется пароль",
       "microsoftImapUnsupported": "Для Outlook.com / Hotmail нужен OAuth2 (Modern Auth)",
@@ -1805,7 +1822,16 @@
         "replyLater": "Ответить позже",
         "screener": "Фильтр",
         "setAside": "Отложенные",
-        "snoozed": "Отсроченные"
+        "snoozed": "Отсроченные",
+        "countScreenerOne": "1 новый отправитель на проверку",
+        "countScreenerMany": "Новых отправителей на проверку: {{n}}",
+        "countNeedsYouOne": "1 ждёт вас",
+        "countNeedsYouMany": "Ждут вас: {{n}}",
+        "countUnread": "Непрочитанных: {{n}}",
+        "countConversationsOne": "1 беседа",
+        "countConversationsMany": "Бесед: {{n}}",
+        "countDraftsOne": "1 черновик",
+        "countDraftsMany": "Черновиков: {{n}}"
       },
       "records": {
         "hide": "Скрыть",

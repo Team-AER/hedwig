@@ -56,12 +56,12 @@ describe('GET /admin/runtime', () => {
     expect(s.tiers.reflex).toMatchObject({ label: 'Tier 1 Reflex', role: 'fast', modelKey: 'llm.models.fast', model: GEMMA, effort: 'off', efforts: ['off', 'high'], wireEffort: 'none', modelSource: 'default' });
     expect(s.tiers.reasoning).toMatchObject({ label: 'Tier 2 Reasoning', role: 'long', model: QWEN, effort: 'low', efforts: ['off', 'low', 'medium', 'xhigh'], wireEffort: 'low' });
     expect(s.tiers.agent).toMatchObject({ role: 'agent', model: QWEN });
-    expect(s.fallback).toMatchObject({ model: GEMMA, modelSource: 'env', afterMs: { interactive: 8000, background: 45000 }, cooldownSec: 300 });
+    expect(s.fallback).toMatchObject({ model: GEMMA, modelSource: 'env', afterMs: { interactive: 60000, background: 300000 }, cooldownSec: 300 });
     expect(s.lanes).toEqual({
-      interactive: { concurrency: 2, waitMs: 30000, fallbackAfterMs: 8000 },
-      background: { concurrency: 1, waitMs: 1200000, fallbackAfterMs: 45000 },
+      interactive: { concurrency: 2, waitMs: 30000, fallbackAfterMs: 60000 },
+      background: { concurrency: 1, waitMs: 1200000, fallbackAfterMs: 300000 },
     });
-    expect(s.probe).toMatchObject({ enabled: false, everySec: 60, timeoutMs: 10000, recoverAfter: 2 });
+    expect(s.probe).toMatchObject({ enabled: false, everySec: 60, timeoutMs: 60000, recoverAfter: 2 });
     expect(s.budgets.sort).toMatchObject({ tokens: 2000000, tokensKey: 'llm.tokenBudget.sort' });
     expect(s.budgets.ask).toMatchObject({ tokensKey: 'llm.tokenBudget.ask', callsKey: 'llm.dailyBudget.ask' });
     expect(s.status.reasoning).toMatchObject({ label: 'Tier 2 Reasoning', model: QWEN, fallback: GEMMA });

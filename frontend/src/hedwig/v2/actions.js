@@ -292,6 +292,18 @@ function planFor(spec, items) {
         async inverse(e) { for (const item of e.items) await ops.removeFromList(list, threadOf(item)); },
       };
     }
+    case 'custom':
+      // Anything else with a server call and its inverse (a card's "Not a subscription"): sent at
+      // once, Undo runs `undo`; onApply / onRevert change the screen (hide the card, show it again).
+      if (typeof spec.run !== 'function') return null;
+      return {
+        title: spec.title || '',
+        failTitle: spec.failTitle || tv('hedwig.v2.act.customFailed', 'That did not work.'),
+        commit: () => spec.run(),
+        inverse: typeof spec.undo === 'function' ? () => spec.undo() : null,
+        onApply: spec.onApply,
+        onRevert: spec.onRevert,
+      };
     default:
       return null;
   }
@@ -357,6 +369,7 @@ function apply(e, { advance = true } = {}) {
     for (const id of ids) patchOwner.set(id, e.id);
   }
   if (plan.listCount) bump(e, plan.listCount, 1);
+  plan.onApply?.(e);
 }
 
 function unhide(e) {
@@ -369,6 +382,7 @@ function revert(e) {
   if (!e.applied) return;
   e.applied = false;
   const v2 = useV2.getState();
+  e.plan.onRevert?.(e);
   unhide(e);
   if (e.local.patchBefore) {
     const mine = Object.fromEntries(Object.entries(e.local.patchBefore).filter(([id]) => patchOwner.get(id) === e.id));
@@ -460,10 +474,11 @@ function commit(e) {
 
 /**
  * Do something to one or more stream items, at once on screen, with Undo.
- * spec: { kind: 'done' | 'delete' | 'junk' | 'flag' | 'read' | 'snooze' | 'replyLater' | 'setAside' | 'move',
+ * spec: { kind: 'done' | 'delete' | 'junk' | 'flag' | 'read' | 'snooze' | 'replyLater' | 'setAside' | 'move' | 'custom',
  *   items: stream items, stream?, messages? (the reader's thread messages, drafts included or not),
  *   messageIds? (flag / read), on? (flag), read? (read), until?, untilLabel? (snooze),
  *   folder?, label? (move), advance? (false: leave the selection alone, as on a phone), immediate?,
+ *   run?, undo?, onApply?, onRevert? (custom),
  *   title?, failTitle? (the toast's words instead of the action's own) }
  * Returns the action's id (for undo), or null when there is nothing to do.
  */

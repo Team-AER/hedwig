@@ -216,6 +216,14 @@
       "armed": "{{label}} — erneut klicken, um trotzdem herunterzuladen"
     },
     "downloadAll": "Alle herunterladen",
+    "downloadAllZip": "Alle herunterladen (ZIP)",
+    "preview": {
+      "previous": "Vorheriges Bild",
+      "next": "Nächstes Bild",
+      "download": "Herunterladen",
+      "close": "Schließen",
+      "failed": "Dieses Bild kann nicht angezeigt werden."
+    },
     "reply": "Antworten",
     "replyAll": "Allen antworten",
     "replyOptions": "Antwortoptionen",
@@ -717,6 +725,15 @@
       "presetYahoo": "Yahoo Mail",
       "presetIcloud": "iCloud",
       "presetCustom": "Benutzerdefiniert",
+      "presetOutlook": "Outlook / Microsoft 365",
+      "presetExchange": "Exchange",
+      "exchangeHostPh": "mail.example.com",
+      "exchangeNote": "Bitten Sie Ihren Exchange-Administrator, IMAP und SMTP AUTH für Ihr Postfach zu aktivieren. Der Benutzername ist meist Ihre E-Mail-Adresse oder DOMÄNE\\Benutzername.",
+      "exchangeCertNote": "Verwendet der Server ein selbstsigniertes Zertifikat, muss ein Administrator zuerst „{{setting}}“ aktivieren; danach erscheint unter dem Passwort ein Schalter, um die Zertifikatsprüfung zu überspringen.",
+      "outlookPasswordNote": "Outlook.com und Microsoft 365 akzeptieren für IMAP keine Passwörter mehr; Ihr Administrator muss die Microsoft-Anmeldung einrichten (siehe Dokumentation)",
+      "signInMicrosoft": "Mit Microsoft anmelden",
+      "signInMicrosoftNote": "Outlook.com und Microsoft 365 werden über die Microsoft-Anmeldung verbunden, nicht mit einem Passwort. Ein neuer Tab öffnet sich; das Konto erscheint hier, sobald Sie fertig sind.",
+      "signInMicrosoftWaiting": "Warte auf Microsoft…",
       "errorRequired": "E-Mail, Benutzername und IMAP-Host sind erforderlich",
       "errorPasswordRequired": "Für neue Konten ist ein Passwort erforderlich",
       "microsoftImapUnsupported": "Outlook.com / Hotmail erfordert OAuth2 (Modern Auth)",
@@ -1805,7 +1822,16 @@
         "replyLater": "Später antworten",
         "screener": "Absenderprüfung",
         "setAside": "Beiseitegelegt",
-        "snoozed": "Zurückgestellt"
+        "snoozed": "Zurückgestellt",
+        "countScreenerOne": "1 neuer Absender zum Prüfen",
+        "countScreenerMany": "{{n}} neue Absender zum Prüfen",
+        "countNeedsYouOne": "1 braucht dich",
+        "countNeedsYouMany": "{{n}} brauchen dich",
+        "countUnread": "{{n}} ungelesen",
+        "countConversationsOne": "1 Unterhaltung",
+        "countConversationsMany": "{{n}} Unterhaltungen",
+        "countDraftsOne": "1 Entwurf",
+        "countDraftsMany": "{{n}} Entwürfe"
       },
       "records": {
         "hide": "Ausblenden",

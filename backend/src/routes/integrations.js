@@ -2,13 +2,16 @@ import { Router } from 'express';
 import { query } from '../services/db.js';
 import { requireAuth, requireAdmin } from '../middleware/auth.js';
 import { encrypt, decrypt, isEncrypted } from '../services/encryption.js';
+import { isOAuthConfigured } from '../services/oauthProviders.js';
 
 const router = Router();
 router.use(requireAuth);
 
 // Maps each provider's stored config keys to the process.env vars the OAuth routes
 // read. Config can arrive from this UI or straight from .env; both converge here,
-// so getMsConfig()/getGoogleConfig() only ever need to look at process.env.
+// so getMsConfig()/getGoogleConfig() only ever need to look at process.env. Microsoft
+// also accepts the MICROSOFT_* .env aliases (services/oauthProviders.js); the MS_* names
+// written here take precedence over them.
 const PROVIDER_ENV = {
   microsoft: {
     clientId: 'MS_CLIENT_ID',
@@ -64,10 +67,10 @@ router.get('/', requireAdmin, async (req, res) => {
 router.get('/status', async (req, res) => {
   res.json({
     microsoft: {
-      configured: !!process.env.MS_CLIENT_ID,
+      configured: isOAuthConfigured('microsoft'),
     },
     google: {
-      configured: !!process.env.GOOGLE_CLIENT_ID,
+      configured: isOAuthConfigured('google'),
     },
   });
 });

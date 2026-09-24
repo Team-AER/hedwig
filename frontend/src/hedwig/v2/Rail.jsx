@@ -22,13 +22,31 @@ import { tv, tvn } from './i18n.js';
 
 const LEDGER_ICONS = { purchases: 'shopping-bag', subscriptions: 'repeat', travel: 'plane', deliveries: 'package' };
 
-function NavItem({ icon, label, count, attention = false, on, onClick, sub = false }) {
+// What a rail count counts, for its tooltip and the item's accessible name.
+const COUNT_HINTS = {
+  screener: [['hedwig.v2.rail.countScreenerOne', '1 new sender to screen'], ['hedwig.v2.rail.countScreenerMany', '{{n}} new senders to screen']],
+  people: [['hedwig.v2.rail.countNeedsYouOne', '1 needs you'], ['hedwig.v2.rail.countNeedsYouMany', '{{n}} need you']],
+  reading: [['hedwig.v2.rail.countUnread', '{{n}} unread'], ['hedwig.v2.rail.countUnread', '{{n}} unread']],
+  conversations: [['hedwig.v2.rail.countConversationsOne', '1 conversation'], ['hedwig.v2.rail.countConversationsMany', '{{n}} conversations']],
+  drafts: [['hedwig.v2.rail.countDraftsOne', '1 draft'], ['hedwig.v2.rail.countDraftsMany', '{{n}} drafts']],
+};
+const HINT_OF = { records: 'reading', replyLater: 'conversations', setAside: 'conversations', snoozed: 'conversations' };
+
+/** "3 unread", "12+ need you": what the rail's count for `key` means. Pure. */
+export function countHint(key, text) {
+  const pair = COUNT_HINTS[HINT_OF[key] || key];
+  if (!pair || !text) return undefined;
+  return tvn(Number.parseInt(text, 10), pair[0], pair[1], { n: text });
+}
+
+function NavItem({ icon, label, count, hint, attention = false, on, onClick, sub = false }) {
   const [hot, setHot] = useState(false);
   const shown = count != null && count !== 0 && count !== '';
   return (
     <button
       type="button"
       className="hw-nav"
+      aria-label={shown && hint ? `${label}, ${hint}` : undefined}
       aria-current={on ? 'page' : undefined}
       onClick={onClick}
       onMouseEnter={() => setHot(true)}
@@ -42,7 +60,7 @@ function NavItem({ icon, label, count, attention = false, on, onClick, sub = fal
         <Icon name={icon} size={16} />
       </span>
       <span style={{ flexGrow: 1, fontWeight: on ? 600 : 400, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
-      {shown && <Num size={12} color={attention ? V.attentionInk : V.muted} style={{ fontWeight: 500 }}>{count}</Num>}
+      {shown && <Num size={12} color={attention ? V.attentionInk : V.muted} style={{ fontWeight: 500 }} title={hint}>{count}</Num>}
     </button>
   );
 }
@@ -171,23 +189,23 @@ export default function Rail() {
         <IconButton icon="compose" label={tv('hedwig.v2.rail.compose', 'New message')} kbd="C" onClick={compose} />
       </div>
       <div className="hw-scroll" style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 1, padding: '8px 8px 12px' }}>
-        <NavItem icon="door-open" label={tv('hedwig.v2.rail.screener', 'Screener')} count={countText(counts, more, 'screener')} on={on(VIEW.screener)} onClick={() => showView(VIEW.screener)} />
-        <NavItem icon="users" label={tv('hedwig.v2.stream.people', 'People')} count={countText(counts, more, 'people')} attention on={on(VIEW.people)} onClick={() => showView(VIEW.people)} />
-        <NavItem icon="book-open" label={tv('hedwig.v2.stream.reading', 'Reading')} count={countText(counts, more, 'reading')} on={on(VIEW.reading)} onClick={() => showView(VIEW.reading)} />
-        <NavItem icon="receipt" label={tv('hedwig.v2.stream.records', 'Records')} count={countText(counts, more, 'records')} on={on(VIEW.records)} onClick={() => showView(VIEW.records)} />
+        <NavItem icon="door-open" label={tv('hedwig.v2.rail.screener', 'Screener')} count={countText(counts, more, 'screener')} hint={countHint('screener', countText(counts, more, 'screener'))} on={on(VIEW.screener)} onClick={() => showView(VIEW.screener)} />
+        <NavItem icon="users" label={tv('hedwig.v2.stream.people', 'People')} count={countText(counts, more, 'people')} hint={countHint('people', countText(counts, more, 'people'))} attention on={on(VIEW.people)} onClick={() => showView(VIEW.people)} />
+        <NavItem icon="book-open" label={tv('hedwig.v2.stream.reading', 'Reading')} count={countText(counts, more, 'reading')} hint={countHint('reading', countText(counts, more, 'reading'))} on={on(VIEW.reading)} onClick={() => showView(VIEW.reading)} />
+        <NavItem icon="receipt" label={tv('hedwig.v2.stream.records', 'Records')} count={countText(counts, more, 'records')} hint={countHint('records', countText(counts, more, 'records'))} on={on(VIEW.records)} onClick={() => showView(VIEW.records)} />
         {ledgers.map((kind) => (
           <NavItem key={kind} sub icon={LEDGER_ICONS[kind] || 'receipt'} label={ledgerTitle(kind)} on={onLedger(kind)} onClick={() => showView(VIEW.ledger, { kind })} />
         ))}
         <SectionLabel as="h2">{tv('hedwig.v2.rail.later', 'Later')}</SectionLabel>
         {work && (
           <>
-            <NavItem icon="reply" label={tv('hedwig.v2.rail.replyLater', 'Reply Later')} count={countText(counts, more, 'replyLater')} on={on(VIEW.list, 'replyLater')} onClick={() => showView(VIEW.list, { list: 'replyLater' })} />
-            <NavItem icon="bookmark" label={tv('hedwig.v2.rail.setAside', 'Set Aside')} count={countText(counts, more, 'setAside')} on={on(VIEW.list, 'setAside')} onClick={() => showView(VIEW.list, { list: 'setAside' })} />
-            <NavItem icon="alarm-clock" label={tv('hedwig.v2.rail.snoozed', 'Snoozed')} count={countText(counts, more, 'snoozed')} on={on(VIEW.list, 'snoozed')} onClick={() => showView(VIEW.list, { list: 'snoozed' })} />
+            <NavItem icon="reply" label={tv('hedwig.v2.rail.replyLater', 'Reply Later')} count={countText(counts, more, 'replyLater')} hint={countHint('replyLater', countText(counts, more, 'replyLater'))} on={on(VIEW.list, 'replyLater')} onClick={() => showView(VIEW.list, { list: 'replyLater' })} />
+            <NavItem icon="bookmark" label={tv('hedwig.v2.rail.setAside', 'Set Aside')} count={countText(counts, more, 'setAside')} hint={countHint('setAside', countText(counts, more, 'setAside'))} on={on(VIEW.list, 'setAside')} onClick={() => showView(VIEW.list, { list: 'setAside' })} />
+            <NavItem icon="alarm-clock" label={tv('hedwig.v2.rail.snoozed', 'Snoozed')} count={countText(counts, more, 'snoozed')} hint={countHint('snoozed', countText(counts, more, 'snoozed'))} on={on(VIEW.list, 'snoozed')} onClick={() => showView(VIEW.list, { list: 'snoozed' })} />
             <NavItem icon="hourglass" label={tv('hedwig.v2.waiting.title', 'Waiting on')} on={on(VIEW.waiting)} onClick={() => showView(VIEW.waiting)} />
           </>
         )}
-        <NavItem icon="file" label={tv('hedwig.v2.drafts.title', 'Drafts')} count={countText(counts, more, 'drafts')} on={on(VIEW.drafts)} onClick={() => showView(VIEW.drafts)} />
+        <NavItem icon="file" label={tv('hedwig.v2.drafts.title', 'Drafts')} count={countText(counts, more, 'drafts')} hint={countHint('drafts', countText(counts, more, 'drafts'))} on={on(VIEW.drafts)} onClick={() => showView(VIEW.drafts)} />
         <SectionLabel as="h2">{tv('hedwig.v2.brand', 'Hedwig')}</SectionLabel>
         <NavItem icon="newspaper" label={tv('hedwig.v2.rail.brief', 'Daily Brief')} on={on(VIEW.brief)} onClick={() => showView(VIEW.brief)} />
         <NavItem icon="history" label={tv('hedwig.v2.rail.today', 'Today')} on={on(VIEW.today)} onClick={() => showView(VIEW.today)} />

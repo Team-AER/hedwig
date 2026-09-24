@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { safeFilename, attachmentDisposition } from './contentDisposition.js';
+import { safeFilename, attachmentDisposition, inlineContentType } from './contentDisposition.js';
 
 // Build all non-ASCII inputs from char codes so this source stays pure ASCII (no invisible chars).
 const cjk = String.fromCharCode(0x767a, 0x7968) + '.pdf'; // 発票.pdf
@@ -69,5 +69,29 @@ describe('attachmentDisposition', () => {
 
   it('falls back to "attachment" for an empty name', () => {
     expect(attachmentDisposition('')).toBe(`attachment; filename="attachment"; filename*=UTF-8''attachment`);
+  });
+});
+
+describe('inline attachments', () => {
+  it('an inline disposition keeps the same safe filename parameters', () => {
+    expect(attachmentDisposition('Picture1.jpg', 'inline')).toBe(`inline; filename="Picture1.jpg"; filename*=UTF-8''Picture1.jpg`);
+  });
+
+  it('pictures and PDFs go inline by extension, whatever type the sender declared', () => {
+    expect(inlineContentType('Picture1.jpg', 'application/octet-stream')).toBe('image/jpeg');
+    expect(inlineContentType('scan.PDF', '')).toBe('application/pdf');
+    expect(inlineContentType('photo.heic', 'image/heic')).toBe('image/heic');
+  });
+
+  it('never HTML, SVG or a disguised name, even when the declared type says picture', () => {
+    expect(inlineContentType('logo.svg', 'image/svg+xml')).toBeNull();
+    expect(inlineContentType('page.html', 'image/png')).toBeNull();
+    expect(inlineContentType('invoice.pdf.exe', 'application/pdf')).toBeNull();
+    expect(inlineContentType('noext', 'text/html')).toBeNull();
+  });
+
+  it('a name without an extension falls back to a safe declared type', () => {
+    expect(inlineContentType('image', 'image/jpg')).toBe('image/jpeg');
+    expect(inlineContentType('image', 'image/png; name=x')).toBe('image/png');
   });
 });

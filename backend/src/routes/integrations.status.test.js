@@ -35,6 +35,7 @@ let server;
 let base;
 const savedClientId = process.env.MS_CLIENT_ID;
 const savedGoogleClientId = process.env.GOOGLE_CLIENT_ID;
+const savedMicrosoftClientId = process.env.MICROSOFT_CLIENT_ID;
 
 beforeAll(async () => {
   await new Promise((resolve) => { server = buildApp().listen(0, resolve); });
@@ -47,10 +48,13 @@ afterAll(async () => {
   else process.env.MS_CLIENT_ID = savedClientId;
   if (savedGoogleClientId === undefined) delete process.env.GOOGLE_CLIENT_ID;
   else process.env.GOOGLE_CLIENT_ID = savedGoogleClientId;
+  if (savedMicrosoftClientId === undefined) delete process.env.MICROSOFT_CLIENT_ID;
+  else process.env.MICROSOFT_CLIENT_ID = savedMicrosoftClientId;
 });
 
 afterEach(() => {
   delete process.env.MS_CLIENT_ID;
+  delete process.env.MICROSOFT_CLIENT_ID;
   delete process.env.GOOGLE_CLIENT_ID;
 });
 
@@ -70,6 +74,15 @@ describe('GET /api/integrations/status (non-admin capability check)', () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
       microsoft: { configured: false },
+      google: { configured: false },
+    });
+  });
+
+  it('reports microsoft configured=true from the MICROSOFT_CLIENT_ID .env alias', async () => {
+    process.env.MICROSOFT_CLIENT_ID = 'alias-client-id';
+    const res = await fetch(`${base}/api/integrations/status`);
+    expect(await res.json()).toEqual({
+      microsoft: { configured: true },
       google: { configured: false },
     });
   });

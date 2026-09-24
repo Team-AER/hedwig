@@ -3,6 +3,7 @@
 import { query } from '../../services/db.js';
 import { recordCorrection } from '../ledger/corrections.js';
 import { CARD_KINDS, FIELDS, INTERNAL_FIELDS, dedupeKey, eventAt, normField, normFields } from './kinds.js';
+import { recordFeedback, withdrawFeedback } from './feedback.js';
 
 const LAYER_RANK = { user: 6, schema_org: 5, ics: 5, pattern: 4, reasoning: 3, reflex: 2, derived: 1 };
 const DELIVERY_ORDER = ['ordered', 'shipped', 'in_transit', 'out_for_delivery', 'delivered'];
@@ -257,22 +258,71 @@ export async function patchCard(userId, id, patch) {
     userId, kind: 'card', targetId: id, before: { kind: card.kind, fields: before }, after: { kind: card.kind, fields: after },
     promptId: card.provenance.promptId, promptVersion: card.provenance.promptVersion,
   });
+  // One feedback row per corrected field, keyed by the merchant as Hedwig read it, for the next extraction.
+  for (const k of Object.keys(after)) {
+    await recordFeedback(userId, card, {
+      verdict: 'wrong_field', field: k,
+      before: { [k]: before[k] ?? null, ...(card.fields.merchant ? { merchant: card.fields.merchant } : {}) },
+      after: { [k]: after[k] ?? null },
+    });
+  }
   return getCard(userId, id);
 }
 
-/** Hide a card. A deadline card dismisses its commitment. */
-export async function dismissCard(userId, id) {
+// What the owner's reason for hiding a card says, as feedback and as the stored reason.
+const HIDE = {
+  dismissed: { verdict: 'dismissed', reason: 'owner:dismissed', note: 'dismissed' },
+  not_recurring: { verdict: 'not_recurring', reason: 'owner:not_recurring', note: 'not a subscription' },
+  not_this_kind: { verdict: 'not_this_kind', reason: 'owner:not_this_kind', note: 'not this kind' },
+};
+
+/**
+ * Hide a card, and remember why. A deadline card dismisses its commitment.
+ * @param {'dismissed'|'not_recurring'|'not_this_kind'} [why]
+ */
+export async function dismissCard(userId, id, why = 'dismissed') {
   const card = await getCard(userId, id);
   if (!card) return null;
+  const how = HIDE[why] || HIDE.dismissed;
+  if (why === 'not_recurring' && card.kind !== 'subscription') throw httpError(400, 'only a subscription card can be marked as not recurring');
   if (card.kind === 'deadline') {
     const { updateCommitment } = await import('../context/commitments.js');
     await updateCommitment(userId, id, { status: 'dismissed' });
   } else {
-    await query('UPDATE hedwig_cards SET dismissed_at = COALESCE(dismissed_at, NOW()), updated_at = NOW() WHERE id = $1 AND user_id = $2', [id, userId]);
+    await query(
+      `UPDATE hedwig_cards SET dismissed_at = COALESCE(dismissed_at, NOW()), dismissed_reason = $3, updated_at = NOW() WHERE id = $1 AND user_id = $2`,
+      [id, userId, how.reason],
+    );
   }
   await recordCorrection({
-    userId, kind: 'card', targetId: id, before: { kind: card.kind, dismissed: false }, after: { kind: card.kind, dismissed: true },
-    note: 'dismissed', promptId: card.provenance.promptId, promptVersion: card.provenance.promptVersion,
+    userId, kind: 'card', targetId: id, before: { kind: card.kind, dismissed: false }, after: { kind: card.kind, dismissed: true, verdict: how.verdict },
+    note: how.note, promptId: card.provenance.promptId, promptVersion: card.provenance.promptVersion,
   });
-  return { ok: true, id };
+  const fb = await recordFeedback(userId, card, {
+    verdict: how.verdict,
+    before: { merchant: card.fields.merchant || card.fields.issuer || card.fields.provider || null, fields: card.fields },
+  });
+  return { ok: true, id, verdict: how.verdict, feedbackId: fb?.id || null };
+}
+
+/**
+ * Bring a hidden card back (the undo of Dismiss, "Not a subscription" and "Not a <kind>"): the
+ * feedback that hid it is withdrawn; a derived subscription brought back counts as confirmed, so the
+ * subscription finder keeps it.
+ */
+export async function restoreCard(userId, id) {
+  const card = await getCard(userId, id);
+  if (!card) return null;
+  if (card.kind === 'deadline') {
+    const { updateCommitment } = await import('../context/commitments.js');
+    await updateCommitment(userId, id, { status: 'open' });
+  } else {
+    await query('UPDATE hedwig_cards SET dismissed_at = NULL, dismissed_reason = NULL, updated_at = NOW() WHERE id = $1 AND user_id = $2', [id, userId]);
+  }
+  await withdrawFeedback(userId, card, { confirm: card.kind === 'subscription' && card.layer === 'derived' });
+  await recordCorrection({
+    userId, kind: 'card', targetId: id, before: { kind: card.kind, dismissed: true }, after: { kind: card.kind, dismissed: false },
+    note: 'restored', promptId: card.provenance.promptId, promptVersion: card.provenance.promptVersion,
+  });
+  return getCard(userId, id);
 }

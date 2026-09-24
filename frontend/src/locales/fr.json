@@ -216,6 +216,14 @@
       "armed": "{{label}} — cliquez à nouveau pour télécharger quand même"
     },
     "downloadAll": "Tout télécharger",
+    "downloadAllZip": "Tout télécharger (zip)",
+    "preview": {
+      "previous": "Image précédente",
+      "next": "Image suivante",
+      "download": "Télécharger",
+      "close": "Fermer",
+      "failed": "Impossible d'afficher cette image."
+    },
     "reply": "Répondre",
     "replyAll": "Répondre à tous",
     "replyOptions": "Options de réponse",
@@ -786,6 +794,15 @@
       "presetYahoo": "Yahoo Mail",
       "presetIcloud": "iCloud",
       "presetCustom": "Personnalisé",
+      "presetOutlook": "Outlook / Microsoft 365",
+      "presetExchange": "Exchange",
+      "exchangeHostPh": "mail.example.com",
+      "exchangeNote": "Demandez à votre administrateur Exchange d’activer IMAP et SMTP AUTH pour votre boîte aux lettres. Le nom d’utilisateur est généralement votre adresse e-mail ou DOMAINE\\utilisateur.",
+      "exchangeCertNote": "Si le serveur utilise un certificat auto-signé, un administrateur doit d’abord activer « {{setting}} » ; un interrupteur permettant d’ignorer la vérification du certificat apparaît alors sous le mot de passe.",
+      "outlookPasswordNote": "Outlook.com et Microsoft 365 n’acceptent plus les mots de passe pour IMAP ; votre administrateur doit configurer la connexion Microsoft (voir la documentation)",
+      "signInMicrosoft": "Se connecter avec Microsoft",
+      "signInMicrosoftNote": "Outlook.com et Microsoft 365 se connectent via la connexion Microsoft, pas avec un mot de passe. Un nouvel onglet s’ouvre ; le compte apparaît ici une fois terminé.",
+      "signInMicrosoftWaiting": "En attente de Microsoft…",
       "errorRequired": "L'e-mail, le nom d'utilisateur et le serveur IMAP sont requis",
       "errorPasswordRequired": "Le mot de passe est requis pour les nouveaux comptes",
       "microsoftImapUnsupported": "Outlook.com / Hotmail nécessite OAuth2 (Modern Auth)",
@@ -1805,7 +1822,16 @@
         "replyLater": "Répondre plus tard",
         "screener": "Tri des expéditeurs",
         "setAside": "Mis de côté",
-        "snoozed": "En pause"
+        "snoozed": "En pause",
+        "countScreenerOne": "1 nouvel expéditeur à trier",
+        "countScreenerMany": "{{n}} nouveaux expéditeurs à trier",
+        "countNeedsYouOne": "1 attend votre réponse",
+        "countNeedsYouMany": "{{n}} attendent votre réponse",
+        "countUnread": "{{n}} non lus",
+        "countConversationsOne": "1 fil de discussion",
+        "countConversationsMany": "{{n}} fils de discussion",
+        "countDraftsOne": "1 brouillon",
+        "countDraftsMany": "{{n}} brouillons"
       },
       "records": {
         "hide": "Masquer",

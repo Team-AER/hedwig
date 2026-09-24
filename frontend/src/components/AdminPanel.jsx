@@ -33,6 +33,7 @@ import DiagnosticsReportModal from './DiagnosticsReportModal.jsx';
 import { getEffectiveShortcuts, getGroupedActions, ACTION_DEFS, SPECIAL_KEY_LABELS, parseModKey, modLabel } from '../utils/defaultShortcuts.js';
 import { isValidForwardAddress } from '../utils/ruleActions.js';
 import { folderParentLabel } from '../utils/folderDisplay.js';
+import { PRESET_ORDER, PRESET_LABEL_KEYS, applyPreset, isMicrosoftImapHost, microsoftAuthMode } from '../utils/accountPresets.js';
 import SpamSettings from './SpamSettings.jsx';
 import { Icon } from '../hedwig/icons.jsx';
 
@@ -63,23 +64,26 @@ const COLORS = [
   '#f97316','#eab308','#22c55e','#06b6d4','#3b82f6','#14b8a6',
 ];
 
-// ─── IMAP presets ─────────────────────────────────────────────────────────────
-const PRESETS = {
-  gmail:   { label: 'Gmail',   imap_host: 'imap.gmail.com',        imap_port: 993, smtp_host: 'smtp.gmail.com',        smtp_port: 587 },
-  yahoo:   { label: 'Yahoo',   imap_host: 'imap.mail.yahoo.com',   imap_port: 993, smtp_host: 'smtp.mail.yahoo.com',   smtp_port: 587 },
-  icloud:  { label: 'iCloud',  imap_host: 'imap.mail.me.com',      imap_port: 993, smtp_host: 'smtp.mail.me.com',      smtp_port: 587 },
-  custom:  { label: 'Custom' },
-};
+// IMAP presets (Gmail, Outlook / Microsoft 365, Yahoo, iCloud, Exchange, Custom) live in
+// utils/accountPresets.js with the Microsoft sign-in rules.
 
 // ─── Account Form (Add or Edit) ───────────────────────────────────────────────
-function isMicrosoftImapHost(host) {
-  const h = (host || '').toLowerCase();
-  return h.includes('.outlook.com') || h.includes('office365.com') || h.includes('.hotmail.com') || h.includes('.live.com');
+// Opens the Microsoft authorization-code flow in a new tab. App.jsx posts
+// { type: 'oauth_success' | 'oauth_error' } back to this window when it returns.
+function openMicrosoftSignIn() {
+  // Real anchor click rather than window.open — see IntegrationsTab.handleConnectMs.
+  const a = document.createElement('a');
+  a.href = '/oauth/microsoft';
+  a.target = '_blank';
+  a.rel = 'opener';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
 }
 
-function AccountForm({ initial, onSave, onCancel }) {
+export function AccountForm({ initial, onSave, onCancel }) {
   const { t } = useTranslation();
-  const { categorizationEnabled } = useStore();
+  const { categorizationEnabled, setAccounts } = useStore();
 
   const isEdit = !!initial?.id;
   const [form, setForm] = useState(initial || {
@@ -100,6 +104,31 @@ function AccountForm({ initial, onSave, onCancel }) {
   const [showSmtpPass, setShowSmtpPass] = useState(false);
   const [selectedPreset, setSelectedPreset] = useState(null);
   const [mailPolicy, setMailPolicy] = useState({ allowPrivateHosts: false, allowInsecureTls: false, allowNonstandardPorts: false });
+  // { microsoft: { configured } } — decides whether Outlook / Microsoft 365 offers sign-in.
+  const [integrationStatus, setIntegrationStatus] = useState(null);
+  const [connectingMs, setConnectingMs] = useState(false);
+
+  useEffect(() => {
+    api.getIntegrationsStatus().then(setIntegrationStatus).catch(() => {});
+  }, []);
+
+  // The sign-in tab reports back through postMessage (App.jsx). On success the backend has
+  // already created (or re-pointed) the account, so refresh the list and leave the form.
+  useEffect(() => {
+    const onMessage = (e) => {
+      if (e.origin !== window.location.origin) return;
+      if (e.data?.type === 'oauth_success' && e.data?.provider === 'microsoft') {
+        setConnectingMs(false);
+        api.getAccounts().then(setAccounts).catch(() => {});
+        onCancel();
+      } else if (e.data?.type === 'oauth_error') {
+        setConnectingMs(false);
+        setError(String(e.data.error || ''));
+      }
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [onCancel, setAccounts]);
 
   useEffect(() => {
     api.admin.getSettings()
@@ -129,10 +158,41 @@ function AccountForm({ initial, onSave, onCancel }) {
   const set = (key, val) => setForm(f => ({ ...f, [key]: val }));
 
   const handlePreset = (key) => {
-    const p = PRESETS[key];
-    if (p.imap_host) setForm(f => ({ ...f, ...p, label: undefined }));
+    setForm(f => applyPreset(f, key));
     setSelectedPreset(key);
   };
+
+  const msMode = microsoftAuthMode({ presetKey: selectedPreset, imapHost: form.imap_host, account: initial, integrations: integrationStatus });
+  const isExchange = selectedPreset === 'exchange';
+
+  const handleMicrosoftSignIn = () => {
+    setError('');
+    setConnectingMs(true);
+    openMicrosoftSignIn();
+    setTimeout(() => setConnectingMs(false), 5000);
+  };
+
+  const microsoftSignInPanel = (
+    <div style={{
+      padding: '12px 14px', margin: '10px 0 16px',
+      background: 'var(--accent-dim)', border: '1px solid var(--border)',
+      borderRadius: 8, fontSize: 13, color: 'var(--text-primary)',
+    }}>
+      <div style={{ color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: 10 }}>{t('admin.accounts.signInMicrosoftNote')}</div>
+      <button type="button" onClick={handleMicrosoftSignIn} disabled={connectingMs} style={{
+        display: 'inline-flex', alignItems: 'center', gap: 8,
+        padding: '8px 14px', borderRadius: 8, border: '1px solid var(--border)',
+        background: 'var(--bg-tertiary)', color: 'var(--text-primary)',
+        fontSize: 13, fontWeight: 500, cursor: connectingMs ? 'default' : 'pointer', opacity: connectingMs ? 0.6 : 1,
+      }}>
+        <svg width="14" height="14" viewBox="0 0 21 21" aria-hidden="true">
+          <rect x="1" y="1" width="9" height="9" fill="#f25022"/><rect x="11" y="1" width="9" height="9" fill="#7fba00"/>
+          <rect x="1" y="11" width="9" height="9" fill="#00a4ef"/><rect x="11" y="11" width="9" height="9" fill="#ffb900"/>
+        </svg>
+        {connectingMs ? t('admin.accounts.signInMicrosoftWaiting') : t('admin.accounts.signInMicrosoft')}
+      </button>
+    </div>
+  );
 
   const handleSubmit = async () => {
     if (!form.email_address || !form.auth_user || !form.imap_host) {
@@ -158,9 +218,9 @@ function AccountForm({ initial, onSave, onCancel }) {
       {/* Presets (add only) */}
       {!isEdit && (
         <div style={{ display: 'flex', gap: 6, marginBottom: 18, flexWrap: 'wrap' }}>
-          {Object.entries(PRESETS).map(([key]) => {
+          {PRESET_ORDER.map((key) => {
             const active = selectedPreset === key;
-            const presetLabel = key === 'gmail' ? t('admin.accounts.presetGmail') : key === 'yahoo' ? t('admin.accounts.presetYahoo') : key === 'icloud' ? t('admin.accounts.presetIcloud') : t('admin.accounts.presetCustom');
+            const presetLabel = t(PRESET_LABEL_KEYS[key]);
             return (
               <button key={key} onClick={() => handlePreset(key)} style={{
                 padding: '5px 12px', borderRadius: 20, fontSize: 12, fontWeight: 500,
@@ -173,6 +233,42 @@ function AccountForm({ initial, onSave, onCancel }) {
               </button>
             );
           })}
+        </div>
+      )}
+
+      {!isEdit && msMode === 'oauth' ? (
+        <>
+          {microsoftSignInPanel}
+          {error && (
+            <div style={{
+              padding: '10px 14px', background: 'rgba(248,113,113,0.1)',
+              border: '1px solid rgba(248,113,113,0.3)', borderRadius: 8,
+              color: 'var(--red)', fontSize: 13, marginBottom: 14,
+            }}>
+              {error}
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+            <button onClick={onCancel} style={{
+              padding: '10px 16px', background: 'var(--bg-tertiary)',
+              border: '1px solid var(--border)', borderRadius: 8,
+              color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13,
+            }}>
+              {t('common.cancel')}
+            </button>
+          </div>
+        </>
+      ) : (<>
+      {isExchange && (
+        <div style={{
+          padding: '10px 14px', marginBottom: 16,
+          background: 'var(--bg-tertiary)', border: '1px solid var(--border)',
+          borderRadius: 8, fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5,
+        }}>
+          <div>{t('admin.accounts.exchangeNote')}</div>
+          {!mailPolicy.allowInsecureTls && (
+            <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginTop: 6 }}>{t('admin.accounts.exchangeCertNote', { setting: t('admin.security.allowInsecureTls') })}</div>
+          )}
         </div>
       )}
 
@@ -221,7 +317,7 @@ function AccountForm({ initial, onSave, onCancel }) {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 90px', gap: 10 }}>
         <Field label={t('admin.accounts.imapHost')} required>
           <input value={form.imap_host || ''} onChange={e => set('imap_host', e.target.value)}
-            placeholder={t('admin.accounts.imapHostPh')} style={inputStyle}
+            placeholder={isExchange ? t('admin.accounts.exchangeHostPh') : t('admin.accounts.imapHostPh')} style={inputStyle}
             onFocus={e => e.target.style.borderColor = 'var(--accent)'}
             onBlur={e => e.target.style.borderColor = 'var(--border)'} />
         </Field>
@@ -289,7 +385,9 @@ function AccountForm({ initial, onSave, onCancel }) {
         </div>
       )}
 
-      {isMicrosoftImapHost(form.imap_host) && (
+      {msMode === 'oauth' && microsoftSignInPanel}
+
+      {msMode === 'unconfigured' && (
         <div style={{
           display: 'flex', alignItems: 'flex-start', gap: 10,
           padding: '10px 14px', marginTop: 10,
@@ -302,12 +400,14 @@ function AccountForm({ initial, onSave, onCancel }) {
           </svg>
           <div>
             <div style={{ fontWeight: 600, marginBottom: 3 }}>{t('admin.accounts.microsoftImapUnsupported')}</div>
-            <div style={{ color: 'var(--text-secondary)', lineHeight: 1.5 }}>{t('admin.accounts.microsoftImapNote')}</div>
+            <div style={{ color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+              {selectedPreset === 'outlook' ? t('admin.accounts.outlookPasswordNote') : t('admin.accounts.microsoftImapNote')}
+            </div>
           </div>
         </div>
       )}
 
-      <div style={{ height: 1, background: 'var(--border-subtle)', margin: '4px 0 16px', marginTop: isMicrosoftImapHost(form.imap_host) ? 16 : '4px' }} />
+      <div style={{ height: 1, background: 'var(--border-subtle)', margin: '4px 0 16px', marginTop: msMode === 'unconfigured' ? 16 : '4px' }} />
       <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 10, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
         {t('admin.accounts.smtpSection')}
       </div>
@@ -315,7 +415,7 @@ function AccountForm({ initial, onSave, onCancel }) {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 90px', gap: 10 }}>
         <Field label={t('admin.accounts.smtpHost')}>
           <input value={form.smtp_host || ''} onChange={e => set('smtp_host', e.target.value)}
-            placeholder={t('admin.accounts.smtpHostPh')} style={inputStyle}
+            placeholder={isExchange ? t('admin.accounts.exchangeHostPh') : t('admin.accounts.smtpHostPh')} style={inputStyle}
             onFocus={e => e.target.style.borderColor = 'var(--accent)'}
             onBlur={e => e.target.style.borderColor = 'var(--border)'} />
         </Field>
@@ -548,6 +648,7 @@ function AccountForm({ initial, onSave, onCancel }) {
           {t('common.cancel')}
         </button>
       </div>
+      </>)}
     </div>
   );
 }

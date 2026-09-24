@@ -83,7 +83,7 @@ async function mount(composeData) {
 const composer = () => document.querySelector('.compose-window');
 const overlay = () => document.querySelector('[data-compose-drop-overlay]');
 const attachmentNames = () => Array.from(document.querySelectorAll('[data-compose-attachments] > span'))
-  .map(el => el.querySelector('span')?.textContent);
+  .map(el => el.querySelector('[data-attachment-name]')?.textContent);
 
 // A native drag event with a fake dataTransfer: types says whether files are on board.
 function dragEvent(type, files = []) {
@@ -116,6 +116,27 @@ describe('drag and drop attachments', () => {
     assert.equal(drop.defaultPrevented, true, 'the browser must not open the file');
     assert.deepEqual(attachmentNames().sort(), ['notes.txt', 'report.pdf']);
     assert.equal(overlay(), null, 'the overlay goes away on drop');
+  });
+
+  test('a dropped picture shows its thumbnail from the local file, revoked when it is removed', async () => {
+    const made = []; const revoked = [];
+    const saved = [URL.createObjectURL, URL.revokeObjectURL];
+    URL.createObjectURL = (f) => { made.push(f); return `blob:local/${made.length}`; };
+    URL.revokeObjectURL = (u) => { revoked.push(u); };
+    try {
+      const pic = file('Picture1.jpg', 'jpg!', 'image/jpeg');
+      await fire(composer(), dragEvent('drop', [pic, file('notes.txt', 'hello')]));
+      await wait();
+      const thumbs = document.querySelectorAll('[data-compose-attachments] img[data-compose-thumb]');
+      assert.equal(thumbs.length, 1, 'only the picture has a thumbnail');
+      assert.equal(thumbs[0].getAttribute('src'), 'blob:local/1');
+      assert.equal(made[0].name, 'Picture1.jpg');
+      const remove = Array.from(document.querySelectorAll('[data-compose-attachments] button')).find(b => /Picture1\.jpg/.test(b.title));
+      await React.act(async () => { remove.click(); });
+      assert.deepEqual(revoked, ['blob:local/1']);
+    } finally {
+      [URL.createObjectURL, URL.revokeObjectURL] = saved;
+    }
   });
 
   test('a drop on the body editor attaches through the same path', async () => {

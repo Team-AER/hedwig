@@ -7,6 +7,7 @@
 // /mock/thread/:id stands in for upstream's /mail/thread (the messages); the admin prompt list
 // has no owner in the contract yet. Stream lists page with ?limit and ?cursor like C's route.
 // The cards routes (/cards, /cards/message/:id, /cards/:id/actions, PATCH /cards/:id, dismiss,
+// not-recurring, not-kind, restore, /cards/feedback,
 // /cards/ledger/:kind) follow backend/src/hedwig/cards; Ask (/context/ask as a stream through
 // mockStream, /context/ask/history, /context/ask/:id, feedback) follows backend/src/hedwig/ask2.
 
@@ -146,6 +147,7 @@ function seed() {
     reminders: [{ id: 7, note: 'Call the dentist about the crown', until: at(HOUR) }],
     answers: [],
     cards: seedCards(),
+    cardFeedback: [],
     // F's /work/waiting rows; watches are the "remind me if no reply" requests.
     waiting: [
       { threadId: 't-tom', messageId: 'm-tom', who: 'Tom Ellis', whoEmail: 'tom@ellis.example', subject: 'the signed contract', askedAt: daysAgoAt(6, 10, 0), days: 6, nudgeDraftAvailable: true,
@@ -419,10 +421,11 @@ function mockLedger(kind, params) {
   if (kind === 'purchases' || kind === 'subscriptions') {
     for (const r of rows) {
       if (r.amount == null) continue;
-      const t = by.get(r.currency || '?') || { currency: r.currency || null, total: 0, count: 0, ...(kind === 'subscriptions' ? { monthly: 0 } : {}) };
+      const t = by.get(r.currency || '?') || { currency: r.currency || null, total: 0, count: 0, ...(kind === 'subscriptions' ? { monthly: 0, unknownCadence: 0 } : {}) };
       t.total += Number(r.amount);
       t.count++;
-      if (kind === 'subscriptions' && r.cadence) t.monthly += Number(r.amount) * (MONTHLY[r.cadence] || 0);
+      if (kind === 'subscriptions' && MONTHLY[r.cadence]) t.monthly += Number(r.amount) * MONTHLY[r.cadence];
+      else if (kind === 'subscriptions') t.unknownCadence++;
       by.set(r.currency || '?', t);
     }
   }
@@ -981,6 +984,11 @@ function route(method, path, body) {
       }
       return { cards: out };
     }
+    // cards/feedback.js: the owner's verdicts, newest first.
+    if (method === 'GET' && seg[1] === 'feedback') {
+      const limit = Math.max(1, Math.min(200, Number(params.get('limit')) || 50));
+      return { count: db.cardFeedback.length, recent: db.cardFeedback.length, feedback: clone(db.cardFeedback.slice(0, limit)) };
+    }
     if (method === 'GET' && seg[1] === 'message' && seg[2]) {
       const id = decodeURIComponent(seg[2]);
       return { cards: db.cards.filter((c) => c.messageId === id || c.messageIds.includes(id)).map(withMessage) };
@@ -989,7 +997,24 @@ function route(method, path, body) {
     if (!c) throw notFound();
     if (method === 'GET' && !seg[2]) return withMessage(c);
     if (method === 'GET' && seg[2] === 'actions') return { cardId: c.id, actions: mockActions(withMessage(c)) };
-    if (method === 'POST' && seg[2] === 'dismiss') { c.dismissedAt = new Date().toISOString(); return { ok: true, id: c.id }; }
+    const feedback = (verdict, extra = {}) => {
+      const f = { id: `fb-${db.cardFeedback.length + 1}`, cardId: c.id, kind: c.kind, merchantKey: String(c.fields.merchant || c.fields.issuer || '').toLowerCase() || null, verdict, createdAt: new Date().toISOString(), ...extra };
+      db.cardFeedback.unshift(f);
+      return f;
+    };
+    if (method === 'POST' && seg[2] === 'dismiss') { c.dismissedAt = new Date().toISOString(); feedback('dismissed'); return { ok: true, id: c.id }; }
+    if (method === 'POST' && (seg[2] === 'not-recurring' || seg[2] === 'not-kind')) {
+      if (seg[2] === 'not-recurring' && c.kind !== 'subscription') throw bad('only a subscription card can be marked as not recurring');
+      c.dismissedAt = new Date().toISOString();
+      const f = feedback(seg[2] === 'not-recurring' ? 'not_recurring' : 'not_this_kind');
+      return { ok: true, id: c.id, verdict: f.verdict, feedbackId: f.id };
+    }
+    if (method === 'POST' && seg[2] === 'restore') {
+      c.dismissedAt = null;
+      db.cardFeedback = db.cardFeedback.filter((f) => f.cardId !== c.id || !['not_recurring', 'not_this_kind', 'dismissed'].includes(f.verdict));
+      if (c.kind === 'subscription' && c.layer === 'derived') feedback('confirmed');
+      return withMessage(c);
+    }
     if (method === 'PATCH' && !seg[2]) {
       const fields = body?.fields;
       if (!fields || typeof fields !== 'object' || Array.isArray(fields)) throw bad('fields must be an object');
@@ -1001,6 +1026,7 @@ function route(method, path, body) {
         c.fields[k] = typeof before === 'number' && typeof v === 'string' ? Number(v) : v;
         c.sources[k] = { via: 'user', at: now, before };
       }
+      for (const [k, v] of Object.entries(fields)) feedback('wrong_field', { field: k, after: { [k]: v === '' ? null : v } });
       c.userEdited = true;
       c.updatedAt = now;
       return withMessage(c);

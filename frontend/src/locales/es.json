@@ -216,6 +216,14 @@
       "armed": "{{label}} — haga clic de nuevo para descargar de todos modos"
     },
     "downloadAll": "Descargar todo",
+    "downloadAllZip": "Descargar todo (zip)",
+    "preview": {
+      "previous": "Imagen anterior",
+      "next": "Imagen siguiente",
+      "download": "Descargar",
+      "close": "Cerrar",
+      "failed": "No se pudo mostrar esta imagen."
+    },
     "reply": "Responder",
     "replyAll": "Responder a todos",
     "replyOptions": "Opciones de respuesta",
@@ -786,6 +794,15 @@
       "presetYahoo": "Yahoo Mail",
       "presetIcloud": "iCloud",
       "presetCustom": "Personalizado",
+      "presetOutlook": "Outlook / Microsoft 365",
+      "presetExchange": "Exchange",
+      "exchangeHostPh": "mail.example.com",
+      "exchangeNote": "Pide al administrador de Exchange que active IMAP y SMTP AUTH para tu buzón. El nombre de usuario suele ser tu dirección de correo o DOMINIO\\usuario.",
+      "exchangeCertNote": "Si el servidor usa un certificado autofirmado, un administrador debe activar primero «{{setting}}»; después aparecerá bajo la contraseña un interruptor para omitir la verificación del certificado.",
+      "outlookPasswordNote": "Outlook.com y Microsoft 365 ya no aceptan contraseñas para IMAP; tu administrador debe configurar el inicio de sesión de Microsoft (consulta la documentación)",
+      "signInMicrosoft": "Iniciar sesión con Microsoft",
+      "signInMicrosoftNote": "Outlook.com y Microsoft 365 se conectan mediante el inicio de sesión de Microsoft, no con una contraseña. Se abrirá una pestaña nueva; la cuenta aparecerá aquí cuando termines.",
+      "signInMicrosoftWaiting": "Esperando a Microsoft…",
       "errorRequired": "El correo, el usuario y el servidor IMAP son obligatorios",
       "errorPasswordRequired": "La contraseña es obligatoria para cuentas nuevas",
       "microsoftImapUnsupported": "Outlook.com / Hotmail requiere OAuth2 (Modern Auth)",
@@ -1805,7 +1822,16 @@
         "replyLater": "Responder más tarde",
         "screener": "Filtro",
         "setAside": "Apartados",
-        "snoozed": "Pospuestos"
+        "snoozed": "Pospuestos",
+        "countScreenerOne": "1 remitente nuevo por filtrar",
+        "countScreenerMany": "{{n}} remitentes nuevos por filtrar",
+        "countNeedsYouOne": "1 te necesita",
+        "countNeedsYouMany": "{{n}} te necesitan",
+        "countUnread": "{{n}} sin leer",
+        "countConversationsOne": "1 conversación",
+        "countConversationsMany": "{{n}} conversaciones",
+        "countDraftsOne": "1 borrador",
+        "countDraftsMany": "{{n}} borradores"
       },
       "records": {
         "hide": "Ocultar",

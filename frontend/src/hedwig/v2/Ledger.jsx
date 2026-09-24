@@ -5,7 +5,7 @@ import { useMemo, useState } from 'react';
 import { useV2Resource, isMissing } from './hooks.js';
 import { listOf } from './client.js';
 import { openThread } from './nav.js';
-import { cadenceLabel, statusLabel } from './cards.js';
+import { cadenceLabel, cadenceUnknownNote, knownCadence, statusLabel } from './cards.js';
 import { Avatar, Code, ErrorLine, Figure, Hair, Num, Quiet, V, ViewBody, ViewHead, Why, usePhone } from './primitives.jsx';
 import { money, shortDate, fullTime } from './format.js';
 import { tv, tvn } from './i18n.js';
@@ -36,7 +36,7 @@ export function ledgerColumns(kind) {
       return [
         { id: 'merchant', sort: 'merchant', label: tv('hedwig.v2.card.field.merchant', 'Merchant'), render: (r) => r.merchant || '' },
         { id: 'amount', sort: 'amount', num: true, label: tv('hedwig.v2.card.field.amount', 'Amount'), render: amount },
-        { id: 'cadence', sort: 'cadence', label: tv('hedwig.v2.card.field.cadence', 'Billed'), render: (r) => (r.cadence ? cadenceLabel(r.cadence) : '') },
+        { id: 'cadence', sort: 'cadence', label: tv('hedwig.v2.card.field.cadence', 'Billed'), render: (r) => cadenceLabel(knownCadence(r.cadence) ? r.cadence : null) },
         { id: 'lastCharged', sort: 'lastCharged', date: true, label: tv('hedwig.v2.ledger.lastCharged', 'Last charged'), render: (r) => day(r.lastCharged) },
         { id: 'nextRenewal', sort: 'nextRenewal', date: true, label: tv('hedwig.v2.card.field.nextRenewal', 'Next renewal'), render: (r) => day(r.nextRenewal) },
       ];
@@ -80,15 +80,24 @@ export function sortRows(rows, field, dir = 'desc') {
   });
 }
 
-/** The totals as figures: "NOK 1,589" / "3 purchases"; subscriptions per month. Pure. */
-export function totalFigures(kind, totals) {
+/**
+ * The totals as figures: "NOK 1,589" / "3 purchases"; subscriptions per month. A subscription
+ * whose cadence is unknown is left out of the monthly figure and said so ("1 subscription, cadence
+ * unknown"); when none has a cadence there is no monthly figure at all (it read "₹0 a month").
+ * `rows` count the unknown cadences for a route that does not send unknownCadence. Pure.
+ */
+export function totalFigures(kind, totals, rows = []) {
   return (totals || []).filter((t) => t && t.total != null).map((t) => {
     if (kind === 'subscriptions') {
+      const unknown = Number.isFinite(t.unknownCadence) ? t.unknownCadence
+        : (rows || []).filter((r) => r && r.amount != null && (r.currency || null) === (t.currency || null) && !knownCadence(r.cadence)).length;
+      const count = tvn(t.count, ['hedwig.v2.card.sum.subscriptionOne', '1 subscription'], ['hedwig.v2.card.sum.subscriptionMany', '{{n}} subscriptions']) + cadenceUnknownNote(t.count, unknown);
+      if (unknown >= t.count) return { key: t.currency || '?', figure: money(t.total, t.currency), caption: count, sub: null };
       return {
         key: t.currency || '?',
         figure: money(t.monthly ?? 0, t.currency),
         caption: tv('hedwig.v2.ledger.perMonth', 'a month'),
-        sub: tvn(t.count, ['hedwig.v2.card.sum.subscriptionOne', '1 subscription'], ['hedwig.v2.card.sum.subscriptionMany', '{{n}} subscriptions']),
+        sub: count,
       };
     }
     return {
@@ -119,7 +128,7 @@ export default function Ledger({ props }) {
   const [sort, setSort] = useState(null); // { kind, field, dir } once the user picks one
   const current = (sort?.kind === kind ? sort : null) || (data.sort?.field ? { field: data.sort.field, dir: data.sort.dir || 'desc' } : null);
   const sorted = useMemo(() => (current ? sortRows(rows, current.field, current.dir) : rows), [rows, current?.field, current?.dir]); // eslint-disable-line react-hooks/exhaustive-deps
-  const figures = totalFigures(kind, data.totals);
+  const figures = totalFigures(kind, data.totals, rows);
   const title = ledgerTitle(kind);
   const sub = rows.length ? tvn(rows.length, ['hedwig.v2.ledger.rowsOne', '1 entry'], ['hedwig.v2.ledger.rowsMany', '{{n}} entries']) : null;
 

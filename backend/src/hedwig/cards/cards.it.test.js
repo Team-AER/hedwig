@@ -4,6 +4,7 @@
 //   set -a && . ./.env.hedwig-dev && set +a && HEDWIG_IT=1 npx vitest run src/hedwig/cards
 // Adds its own messages (removed afterwards) and removes the demo user's cards when done.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { mockGateway } from '../testing/mockGateway.js';
 import * as F from './fixtures.testutil.js';
 
@@ -64,6 +65,7 @@ describe.skipIf(!process.env.HEDWIG_IT)('cards over the demo mailbox', () => {
     config.invalidateConfigCache();
     gw.install();
     await query('DELETE FROM hedwig_cards WHERE user_id = $1', [userId]);
+    await query('DELETE FROM hedwig_card_feedback WHERE user_id = $1', [userId]);
     extract = await import('./extract.js');
     store = await import('./store.js');
     ledgerMod = await import('./ledger.js');
@@ -79,7 +81,7 @@ describe.skipIf(!process.env.HEDWIG_IT)('cards over the demo mailbox', () => {
     await addMessage('promo', { subject: '20% off everything', from: 'deals@shop.example', fromName: 'Shop', body: 'Big sale this weekend only.', bundle: 'promotions', stream: 'reading', minutesAgo: 700 });
     for (const [i, daysAgo] of [95, 64, 34, 4].entries()) {
       await addMessage(`netflix${i}`, {
-        subject: 'Your Netflix receipt', from: 'info@netflix.example', fromName: 'Netflix',
+        subject: 'Your Netflix membership receipt', from: 'info@netflix.example', fromName: 'Netflix',
         html: `<script type="application/ld+json">{"@context":"http://schema.org","@type":"Order","merchant":{"@type":"Organization","name":"Netflix"},"orderNumber":"NF-${i}","orderDate":"${isoDay(NOW - daysAgo * DAY_MS)}","price":"139","priceCurrency":"NOK"}</script>`,
         bundle: 'purchases', minutesAgo: daysAgo * 1440,
       });
@@ -101,6 +103,7 @@ describe.skipIf(!process.env.HEDWIG_IT)('cards over the demo mailbox', () => {
     for (const k of ENV) { if (savedEnv[k] === undefined) delete process.env[k]; else process.env[k] = savedEnv[k]; }
     config.invalidateConfigCache();
     await query("DELETE FROM hedwig_corrections WHERE user_id = $1 AND kind = 'card'", [userId]).catch(() => {});
+    await query('DELETE FROM hedwig_card_feedback WHERE user_id = $1', [userId]).catch(() => {});
     await query('DELETE FROM hedwig_cards WHERE user_id = $1', [userId]).catch(() => {});
     await query("DELETE FROM hedwig_jobs WHERE user_id = $1 AND kind IN ('cards.extract', 'cards.fetchIcs')", [userId]).catch(() => {});
     if (added.length) await query('DELETE FROM messages WHERE id = ANY($1::uuid[])', [added]);
@@ -259,5 +262,81 @@ describe.skipIf(!process.env.HEDWIG_IT)('cards over the demo mailbox', () => {
     } finally {
       await query('DELETE FROM hedwig_commitments WHERE id = $1', [cid]);
     }
+  });
+
+  // Audit 2026-09-24: two BookMyShow movie tickets became "₹1,322.84, a monthly subscription", and the
+  // owner's correction did not take. Now: tickets with their own booking numbers are not a
+  // subscription, a card the finder no longer finds is hidden, the repair hides the old ones, and every
+  // correction is kept by merchant and sender and read back by the finder, the detectors and the prompt.
+  it('learns from the owner: one-off tickets, "Not a subscription", "Not a <kind>", corrections in the prompt', async () => {
+    const ticket = (i, daysAgo, order, price) => addMessage(`bms${i}`, {
+      subject: 'Your booking is confirmed!', from: 'tickets@bookmyshow.example', fromName: 'BookMyShow', bundle: 'purchases', minutesAgo: daysAgo * 1440,
+      html: `<script type="application/ld+json">{"@context":"http://schema.org","@type":"Order","merchant":{"@type":"Organization","name":"BookMyShow"},"orderNumber":"${order}","orderDate":"${isoDay(NOW - daysAgo * DAY_MS)}","price":"${price}","priceCurrency":"INR"}</script>`,
+    });
+    await ticket(0, 72, 'AAB1234', '1100');
+    await ticket(1, 42, 'WX6NCTF', '1039.24');
+    await ticket(2, 12, 'TGAMAVT', '1050');
+    // The card the old rule made from two tickets, and the owner's correction of its cadence.
+    const old = await store.upsertCard(userId, { kind: 'subscription', messageId: ids.bms2, layer: 'derived', confidence: 0.8,
+      fields: { merchant: 'BookMyShow', amount: 1322.84, currency: 'INR', cadence: 'monthly', lastCharged: isoDay(NOW - 12 * DAY_MS), charges: 2 }, sources: {} });
+    await store.patchCard(userId, old.id, { cadence: null });
+    const { rows: fbEdit } = await query("SELECT kind, merchant_key, sender, verdict, field, before, after FROM hedwig_card_feedback WHERE card_id = $1", [old.id]);
+    expect(fbEdit).toEqual([{ kind: 'subscription', merchant_key: 'bookmyshow', sender: 'tickets@bookmyshow.example', verdict: 'wrong_field', field: 'cadence',
+      before: { cadence: 'monthly', merchant: 'BookMyShow' }, after: { cadence: null } }]);
+
+    // Three steady monthly tickets, each with its own booking number: not a subscription; the old card is hidden.
+    await extract.runCardsJob({ userId, messageIds: ['bms0', 'bms1', 'bms2'].map((k) => ids[k]) }, { now: new Date(NOW) });
+    const subs = await ledgerMod.ledger(userId, 'subscriptions');
+    expect(subs.rows.map((r) => r.merchant)).toEqual(['Netflix']);
+    expect((await query('SELECT dismissed_at, dismissed_reason FROM hedwig_cards WHERE id = $1', [old.id])).rows[0]).toMatchObject({ dismissed_at: expect.any(Date), dismissed_reason: 'not_recurring' });
+
+    // The repair in h0022 hides a derived subscription of fewer than 3 charges even when the owner
+    // edited it, and a correction already given becomes 'not_recurring' feedback for its merchant.
+    await query('UPDATE hedwig_cards SET dismissed_at = NULL, dismissed_reason = NULL WHERE id = $1', [old.id]);
+    await query(readFileSync(new URL('../../../migrations-hedwig/h0022_card_feedback.sql', import.meta.url), 'utf8'));
+    expect((await query('SELECT dismissed_reason FROM hedwig_cards WHERE id = $1 AND dismissed_at IS NOT NULL', [old.id])).rows).toEqual([{ dismissed_reason: 'owner:not_recurring' }]);
+    const { rows: repaired } = await query("SELECT merchant_key, sender, after FROM hedwig_card_feedback WHERE card_id = $1 AND verdict = 'not_recurring'", [old.id]);
+    expect(repaired).toEqual([{ merchant_key: 'bookmyshow', sender: 'tickets@bookmyshow.example', after: expect.objectContaining({ repair: 'h0022' }) }]);
+    await query(readFileSync(new URL('../../../migrations-hedwig/h0022_card_feedback.sql', import.meta.url), 'utf8'));
+    expect((await query("SELECT COUNT(*)::int AS n FROM hedwig_card_feedback WHERE card_id = $1 AND verdict = 'not_recurring'", [old.id])).rows[0].n).toBe(1);
+
+    // "Not a subscription" on Netflix: hidden, never derived again, until the owner takes it back.
+    const netflix = (await store.listCards(userId, { kinds: ['subscription'] })).find((c) => c.fields.merchant === 'Netflix');
+    const res = await store.dismissCard(userId, netflix.id, 'not_recurring');
+    expect(res).toMatchObject({ ok: true, verdict: 'not_recurring', feedbackId: expect.any(String) });
+    expect((await extract.syncSubscriptions(userId, { now: new Date(NOW) })).found).toBe(0);
+    expect((await ledgerMod.ledger(userId, 'subscriptions')).rows).toEqual([]);
+    const [aReceipt] = await store.listCards(userId, { kinds: ['receipt'] });
+    await expect(store.dismissCard(userId, aReceipt.id, 'not_recurring')).rejects.toMatchObject({ status: 400 });
+    const back = await store.restoreCard(userId, netflix.id);
+    expect(back.dismissedAt).toBeNull();
+    const { rows: nfFb } = await query('SELECT verdict FROM hedwig_card_feedback WHERE card_id = $1 ORDER BY created_at', [netflix.id]);
+    expect(nfFb.map((r) => r.verdict)).toEqual(['confirmed']);
+    expect((await extract.syncSubscriptions(userId, { now: new Date(NOW) })).found).toBe(1);
+    expect((await ledgerMod.ledger(userId, 'subscriptions')).rows.map((r) => r.merchant)).toEqual(['Netflix']);
+
+    // "Not an event" for the dinner invitation: that kind is not made again for its sender.
+    const [dinner] = await store.listCards(userId, { kinds: ['event'], messageId: ids.ics });
+    await store.dismissCard(userId, dinner.id, 'not_this_kind');
+    await query('DELETE FROM hedwig_cards WHERE id = $1', [dinner.id]);
+    await query('DELETE FROM hedwig_cards_scan WHERE message_id = $1', [ids.ics]);
+    const again = await extract.runCardsJob({ userId, messageIds: [ids.ics] }, { now: new Date(NOW) });
+    expect(again.note).toMatch(/1 left out by the owner's feedback/);
+    expect(await store.listCards(userId, { kinds: ['event'], messageId: ids.ics, includeDismissed: true })).toEqual([]);
+
+    // The owner's earlier correction of the Uber receipt reaches the prompt with the next Uber mail.
+    gw.reset().install();
+    gw.on('cards.extract', () => ({ items: [] }));
+    await query('DELETE FROM hedwig_cards_scan WHERE message_id = $1', [ids.uber]);
+    await extract.runCardsJob({ userId, messageIds: [ids.uber] }, { now: new Date(NOW) });
+    const [call] = gw.callsFor('cards.extract');
+    expect(call.text).toContain('Subject: Your Tuesday evening trip with Uber\nSorted into: purchases\nThe owner corrected earlier cards from this sender:\n- ');
+    expect(call.text).toContain('- a receipt card for Uber: total was 23.4; the owner corrected it to 24.4.');
+    expect(call.text).toContain('- a receipt card for Uber: the owner dismissed it.');
+
+    const listed = await (await import('./feedback.js')).listFeedback(userId, { limit: 3 });
+    expect(listed).toMatchObject({ count: expect.any(Number), recent: expect.any(Number) });
+    expect(listed.count).toBeGreaterThanOrEqual(6);
+    expect(listed.feedback).toHaveLength(3);
   });
 });

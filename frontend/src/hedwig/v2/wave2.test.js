@@ -86,6 +86,8 @@ const Brief = (await import('./Brief.jsx')).default;
 const Ask = (await import('../views/Ask.jsx')).default;
 const { Markdown } = await import('../views/ui.jsx');
 const { v2Views } = await import('./index.js');
+const { MessageCards } = await import('./Cards.jsx');
+const undoLayer = await import('./actions.js');
 
 setMockMode(true);
 const notifications = [];
@@ -294,6 +296,112 @@ describe('cards in Records', () => {
     assert.match(bills.textContent, /2 bills, 1 due this week/, 'Telia is due in 8 days');
     await click(deliveries);
     assert.doesNotMatch(deliveries.textContent, /TodayDHL/, 'open, the rows show instead of the figures');
+  });
+});
+
+// ── the owner's verdicts teach Hedwig (audit 2026-09-24: BookMyShow tickets as a subscription) ──
+describe('card feedback', () => {
+  const now = new Date(2026, 8, 23, 9, 0);
+  const still = { set: () => 0, clear: () => {}, now: () => 0 }; // the undo window never closes on its own
+  beforeEach(() => { undoLayer.resetActions(); undoLayer.setUndoClock(still); });
+  const toasts = () => undoLayer.useUndo.getState().toasts;
+
+  test('a subscription without a cadence says so instead of a per-month figure', () => {
+    const bms = { kind: 'subscription', fields: { merchant: 'BookMyShow', amount: 1322.84, currency: 'INR' } };
+    assert.equal(cards.cardFigure(bms, now).caption, 'BookMyShow, cadence unknown');
+    assert.equal(cards.cardFigure({ ...bms, fields: { ...bms.fields, cadence: 'monthly' } }, now).caption, 'BookMyShow, monthly');
+    assert.equal(cards.bundleCardSummary([bms], now), '1 subscription, cadence unknown');
+    const spotify = { kind: 'subscription', fields: { merchant: 'Spotify', cadence: 'monthly' } };
+    assert.equal(cards.bundleCardSummary([spotify, bms, spotify], now), '3 subscriptions, 1 cadence unknown');
+    assert.equal(cards.bundleCardSummary([spotify], now), '1 subscription');
+    assert.equal(cards.notKindLabel('event'), 'Not an event');
+    assert.equal(cards.notKindLabel('receipt'), 'Not a receipt');
+  });
+
+  test('the ledger leaves unknown cadences out of the monthly figure, and says so', () => {
+    const [inr] = totalFigures('subscriptions', [{ currency: 'INR', total: 1322.84, monthly: 0, count: 1, unknownCadence: 1 }]);
+    assert.equal(inr.caption, '1 subscription, cadence unknown');
+    assert.doesNotMatch(`${inr.figure} ${inr.caption}`, /a month/, 'never "₹0 a month"');
+    assert.match(inr.figure, /1,322\.84/);
+    const [nok] = totalFigures('subscriptions', [{ currency: 'NOK', total: 308, monthly: 179, count: 2, unknownCadence: 1 }]);
+    assert.equal(nok.caption, 'a month');
+    assert.equal(nok.sub, '2 subscriptions, 1 cadence unknown');
+    // An older route without unknownCadence: counted from the rows.
+    const [old] = totalFigures('subscriptions', [{ currency: 'INR', total: 1322.84, monthly: 0, count: 1 }], [{ amount: 1322.84, currency: 'INR', cadence: null }]);
+    assert.equal(old.caption, '1 subscription, cadence unknown');
+    assert.equal(ledgerColumns('subscriptions').find((c) => c.id === 'cadence').render({ cadence: null }), 'cadence unknown');
+  });
+
+  test('"Not recurring" in the Correct form is the not-recurring action, not an edit', () => {
+    const sub = { kind: 'subscription', fields: { merchant: 'BookMyShow', cadence: 'monthly' } };
+    assert.deepEqual(cards.editPatch(sub, { merchant: 'BookMyShow', cadence: cards.NOT_RECURRING }), { notRecurring: true });
+    assert.deepEqual(cards.editPatch(sub, { merchant: 'BookMyShow', cadence: '' }), { fields: { cadence: null } });
+  });
+
+  test('"Not a subscription" hides the card at once, tells the backend, and Undo brings it back', async () => {
+    await render(h(MessageCards, { messageId: 'm-spotify' }));
+    await settle(60);
+    const slip = () => document.querySelector('section[aria-label="What Hedwig read from this message"]');
+    const btn = byLabel('Not a subscription', slip());
+    assert.ok(btn, 'a subscription card has the button');
+    assert.equal(btn.getAttribute('title'), 'Not a subscription', 'named by its tooltip');
+    await click(btn);
+    await settle(30);
+    assert.equal(slip(), null, 'the card is gone');
+    assert.ok(requests().includes('POST /cards/c-spotify/not-recurring'));
+    assert.ok((await mock.mockRequest('GET', '/cards/c-spotify')).dismissedAt);
+    assert.equal((await mock.mockRequest('GET', '/cards/feedback')).feedback[0].verdict, 'not_recurring');
+    const [toast] = toasts();
+    assert.match(toast.title, /^Not a subscription\. Hedwig will not list Spotify as one again\./);
+    assert.equal(toast.canUndo, true);
+    await React.act(async () => { undoLayer.undo(toast.id); });
+    await settle(60);
+    assert.ok(requests().includes('POST /cards/c-spotify/restore'));
+    assert.ok(slip(), 'Undo shows the card again');
+    assert.equal((await mock.mockRequest('GET', '/cards/c-spotify')).dismissedAt, null);
+    assert.deepEqual((await mock.mockRequest('GET', '/cards/feedback')).feedback.map((f) => f.verdict), ['confirmed']);
+    // A card that is not a subscription has no such button.
+    await cleanup();
+    await render(h(MessageCards, { messageId: 'm-dhl' }));
+    await settle(60);
+    assert.equal(byLabel('Not a subscription'), null);
+  });
+
+  test('the Correct form offers "Not recurring" as a cadence, and choosing it sends the verdict', async () => {
+    await render(h(MessageCards, { messageId: 'm-spotify' }));
+    await settle(60);
+    await click(byLabel('Correct'));
+    const select = byLabel('Correct this card').querySelector('select[id$="-cadence"]');
+    assert.deepEqual([...select.options].map((o) => o.textContent), ['Not set', 'weekly', 'monthly', 'quarterly', 'yearly', 'Not recurring']);
+    await type(select, cards.NOT_RECURRING);
+    await submit(byLabel('Correct this card'));
+    assert.ok(requests().includes('POST /cards/c-spotify/not-recurring'));
+    assert.ok(!requests().includes('PATCH /cards/c-spotify'), 'not a field edit');
+    assert.equal(document.querySelector('section[aria-label="What Hedwig read from this message"]'), null);
+  });
+
+  test('every card\'s menu says "Not a <kind>", which hides it and is remembered', async () => {
+    await render(h(MessageCards, { messageId: 'm-dhl' }));
+    await settle(60);
+    await click(byLabel('More for this card'));
+    const item = all('[role="menuitem"]').find((b) => b.textContent.includes('Not a delivery'));
+    assert.ok(item, 'the menu names the kind');
+    await click(item);
+    await settle(30);
+    assert.ok(requests().includes('POST /cards/c-dhl/not-kind'));
+    assert.equal(byLabel('Today · DHL, out for delivery'), null);
+    assert.match(toasts()[0].title, /^Not a delivery\. Hedwig will remember that for this sender\./);
+    assert.equal((await mock.mockRequest('GET', '/cards/feedback')).feedback[0].verdict, 'not_this_kind');
+  });
+
+  test('the Subscriptions ledger: a cleared cadence is shown as unknown and left out of the month', async () => {
+    await mock.mockRequest('PATCH', '/cards/c-spotify', { fields: { cadence: null } });
+    await render(h(Ledger, { props: { kind: 'subscriptions' } }));
+    const totals = byLabel('Totals');
+    assert.match(totals.textContent, /NOK\s179/, 'Netflix only');
+    assert.match(totals.textContent, /2 subscriptions, 1 cadence unknown/);
+    const spotify = all('tbody tr').find((tr) => tr.textContent.includes('Spotify'));
+    assert.match(spotify.textContent, /cadence unknown/);
   });
 });
 
@@ -547,9 +655,12 @@ describe('Waiting on', () => {
     await settle(60);
     const input = byLabel('Reply to Anna');
     await type(input, 'Sending them tonight.');
+    // As after a click on Send, which is disabled while it runs: focus has left the field.
+    input.blur();
     await submit(input.closest('form'));
     assert.ok(!requests().includes('POST /work/waiting'));
     assert.equal(notifications.at(-1).title, 'Sent.');
+    assert.equal(document.activeElement, byLabel('Reply to Anna'), 'the field has focus again for the next message');
   });
 });
 

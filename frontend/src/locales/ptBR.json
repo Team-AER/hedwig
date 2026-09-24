@@ -216,6 +216,14 @@
       "armed": "{{label}} — clique de novo para baixar mesmo assim"
     },
     "downloadAll": "Baixar todos",
+    "downloadAllZip": "Baixar tudo (zip)",
+    "preview": {
+      "previous": "Imagem anterior",
+      "next": "Próxima imagem",
+      "download": "Baixar",
+      "close": "Fechar",
+      "failed": "Não foi possível exibir esta imagem."
+    },
     "reply": "Responder",
     "replyAll": "Responder a todos",
     "replyOptions": "Opções de resposta",
@@ -788,6 +796,15 @@
       "presetYahoo": "Yahoo Mail",
       "presetIcloud": "iCloud",
       "presetCustom": "Personalizado",
+      "presetOutlook": "Outlook / Microsoft 365",
+      "presetExchange": "Exchange",
+      "exchangeHostPh": "mail.example.com",
+      "exchangeNote": "Peça ao administrador do Exchange para ativar IMAP e SMTP AUTH na sua caixa de correio. O nome de usuário costuma ser seu endereço de e-mail ou DOMÍNIO\\usuário.",
+      "exchangeCertNote": "Se o servidor usa um certificado autoassinado, um administrador precisa primeiro ativar \"{{setting}}\"; depois aparece abaixo da senha uma opção para ignorar a verificação do certificado.",
+      "outlookPasswordNote": "O Outlook.com e o Microsoft 365 não aceitam mais senhas para IMAP; seu administrador precisa configurar o login da Microsoft (veja a documentação)",
+      "signInMicrosoft": "Entrar com a Microsoft",
+      "signInMicrosoftNote": "O Outlook.com e o Microsoft 365 se conectam pelo login da Microsoft, não com senha. Uma nova aba será aberta; a conta aparece aqui quando você terminar.",
+      "signInMicrosoftWaiting": "Aguardando a Microsoft…",
       "errorRequired": "E-mail, nome de usuário e servidor IMAP são obrigatórios",
       "errorPasswordRequired": "A senha é obrigatória para novas contas",
       "microsoftImapUnsupported": "Outlook.com / Hotmail exige OAuth2 (Autenticação Moderna)",
@@ -1805,7 +1822,16 @@
         "replyLater": "Responder depois",
         "screener": "Triagem",
         "setAside": "Deixados de lado",
-        "snoozed": "Adiados"
+        "snoozed": "Adiados",
+        "countScreenerOne": "1 remetente novo para triar",
+        "countScreenerMany": "{{n}} remetentes novos para triar",
+        "countNeedsYouOne": "1 precisa de você",
+        "countNeedsYouMany": "{{n}} precisam de você",
+        "countUnread": "{{n}} não lidas",
+        "countConversationsOne": "1 conversa",
+        "countConversationsMany": "{{n}} conversas",
+        "countDraftsOne": "1 rascunho",
+        "countDraftsMany": "{{n}} rascunhos"
       },
       "records": {
         "hide": "Recolher",

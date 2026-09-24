@@ -305,6 +305,14 @@
       "armed": "{{label}} — kliknutím znovu přesto stáhnete"
     },
     "downloadAll": "Stáhnout vše",
+    "downloadAllZip": "Stáhnout vše (zip)",
+    "preview": {
+      "previous": "Předchozí obrázek",
+      "next": "Další obrázek",
+      "download": "Stáhnout",
+      "close": "Zavřít",
+      "failed": "Tento obrázek nelze zobrazit."
+    },
     "reply": "Odpovědět",
     "replyAll": "Odpovědět všem",
     "replyOptions": "Možnosti odpovědi",
@@ -968,6 +976,15 @@
       "presetYahoo": "Yahoo Mail",
       "presetIcloud": "iCloud",
       "presetCustom": "Vlastní",
+      "presetOutlook": "Outlook / Microsoft 365",
+      "presetExchange": "Exchange",
+      "exchangeHostPh": "mail.example.com",
+      "exchangeNote": "Požádejte správce Exchange, aby pro vaši schránku povolil IMAP a SMTP AUTH. Uživatelské jméno je obvykle vaše e-mailová adresa nebo DOMÉNA\\uživatel.",
+      "exchangeCertNote": "Pokud server používá certifikát podepsaný sám sebou, musí správce nejprve zapnout „{{setting}}“; pod heslem se pak objeví přepínač pro přeskočení ověření certifikátu.",
+      "outlookPasswordNote": "Outlook.com a Microsoft 365 už pro IMAP nepřijímají hesla; správce musí nastavit přihlášení přes Microsoft (viz dokumentace)",
+      "signInMicrosoft": "Přihlásit se přes Microsoft",
+      "signInMicrosoftNote": "Outlook.com a Microsoft 365 se připojují přihlášením přes Microsoft, ne heslem. Otevře se nová karta; účet se zde objeví, jakmile budete hotovi.",
+      "signInMicrosoftWaiting": "Čekání na Microsoft…",
       "errorRequired": "Je vyžadován e-mail, uživatelské jméno a server IMAP",
       "errorPasswordRequired": "U nových účtů je vyžadováno heslo",
       "microsoftImapUnsupported": "Outlook.com / Hotmail vyžaduje OAuth2 (moderní ověřování)",
@@ -1824,7 +1841,16 @@
         "replyLater": "Odpovědět později",
         "screener": "Síto",
         "setAside": "Odložené",
-        "snoozed": "Uspané"
+        "snoozed": "Uspané",
+        "countScreenerOne": "1 nový odesílatel k prosetí",
+        "countScreenerMany": "Noví odesílatelé k prosetí: {{n}}",
+        "countNeedsYouOne": "1 čeká na vás",
+        "countNeedsYouMany": "Čekají na vás: {{n}}",
+        "countUnread": "Nepřečtené: {{n}}",
+        "countConversationsOne": "1 konverzace",
+        "countConversationsMany": "Konverzace: {{n}}",
+        "countDraftsOne": "1 koncept",
+        "countDraftsMany": "Koncepty: {{n}}"
       },
       "records": {
         "hide": "Skrýt",

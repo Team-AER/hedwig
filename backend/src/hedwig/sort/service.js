@@ -81,6 +81,7 @@ export async function streamList(userId, stream, { cursor = null, needsYou = fal
     `WITH latest AS (
        SELECT DISTINCT ON (m.account_id, COALESCE(m.thread_key, m.id::text))
               m.id, m.account_id, m.thread_key, m.from_name, m.from_email, m.subject, m.snippet, m.date, m.is_read,
+              m.has_attachments, m.is_starred,
               s.needs_you, s.needs_you_reason, s.reason, s.bundle, s.spam, s.spam_reason, s.layer, s.confidence, s.held, s.labels
          FROM hedwig_sort s
          JOIN messages m ON m.id = s.message_id
@@ -107,6 +108,9 @@ export async function streamList(userId, stream, { cursor = null, needsYou = fal
       bundle: r.bundle,
       accountId: r.account_id,
       unread: !r.is_read,
+      // The row's paperclip and flag (and the list's "Has attachments" filter), from the newest message.
+      hasAttachments: Boolean(r.has_attachments),
+      flagged: Boolean(r.is_starred),
       spam: r.spam,
       layer: r.layer,
       confidence: r.confidence === null ? null : Number(r.confidence),

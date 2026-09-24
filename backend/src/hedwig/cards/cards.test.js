@@ -6,7 +6,9 @@ const F = await import('./fixtures.testutil.js');
 const { detectSchemaOrg, detectIcs, detectTracking, detectCodes, detectDeterministic, calendarAttachments } = await import('./detect/index.js');
 const { findTrackingNumbers, s10Valid, deliveryStatusOf } = await import('./detect/tracking.js');
 const { parseIcs, icsDate } = await import('./detect/ics.js');
-const { findSubscriptions, cadenceOf } = await import('./subscriptions.js');
+const { findSubscriptions, cadenceOf, notRecurringReason, recurringSignal } = await import('./subscriptions.js');
+const { blocksFrom, isBlocked, feedbackLine, cardMerchantKey } = await import('./feedback.js');
+const { renderCardsUser } = await import('../prompts/cards.extract.js');
 const { mergeCards, validateEdit } = await import('./store.js');
 const { verifyModelCard, locateQuote, quoteSupports, reflexEligible, twinOf } = await import('./extract.js');
 const { detectOrders, dataSignal, needsFill, findTotal, senderName } = await import('./detect/orders.js');
@@ -226,18 +228,18 @@ describe('one-time codes', () => {
 });
 
 describe('subscriptions', () => {
-  const charge = (date, amount = 139, merchant = 'Netflix', currency = 'NOK', messageId = `m-${date}`) => ({ messageId, merchant, amount, currency, date, cardId: `c-${date}` });
+  const charge = (date, amount = 139, merchant = 'Netflix', currency = 'NOK', extra = {}) => ({ messageId: `m-${date}`, merchant, amount, currency, date, cardId: `c-${date}`, ...extra });
 
   it('groups steady monthly charges and predicts the next renewal', () => {
     const subs = findSubscriptions([charge('2026-06-14'), charge('2026-07-14'), charge('2026-08-14', 149, 'Netflix Inc.'), charge('2026-09-14')], { now: new Date('2026-09-23') });
     expect(subs).toHaveLength(1);
-    expect(subs[0]).toMatchObject({ cadence: 'monthly', lastCharged: '2026-09-14', nextRenewal: '2026-10-14', charges: 4, amount: 139, currency: 'NOK' });
+    expect(subs[0]).toMatchObject({ cadence: 'monthly', lastCharged: '2026-09-14', nextRenewal: '2026-10-14', charges: 4, amount: 139, currency: 'NOK', merchantKey: 'netflix' });
   });
 
   it('knows yearly and weekly, and month ends', () => {
-    expect(findSubscriptions([charge('2024-03-01', 99, 'iCloud'), charge('2025-03-01', 99, 'iCloud')], { now: new Date('2025-06-01') })[0]).toMatchObject({ cadence: 'yearly', nextRenewal: '2026-03-01' });
+    expect(findSubscriptions([charge('2023-03-01', 99, 'iCloud'), charge('2024-03-01', 99, 'iCloud'), charge('2025-03-01', 99, 'iCloud')], { now: new Date('2025-06-01') })[0]).toMatchObject({ cadence: 'yearly', nextRenewal: '2026-03-01' });
     expect(cadenceOf([7, 7, 8, 6])).toBe('weekly');
-    expect(findSubscriptions([charge('2026-07-31', 10, 'Gym'), charge('2026-08-31', 10, 'Gym')], { now: new Date('2026-09-01') })[0].nextRenewal).toBe('2026-09-30');
+    expect(findSubscriptions([charge('2026-06-30', 10, 'Gym'), charge('2026-07-31', 10, 'Gym'), charge('2026-08-31', 10, 'Gym')], { now: new Date('2026-09-01') })[0].nextRenewal).toBe('2026-09-30');
   });
 
   it('ignores one-off shopping and irregular charges', () => {
@@ -247,9 +249,102 @@ describe('subscriptions', () => {
   });
 
   it('keeps currencies apart and drops a lapsed renewal date', () => {
-    const subs = findSubscriptions([charge('2025-01-05', 5, 'Spotify', 'GBP'), charge('2025-02-05', 5, 'Spotify', 'GBP'), charge('2025-03-05', 5, 'Spotify', 'EUR')], { now: new Date('2026-09-01') });
+    const subs = findSubscriptions([charge('2025-01-05', 5, 'Spotify', 'GBP'), charge('2025-02-05', 5, 'Spotify', 'GBP'), charge('2025-03-05', 5, 'Spotify', 'GBP'), charge('2025-04-05', 5, 'Spotify', 'EUR')], { now: new Date('2026-09-01') });
     expect(subs).toHaveLength(1);
     expect(subs[0]).toMatchObject({ currency: 'GBP', lapsed: true, nextRenewal: null });
+  });
+
+  // The production mistake: two BookMyShow movie tickets a month apart became a monthly subscription.
+  const bms = (date, amount, order) => charge(date, amount, 'BookMyShow', 'INR', { kind: 'receipt', orderNumber: order, subject: 'Your booking is confirmed!' });
+  it('two charges are never a subscription, whatever the interval (the BookMyShow tickets)', () => {
+    expect(findSubscriptions([bms('2026-06-12', 1039.24, 'WX6NCTF'), bms('2026-07-12', 1322.84, 'TGAMAVT')], { now: new Date('2026-07-20') })).toEqual([]);
+    // Even steady and without order numbers, and even when the setting asks for fewer.
+    expect(findSubscriptions([charge('2026-06-14'), charge('2026-07-14')], { minCharges: 2, now: new Date('2026-07-20') })).toEqual([]);
+    expect(notRecurringReason([{ amount: 1 }, { amount: 1 }], { minCharges: 2 })).toBe('too_few_charges');
+  });
+
+  it('a cadence needs at least two intervals that agree', () => {
+    expect(cadenceOf([30])).toBeNull();
+    expect(cadenceOf([31, 30])).toBe('monthly');
+    expect(cadenceOf([30, 75])).toBeNull();
+    expect(findSubscriptions([charge('2026-04-14'), charge('2026-05-14'), charge('2026-08-01')], { now: new Date('2026-08-05') })).toEqual([]);
+  });
+
+  it('three charges must be within 15% of each other; four or more within 25%', () => {
+    const three = [charge('2026-06-14', 100), charge('2026-07-14', 100), charge('2026-08-14', 120)];
+    expect(findSubscriptions(three, { now: new Date('2026-08-20') })).toEqual([]);
+    expect(findSubscriptions([...three.slice(0, 2), charge('2026-08-14', 110)], { now: new Date('2026-08-20') })).toHaveLength(1);
+    expect(findSubscriptions([...three, charge('2026-09-14', 100)], { now: new Date('2026-09-20') })).toHaveLength(1);
+  });
+
+  it('receipts with their own order numbers are one-off orders unless the mail says the charge recurs', () => {
+    const tickets = [bms('2026-05-12', 1100, 'AAA1111'), bms('2026-06-12', 1039.24, 'WX6NCTF'), bms('2026-07-12', 1050, 'TGAMAVT')];
+    expect(notRecurringReason(tickets)).toBe('separate_orders');
+    expect(findSubscriptions(tickets, { now: new Date('2026-07-20') })).toEqual([]);
+    // The same numbers on renewal mail are a subscription (Apple, Google Play: an order id each month).
+    const renewals = tickets.map((c) => ({ ...c, merchant: 'Apple', subject: 'Your subscription renewal receipt' }));
+    expect(findSubscriptions(renewals, { now: new Date('2026-07-20') })).toHaveLength(1);
+    // The signal can come from the quotes the card kept.
+    expect(recurringSignal({ subject: 'Receipt', sources: { total: { quote: 'Your membership renews on 12 August' } } })).toBe(true);
+    expect(recurringSignal({ subject: 'Plan your evening: 2 tickets for Dune' })).toBe(false);
+    // One mention in three is not enough.
+    expect(notRecurringReason([{ ...tickets[0], subject: 'Get a BookMyShow membership!' }, tickets[1], tickets[2]])).toBe('separate_orders');
+  });
+
+  it('invoices from one issuer at a steady amount stay subscriptions (invoice numbers differ by nature)', () => {
+    const bill = (date, n) => charge(date, 349, 'Telia', 'NOK', { kind: 'invoice', subject: `Invoice ${n}` });
+    expect(findSubscriptions([bill('2026-06-01', 'T-1'), bill('2026-07-01', 'T-2'), bill('2026-08-01', 'T-3')], { now: new Date('2026-08-10') })).toMatchObject([{ merchant: 'Telia', cadence: 'monthly' }]);
+  });
+
+  it('mail that is also a ticket, a trip or a parcel is never a subscription charge', () => {
+    const withEvent = [charge('2026-06-14'), charge('2026-07-14', 139, 'Netflix', 'NOK', { siblingKinds: ['event'] }), charge('2026-08-14')];
+    expect(notRecurringReason(withEvent)).toBe('one_off_kind');
+    expect(findSubscriptions(withEvent, { now: new Date('2026-08-20') })).toEqual([]);
+    expect(findSubscriptions([charge('2026-06-14'), charge('2026-07-14'), charge('2026-08-14', 139, 'Netflix', 'NOK', { siblingKinds: ['delivery'] })])).toEqual([]);
+    expect(findSubscriptions([charge('2026-06-14', 139, 'Netflix', 'NOK', { kind: 'travel' }), charge('2026-07-14'), charge('2026-08-14'), charge('2026-09-14')], { now: new Date('2026-09-20') })).toMatchObject([{ charges: 3 }]);
+  });
+
+  it('never derives a merchant the owner said is not recurring', () => {
+    const steady = [charge('2026-06-14'), charge('2026-07-14'), charge('2026-08-14')];
+    expect(findSubscriptions(steady, { now: new Date('2026-08-20') })).toHaveLength(1);
+    expect(findSubscriptions(steady, { now: new Date('2026-08-20'), oneOff: new Set(['netflix']) })).toEqual([]);
+  });
+});
+
+describe('card feedback', () => {
+  it('turns the owner\'s verdicts into what is not made again', () => {
+    const blocks = blocksFrom([
+      { kind: 'subscription', merchant_key: 'bookmyshow', verdict: 'not_recurring' },
+      { kind: 'event', merchant_key: 'shop', verdict: 'not_this_kind' },
+      { kind: 'subscription', merchant_key: 'gym', verdict: 'not_this_kind' },
+      { kind: 'receipt', merchant_key: 'uber', verdict: 'wrong_field' },
+      { kind: 'receipt', merchant_key: null, verdict: 'not_this_kind' },
+    ]);
+    expect([...blocks.oneOff].sort()).toEqual(['bookmyshow', 'gym']);
+    expect([...blocks.notKind].sort()).toEqual(['event|shop', 'subscription|bookmyshow', 'subscription|gym']);
+    expect(isBlocked({ kind: 'subscription', fields: { merchant: 'BookMyShow' } }, blocks)).toBe(true);
+    expect(isBlocked({ kind: 'receipt', fields: { merchant: 'BookMyShow' } }, blocks)).toBe(false);
+    // A card without a merchant field is matched by its sender's name.
+    expect(isBlocked({ kind: 'event', fields: { title: 'Sale party' } }, blocks, { from_name: 'Shop', from_email: 'news@shop.example' })).toBe(true);
+    expect(isBlocked({ kind: 'event', fields: { title: 'Dinner' } }, blocks, { from_name: 'Anna', from_email: 'anna@example.test' })).toBe(false);
+  });
+
+  it('names a card by its merchant, issuer or provider, else its sender', () => {
+    expect(cardMerchantKey({ kind: 'invoice', fields: { issuer: 'Fjordkraft AS' } })).toBe('fjordkraft');
+    expect(cardMerchantKey({ kind: 'delivery', fields: { carrier: 'DHL' } })).toBe('dhl');
+    expect(cardMerchantKey({ kind: 'event', fields: {}, message: { from_name: null, from_email: 'tickets@bookmyshow.com' } })).toBe('bookmyshow');
+  });
+
+  it('writes feedback as lines the extractor reads with the next mail from that sender', () => {
+    expect(feedbackLine({ kind: 'subscription', verdict: 'not_recurring', merchant_key: 'bookmyshow', before: { merchant: 'BookMyShow' } }))
+      .toBe('a subscription card for BookMyShow: the owner said this is not a subscription (separate one-off purchases).');
+    expect(feedbackLine({ kind: 'event', verdict: 'not_this_kind', merchant_key: 'shop' })).toBe('an event card for shop: the owner said this mail is not an event.');
+    expect(feedbackLine({ kind: 'receipt', verdict: 'wrong_field', field: 'total', merchant_key: 'uber', before: { total: 23.4, merchant: 'Uber' }, after: { total: 24.4 } }))
+      .toBe('a receipt card for Uber: total was 23.4; the owner corrected it to 24.4.');
+    expect(feedbackLine({ kind: 'subscription', verdict: 'wrong_field', field: 'cadence', before: { cadence: 'weekly' }, after: { cadence: null } })).toMatch(/cadence was "?weekly"?; the owner cleared it\./);
+    const text = renderCardsUser({ today: '2026-09-24', items: [{ id: 'm1', from: 'BookMyShow <tickets@bookmyshow.com>', subject: 'Your booking', text: 'x', feedback: ['a subscription card for BookMyShow: not a subscription.'] }, { id: 'm2', from: 'a@b', subject: 's', text: 'y' }] });
+    expect(text).toContain('Subject: Your booking\nThe owner corrected earlier cards from this sender:\n- a subscription card for BookMyShow: not a subscription.');
+    expect(text.match(/The owner corrected/g)).toHaveLength(1);
   });
 });
 
@@ -354,7 +449,9 @@ describe('ledger', () => {
     expect(sortRows(rows, 'date', 'desc').map((r) => r.date)).toEqual(['2026-09-03', '2026-09-01', '2026-08-01', null]);
     expect(sortRows(rows, 'amount', 'asc')[0].amount).toBe(5.5);
     expect(totalsByCurrency(rows)).toEqual([{ currency: 'GBP', total: 15.5, count: 2 }, { currency: 'NOK', total: 100, count: 1 }]);
-    expect(totalsByCurrency([{ amount: 120, currency: 'NOK', cadence: 'yearly' }, { amount: 10, currency: 'NOK', cadence: 'monthly' }], { monthly: true })[0]).toMatchObject({ total: 130, monthly: 20 });
+    expect(totalsByCurrency([{ amount: 120, currency: 'NOK', cadence: 'yearly' }, { amount: 10, currency: 'NOK', cadence: 'monthly' }], { monthly: true })[0]).toMatchObject({ total: 130, monthly: 20, unknownCadence: 0 });
+    // A subscription whose cadence is unknown adds nothing to the monthly figure, and is counted as such.
+    expect(totalsByCurrency([{ amount: 1322.84, currency: 'INR', cadence: null }], { monthly: true })[0]).toEqual({ currency: 'INR', total: 1322.84, count: 1, monthly: 0, unknownCadence: 1 });
   });
 });
 

@@ -811,6 +811,22 @@ describe('Thread on upstream mail: HTML bodies, quoted history, remote images, a
   });
   const restore = async () => { await cleanup(); globalThis.fetch = realFetch; setMockMode(true); };
 
+  test('opening it marks the unread message read on the server, and the row with it', async () => {
+    const posted = [];
+    const inner = globalThis.fetch;
+    globalThis.fetch = async (url, opts) => {
+      if (String(url) === '/api/mail/messages/bulk-read') { posted.push(JSON.parse(opts.body)); return { ok: true, status: 200, json: async () => ({}), headers: { get: () => '' } }; }
+      return inner(url, opts);
+    };
+    try {
+      useStore.setState({ markReadBehavior: 'immediate' });
+      await render(h(Thread, { props: { item: { threadId: 't-html', messageId: 'h6', unread: true, subject: 'Re: Venue for Friday', from: { name: 'Maria Lopez', email: 'maria@studio.example' } } } }));
+      await settle(80);
+      assert.deepEqual(posted, [{ ids: ['h6'], read: true }], 'one call, for the unread message only');
+      assert.equal(useV2.getState().patches.h6?.unread, false);
+    } finally { await restore(); }
+  });
+
   test('the latest HTML body renders in the sandboxed frame (no plain text), quoted history behind •••, remote images on consent, attachment chips; five read messages fold', async () => {
     try {
       await render(h(Thread, { props: { item: { threadId: 't-html', messageId: 'h6', subject: 'Re: Venue for Friday', from: { name: 'Maria Lopez', email: 'maria@studio.example' } } } }));
@@ -1295,6 +1311,81 @@ describe('list and rail (redesign)', () => {
     useStore.getState().setAccounts?.([{ id: 'acc-work', email_address: 'me@example.org', enabled: true, aliases: [] }]);
     await settle();
     assert.match(nav.querySelector('footer').textContent, /Up to date/, 'one quiet status line');
+    await cleanup();
+  });
+});
+
+// ── quality-of-life sweep ───────────────────────────────────────────────────────
+describe('quality-of-life sweep', () => {
+  after(cleanup);
+  const annaItem = async () => (await mock.mockRequest('GET', '/sort/stream/people')).items.find((i) => i.messageId === 'm-anna');
+
+  test('the people line names the others by address, never you twice; "You" when every message is yours', async () => {
+    const { threadPeople } = await import('./Thread.jsx');
+    const mine = (m) => m.from.email === 'me@example.org';
+    const maria = { from: { name: 'Maria Lopez', email: 'maria@studio.example' } };
+    const me = { from: { name: 'Prakhar Srivastava', email: 'me@example.org' } };
+    assert.equal(threadPeople([maria, me, maria], mine), 'Maria Lopez and you');
+    assert.equal(threadPeople([me, me], mine), 'You');
+  });
+
+  test('dates carry the year when it is not this year: the reader\'s full time and its short time', () => {
+    const now = new Date('2026-09-24T12:00:00');
+    assert.doesNotMatch(format.fullTime(new Date('2026-09-01T09:14:00'), now), /2026/);
+    assert.match(format.fullTime(new Date('2025-09-01T09:14:00'), now), /2025/);
+    assert.match(format.listTime(new Date('2024-03-05T09:14:00'), now), /2024/);
+    assert.doesNotMatch(format.listTime(new Date('2026-03-05T09:14:00'), now), /2026/);
+  });
+
+  test('a rail count says what it counts, in its tooltip and the item\'s name', async () => {
+    const { countHint } = await import('./Rail.jsx');
+    assert.equal(countHint('people', '1'), '1 needs you');
+    assert.equal(countHint('people', '12+'), '12+ need you');
+    assert.equal(countHint('records', '3'), '3 unread');
+    assert.equal(countHint('snoozed', '2'), '2 conversations');
+    assert.equal(countHint('people', ''), undefined);
+    const Rail = (await import('./Rail.jsx')).default;
+    await useV2.getState().refreshCounts();
+    await render(h(Rail, {}));
+    const people = all('button.hw-nav').find((b) => b.textContent.startsWith('People'));
+    assert.equal(people.lastElementChild.getAttribute('title'), '5 need you');
+    assert.equal(people.getAttribute('aria-label'), 'People, 5 need you');
+    await cleanup();
+  });
+
+  test('a row\'s date has the full date as its tooltip; the selected row scrolls into view', async () => {
+    await render(h(StreamView, { props: { stream: 'reading' } }));
+    const rows = all('article.hw-row');
+    const date = rows[0].querySelector('button[data-row-button] span[title]:not([title=""])');
+    assert.ok(date && /\d{2}:\d{2}/.test(date.getAttribute('title')), 'the date tooltip carries the time');
+    const scrolled = [];
+    const proto = dom.window.HTMLElement.prototype;
+    const saved = proto.scrollIntoView;
+    proto.scrollIntoView = function scrollIntoView(opts) { scrolled.push([this, opts]); };
+    try {
+      const target = (await mock.mockRequest('GET', '/sort/stream/reading')).items[2];
+      await React.act(async () => { useV2.getState().select(target); });
+      const row = byLabel(`${target.from.name}: ${target.subject}${target.unread ? ', unread' : ''}`).closest('article');
+      assert.ok(scrolled.some(([el, opts]) => el === row && opts.block === 'nearest'));
+      assert.equal(row.style.scrollMarginTop, '28px', 'clear of the sticky group header');
+    } finally {
+      proto.scrollIntoView = saved;
+      await cleanup();
+    }
+  });
+
+  test('opening an unread conversation marks it read, unless reading is manual', async () => {
+    const item = await annaItem();
+    assert.equal(item.unread, true);
+    useStore.setState({ markReadBehavior: 'manual' });
+    await render(h(Thread, { props: { item } }));
+    await settle(60);
+    assert.equal(useV2.getState().patches[item.messageId]?.unread, undefined, 'manual: left unread');
+    await cleanup();
+    useStore.setState({ markReadBehavior: 'immediate' });
+    await render(h(Thread, { props: { item } }));
+    await settle(60);
+    assert.equal(useV2.getState().patches[item.messageId]?.unread, false, 'the row\'s unread dot clears');
     await cleanup();
   });
 });
