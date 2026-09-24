@@ -12,7 +12,7 @@ import {
   actionLabel, cardFields, cardFigure, downloadIcs, editPatch, fieldLabel, fieldSource, fieldText, fieldType, inputValue,
   reminderBody, safeUrl, statusLabel, cadenceLabel, CARD_FIELDS,
 } from './cards.js';
-import { Btn, LinkBtn, Slip, V, Why } from './primitives.jsx';
+import { Btn, IconButton, LinkBtn, Slip, V, Why } from './primitives.jsx';
 import { tv } from './i18n.js';
 
 function notify(type, title, body) {
@@ -138,8 +138,10 @@ export function CardSlip({ card, messageId, phone = false, onChange }) {
             <LinkBtn key={a.id} hit={phone} disabled={Boolean(busy)} onClick={() => doAction(a)} style={{ fontSize: 12, color: V.accentInk, textDecoration: 'none', ...(phone ? { minHeight: 44, padding: '0 8px 0 0' } : {}) }}>{actionLabel(a)}</LinkBtn>
           ))}
           <span style={{ flexGrow: 1 }} />
-          <LinkBtn muted hit={phone} disabled={Boolean(busy)} onClick={() => setEditing(true)} style={{ fontSize: 12, textDecoration: 'none', ...(phone ? { minHeight: 44, padding: '0 12px 0 0' } : {}) }}>{tv('hedwig.v2.card.edit', 'Correct')}</LinkBtn>
-          <LinkBtn muted hit={phone} disabled={Boolean(busy)} onClick={dismiss} style={{ fontSize: 12, textDecoration: 'none', ...(phone ? { minHeight: 44, padding: '0 0 0 12px' } : {}) }}>{tv('hedwig.v2.card.dismiss', 'Dismiss')}</LinkBtn>
+          <span style={{ display: 'inline-flex', gap: phone ? 0 : 12, marginRight: phone ? -10 : -4 }}>
+            <IconButton icon="pencil" data-card-correct="" label={tv('hedwig.v2.card.edit', 'Correct')} size={phone ? 44 : 28} disabled={Boolean(busy)} onClick={() => setEditing(true)} style={{ color: V.muted }} />
+            <IconButton icon="x" data-card-dismiss="" label={tv('hedwig.v2.card.dismiss', 'Dismiss')} size={phone ? 44 : 28} disabled={Boolean(busy)} onClick={dismiss} style={{ color: V.muted }} />
+          </span>
         </div>
       )}
       {error && <span role="alert" style={{ fontSize: 12, color: V.red }}>{error.message || String(error)}</span>}

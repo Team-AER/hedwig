@@ -18,6 +18,7 @@ import { openReplyFromMessage, openForwardFromMessage } from '../utils/composeFr
 import MessageBodyView from './MessageBodyView.jsx';
 import { mailDarkWanted, normaliseMailDark, senderMailDark, subscribeSenderMailDark } from '../utils/mailDarkMode.js';
 import { useV2 } from '../hedwig/v2/state.js';
+import { Icon } from '../hedwig/icons.jsx';
 import { copyToClipboard } from '../utils/clipboard.js';
 import { folderMatchesQuery } from '../utils/folderDisplay.js';
 import FolderPathLabel from './FolderPathLabel.jsx';
@@ -1930,7 +1931,7 @@ ${bodyContent}
               </PaneBtn>
             )}
             {message.is_read && (
-              <PaneBtn onClick={handleMarkUnread} title={t('contextMenu.markUnread')}>
+              <PaneBtn onClick={handleMarkUnread} title={isMobile ? t('contextMenu.markUnread') : `${t('contextMenu.markUnread')}${shortcutLabel('toggleRead') ? ` (${shortcutLabel('toggleRead')})` : ''}`}>
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
                   <path style={{strokeLinecap: 'round'}} d="M22,10.91v7.09c0,1.1-.9,2-2,2H4c-1.1,0-2-.9-2-2V6c0-1.1.9-2,2-2h11"/>
                   <polyline style={{strokeLinecap: 'round'} } points="16.36 9.95 12 13 2 6"/>
@@ -1979,7 +1980,7 @@ ${bodyContent}
           </>
         )}
 
-        <PaneBtn onClick={handleStarToggle} title={t('message.star')}>
+        <PaneBtn onClick={handleStarToggle} pressed={Boolean(message.is_starred)} title={isMobile ? t('message.star') : `${t('message.star')}${shortcutLabel('toggleStar') ? ` (${shortcutLabel('toggleStar')})` : ''}`}>
           <svg width="15" height="15" viewBox="0 0 24 24"
             fill={message.is_starred ? 'var(--amber)' : 'none'}
             stroke={message.is_starred ? 'var(--amber)' : 'currentColor'} strokeWidth="1.75">
@@ -1987,7 +1988,7 @@ ${bodyContent}
           </svg>
         </PaneBtn>
 
-        <PaneBtn onClick={handleDelete} title={t('message.delete')} danger>
+        <PaneBtn onClick={handleDelete} title={isMobile ? t('message.delete') : `${t('message.delete')}${shortcutLabel('delete') ? ` (${shortcutLabel('delete')})` : ''}`} danger>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
             <polyline points="3 6 5 6 21 6"/>
             <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
@@ -2745,12 +2746,15 @@ ${bodyContent}
   );
 }
 
-function PaneBtn({ children, onClick, title, danger, style: extraStyle }) {
+function PaneBtn({ children, onClick, title, danger, pressed, style: extraStyle }) {
   const [hov, setHov] = useState(false);
   return (
     <button
+      type="button"
       onClick={onClick}
       title={title}
+      aria-label={title}
+      aria-pressed={typeof pressed === 'boolean' ? pressed : undefined}
       className="btn-press"
       onMouseEnter={() => setHov(true)}
       onMouseLeave={() => setHov(false)}
@@ -2866,7 +2870,7 @@ function AiResultBox({ result, canRegen, onRegen, onDismiss }) {
               </svg>
             </button>
           )}
-          <button onClick={onDismiss} aria-label={t('message.summaryDismiss')} style={{ ...iconBtn, fontSize: 14 }}>×</button>
+          <button type="button" onClick={onDismiss} title={t('message.summaryDismiss')} aria-label={t('message.summaryDismiss')} style={iconBtn}><Icon name="x" size={14} /></button>
         </div>
       </div>
       {loading && !result.text ? (

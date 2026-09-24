@@ -237,7 +237,10 @@ describe('cards in the thread', () => {
     assert.match(notifications.at(-1).title, /^Reminder set for /);
 
     // Correct: only the changed field goes out, and the edit is marked as the user's.
-    await click(byText('button', 'Correct', slip));
+    const correct = byLabel('Correct', slip);
+    assert.equal(correct.getAttribute('title'), 'Correct', 'Correct is a pencil icon named by its tooltip');
+    assert.equal(correct.textContent, '');
+    await click(correct);
     const item = byLabel('Correct this card').querySelector('input[id$="-item"]');
     assert.equal(item.value, 'Running shoes');
     await type(item, 'Trail shoes');
@@ -252,7 +255,9 @@ describe('cards in the thread', () => {
     assert.match(shoes.closest('dd').textContent, /You changed this from Running shoes\./);
 
     // Dismiss hides it.
-    await click(byText('button', 'Dismiss', byLabel('Today · DHL, out for delivery')));
+    const dismissBtn = byLabel('Dismiss', byLabel('Today · DHL, out for delivery'));
+    assert.equal(dismissBtn.getAttribute('title'), 'Dismiss', 'Dismiss is an x icon named by its tooltip');
+    await click(dismissBtn);
     assert.equal(byLabel('Today · DHL, out for delivery'), null);
     assert.ok((await mock.mockRequest('GET', '/cards/c-dhl')).dismissedAt);
   });
@@ -408,7 +413,12 @@ describe('Ask', () => {
     assert.ok(requests().includes(`POST /context/ask/${log[0].id}/feedback`));
     assert.deepEqual((await mock.mockRequest('GET', `/context/ask/${log[0].id}`)).feedback.note, 'It is not the same deposit');
     assert.match(text(), /Marked wrong\. Hedwig learns from this\./);
-    await click(byText('button', 'Undo'));
+    const copyBtn = byLabel('Copy');
+    assert.equal(copyBtn.getAttribute('title'), 'Copy', 'Copy is an icon named by its tooltip');
+    assert.equal(copyBtn.textContent, '');
+    const undoBtn = byLabel('Undo');
+    assert.equal(undoBtn.getAttribute('title'), 'Undo');
+    await click(undoBtn);
     assert.equal((await mock.mockRequest('GET', `/context/ask/${log[0].id}`)).feedback.wrong, false);
   });
 
@@ -466,13 +476,16 @@ describe('Waiting on', () => {
     assert.ok(byLabel('Tom Ellis · the signed contract'), 'the row opens the thread, named by who and what');
     assert.match(text(), /asked 6 days ago/);
     assert.match(text(), /No reply in 3 days, as you asked to be reminded/);
-    await click(all('button').filter((b) => b.textContent === 'Nudge')[0]);
+    await click(all('button[aria-label="Nudge"]')[0]);
     assert.ok(requests().includes('POST /work/waiting/t-tom/nudge'));
     assert.equal(composed.length, 1);
     assert.match(composed[0].body, /^Hi Tom, just checking in on the signed contract/);
     assert.deepEqual(composed[0].to, [{ name: 'Tom Ellis', email: 'tom@ellis.example' }]);
     assert.equal(composed[0].subject, 'Re: the signed contract');
-    await click(all('button').filter((b) => b.textContent === 'Resolve')[0]);
+    const resolve = all('button[aria-label="Resolve"]')[0];
+    assert.equal(resolve.getAttribute('title'), 'Resolve', 'Resolve is an icon button named by its tooltip');
+    assert.equal(all('button[aria-label="Nudge"]')[0].getAttribute('title'), 'Nudge');
+    await click(resolve);
     assert.ok(requests().includes('POST /work/waiting/t-tom/resolve'));
     assert.doesNotMatch(text(), /Tom Ellis/);
     assert.equal(notifications.at(-1).title, 'No longer waiting on Tom Ellis.');
@@ -481,7 +494,7 @@ describe('Waiting on', () => {
 
   test('the Brief\'s Nudge uses the same drafted nudge', async () => {
     await render(h(Brief));
-    await click(all('button').filter((b) => b.textContent === 'Nudge')[0]);
+    await click(all('button[aria-label="Nudge"]')[0]);
     await settle(60);
     assert.ok(requests().includes('POST /work/waiting/t-tom/nudge'));
     assert.match(composed.at(-1).body, /^Hi Tom, just checking in/);
@@ -491,7 +504,7 @@ describe('Waiting on', () => {
   test('without the work routes the nudge is the plain opener', async () => {
     useV2.setState({ caps: { work: false } });
     await render(h(Brief));
-    await click(all('button').filter((b) => b.textContent === 'Nudge')[0]);
+    await click(all('button[aria-label="Nudge"]')[0]);
     await settle(60);
     assert.ok(!requests().some((r) => r.includes('/nudge')));
     assert.equal(composed.at(-1).body, 'Hi Tom, just checking in on this.');
@@ -505,11 +518,19 @@ describe('Waiting on', () => {
     const field = byLabel('Reply to Anna');
     await React.act(async () => { field.focus(); field.dispatchEvent(new dom.window.FocusEvent('focusin', { bubbles: true })); });
     await settle();
+    // A bell toggle named by its tooltip; the days appear only once it is on.
+    const box = byLabel('Remind me if no reply');
+    assert.equal(box.tagName, 'BUTTON');
+    assert.equal(box.getAttribute('aria-pressed'), 'false');
+    assert.match(box.getAttribute('title'), /^Remind me if no reply\. If nobody answers in time/);
+    assert.equal(byLabel('Remind me after'), null, 'no days while it is off');
+    await React.act(async () => { box.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })); });
+    await settle();
+    assert.equal(box.getAttribute('aria-pressed'), 'true');
     const days = byLabel('Remind me after');
     assert.equal(days.value, '7');
     await type(days, '5');
-    const box = all('input[type="checkbox"]').find((b) => b.closest('label').textContent.includes('Remind me if no reply'));
-    assert.equal(box.checked, true, 'picking a number of days ticks the box');
+    assert.equal(box.getAttribute('aria-pressed'), 'true', 'picking a number of days keeps it on');
     const input = byLabel('Reply to Anna');
     await type(input, 'Sending them tonight.');
     await submit(input.closest('form'));
@@ -518,7 +539,7 @@ describe('Waiting on', () => {
     assert.equal(watch.days, 5);
     assert.ok(notifications.some((n) => n.title === 'Sent.'));
     assert.equal(notifications.at(-1).title, 'Hedwig will remind you if there is no reply in 5 days.');
-    assert.equal(box.checked, false, 'the box clears after the send');
+    assert.equal(box.getAttribute('aria-pressed'), 'false', 'the toggle clears after the send');
   });
 
   test('left unticked, a send posts no watch', async () => {

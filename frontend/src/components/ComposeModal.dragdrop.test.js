@@ -326,3 +326,81 @@ describe('the footer Discard button', () => {
     }
   });
 });
+
+describe('icon-first footer and formatting bar', () => {
+  const footerBtn = (sel) => document.querySelector(sel);
+
+  test('Save draft and Discard are icon buttons named by their tooltips; Send keeps its label', async () => {
+    await mount({ accountId: 'acct' });
+    for (const [sel, label] of [['[data-compose-save]', 'compose.saveDraft'], ['[data-compose-discard]', 'compose.discard']]) {
+      const btn = footerBtn(sel);
+      assert.ok(btn, `${label} is in the footer`);
+      assert.equal(btn.getAttribute('aria-label'), label);
+      assert.equal(btn.getAttribute('title'), label);
+      assert.equal(btn.textContent, '', `${label} shows an icon, not text`);
+      assert.ok(btn.querySelector('svg'), `${label} has its glyph`);
+      assert.equal(btn.style.width, '28px');
+      assert.equal(btn.style.height, '28px');
+    }
+    const send = footerBtn('[data-compose-send]');
+    assert.match(send.textContent, /compose\.send/, 'Send is the primary action: icon plus label');
+    assert.equal(send.getAttribute('title'), 'compose.sendTooltip');
+  });
+
+  test('every formatting control has a tooltip and a name, 24px, on one line', async () => {
+    await mount({ accountId: 'acct' });
+    const bar = document.querySelector('[data-compose-toolbar]');
+    assert.ok(bar, 'the desktop formatting bar is rendered');
+    assert.equal(bar.style.flexWrap, 'nowrap', 'the bar never wraps onto a second line');
+    const buttons = Array.from(bar.querySelectorAll('button'));
+    assert.ok(buttons.length >= 12);
+    for (const b of buttons) {
+      assert.ok(b.getAttribute('title'), `a tooltip on ${b.outerHTML.slice(0, 80)}`);
+      assert.equal(b.getAttribute('aria-label'), b.getAttribute('title'));
+      assert.equal(b.style.height, '24px');
+    }
+    const bold = buttons.find(b => /^Bold \((⌘B|Ctrl\+B)\)$/.test(b.title));
+    assert.ok(bold, 'Bold names its key');
+    assert.equal(bold.getAttribute('aria-pressed'), 'false', 'formatting toggles carry aria-pressed');
+    for (const label of ['compose.toolbar.insertTable', 'compose.toolbar.insertImage', 'Edit HTML source']) {
+      assert.ok(buttons.some(b => b.title === label), `${label} is on the bar while it fits`);
+    }
+  });
+
+  test('when the bar is narrower than its content, table, image and HTML source fold into More', async () => {
+    const proto = w.HTMLElement.prototype;
+    const widths = { clientWidth: 400, scrollWidth: 620 };
+    for (const [prop, value] of Object.entries(widths)) {
+      Object.defineProperty(proto, prop, { configurable: true, get() { return this.hasAttribute('data-compose-toolbar') ? value : 0; } });
+    }
+    try {
+      await mount({ accountId: 'acct' });
+      const bar = document.querySelector('[data-compose-toolbar]');
+      assert.ok(bar.hasAttribute('data-collapsed'), 'the bar collapsed');
+      const titles = Array.from(bar.querySelectorAll('button')).map(b => b.title);
+      for (const label of ['compose.toolbar.insertTable', 'compose.toolbar.insertImage', 'Edit HTML source']) {
+        assert.ok(!titles.includes(label), `${label} left the bar`);
+      }
+      const more = bar.querySelector('[data-compose-toolbar-more]');
+      assert.equal(more.getAttribute('title'), 'compose.toolbar.moreFormatting');
+      assert.equal(more.getAttribute('aria-haspopup'), 'menu');
+      await React.act(async () => { more.dispatchEvent(new w.MouseEvent('mousedown', { bubbles: true, cancelable: true })); });
+      await wait();
+      const menu = document.querySelector('[data-compose-toolbar-menu]');
+      assert.ok(menu, 'More opens its menu');
+      assert.deepEqual(Array.from(menu.querySelectorAll('[role="menuitem"]')).map(b => b.textContent),
+        ['compose.toolbar.insertImage', 'compose.toolbar.insertTable', 'Edit HTML source']);
+    } finally {
+      for (const prop of Object.keys(widths)) delete proto[prop];
+    }
+  });
+
+  test('the title bar buttons have tooltips and names', async () => {
+    await mount({ accountId: 'acct' });
+    for (const label of ['compose.toolbar.minimize', 'compose.toolbar.maximize', 'compose.toolbar.close']) {
+      const btn = document.querySelector(`button[aria-label="${label}"]`);
+      assert.ok(btn, label);
+      assert.equal(btn.getAttribute('title'), label);
+    }
+  });
+});

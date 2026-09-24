@@ -288,6 +288,12 @@ body, #root {
   font-size: 13px;
 }
 .compose-subject-input { font-size: 14px; font-weight: 500; }
+/* Composer icon buttons (formatting bar, footer): hover fill, a quiet disabled state. */
+.compose-icon-btn { transition: background 0.12s ease, color 0.12s ease; }
+.compose-icon-btn:hover:not(:disabled):not([data-accent]) { background: var(--bg-hover) !important; color: var(--text-primary) !important; }
+.compose-icon-btn[data-danger]:hover:not(:disabled) { color: var(--red) !important; }
+.compose-icon-btn[data-accent]:hover:not(:disabled) { opacity: 0.88; }
+.compose-icon-btn:disabled { opacity: 0.4; cursor: default !important; }
 .compose-field-bare::placeholder,
 .compose-recipient-input::placeholder { color: var(--text-tertiary); opacity: 1; }
 .compose-from-wrap { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; }

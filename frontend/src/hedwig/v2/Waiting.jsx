@@ -9,7 +9,7 @@ import { v2Api, listOf, announceSortChange } from './client.js';
 import { openThread } from './nav.js';
 import { useV2 } from './state.js';
 import { nudgeThread } from './mail.js';
-import { Avatar, ErrorLine, Hair, LinkBtn, Num, Quiet, V, ViewBody, ViewHead, Why, usePhone } from './primitives.jsx';
+import { Avatar, ErrorLine, Hair, IconButton, Num, Quiet, V, ViewBody, ViewHead, Why, usePhone } from './primitives.jsx';
 import { tv, tvn } from './i18n.js';
 
 function notify(type, title, body) {
@@ -45,13 +45,26 @@ export function WaitingRow({ w, phone, busy, onNudge, onResolve }) {
           {w.subject || w.who}
         </button>
         {w.reason && <Why size={phone ? 13 : 12}>{w.reason}</Why>}
-        <div style={{ display: 'flex', alignItems: 'center', gap: phone ? 4 : 14, paddingTop: 4 }}>
-          <LinkBtn hit={phone} disabled={Boolean(busy)} onClick={() => onNudge(w)} style={{ fontSize: phone ? 15 : 12, color: V.accentInk, textDecorationColor: 'transparent', ...(phone ? { minHeight: 44, padding: '0 12px 0 0' } : {}) }}>
-            {busy === 'nudge' ? tv('hedwig.v2.thread.drafting', 'Drafting…') : tv('hedwig.v2.brief.nudge', 'Nudge')}
-          </LinkBtn>
-          <LinkBtn muted hit={phone} disabled={Boolean(busy)} onClick={() => onResolve(w)} style={{ fontSize: phone ? 15 : 12, textDecorationColor: 'transparent', ...(phone ? { minHeight: 44, padding: '0 12px' } : {}) }}>
-            {tv('hedwig.v2.waiting.resolve', 'Resolve')}
-          </LinkBtn>
+        <div style={{ display: 'flex', alignItems: 'center', gap: phone ? 4 : 12, paddingTop: 4, marginLeft: phone ? -10 : -4 }}>
+          <IconButton
+            icon="bell"
+            data-nudge=""
+            label={busy === 'nudge' ? tv('hedwig.v2.thread.drafting', 'Drafting…') : tv('hedwig.v2.brief.nudge', 'Nudge')}
+            aria-busy={busy === 'nudge' || undefined}
+            size={phone ? 44 : 28}
+            disabled={Boolean(busy)}
+            onClick={() => onNudge(w)}
+            style={{ color: V.accentInk }}
+          />
+          <IconButton
+            icon="circle-check"
+            data-resolve=""
+            label={tv('hedwig.v2.waiting.resolve', 'Resolve')}
+            size={phone ? 44 : 28}
+            disabled={Boolean(busy)}
+            onClick={() => onResolve(w)}
+            style={{ color: V.muted }}
+          />
         </div>
       </div>
     </div>

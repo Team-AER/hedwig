@@ -7,7 +7,7 @@ import { v2Api, listOf, announceSortChange } from './client.js';
 import { streamTitle } from './StreamView.jsx';
 import { todayLine } from './Brief.jsx';
 import { rowDate } from './rows.jsx';
-import { Avatar, ErrorLine, LinkBtn, Num, Quiet, SectionLabel, V, ViewBody, ViewHead, Why, usePhone } from './primitives.jsx';
+import { Avatar, ErrorLine, IconButton, LinkBtn, Num, Quiet, SectionLabel, V, ViewBody, ViewHead, Why, usePhone } from './primitives.jsx';
 import { Icon } from '../icons.jsx';
 import { openThread } from './nav.js';
 import { tv } from './i18n.js';
@@ -159,7 +159,7 @@ export default function Today() {
                       {undone
                         ? <span style={{ fontSize: 12, color: V.muted }}>{tv('hedwig.v2.today.undone', 'Undone')}</span>
                         : e.undoable
-                          ? <LinkBtn data-undo="" hit={phone} disabled={busy === e.id} onClick={() => undo(e)} style={{ fontSize: phone ? 15 : 12, color: V.accentInk, textDecorationColor: 'transparent' }}>{tv('hedwig.v2.today.undo', 'Undo')}</LinkBtn>
+                          ? <IconButton icon="undo" data-undo="" label={tv('hedwig.v2.today.undo', 'Undo')} size={phone ? 44 : 28} disabled={busy === e.id} onClick={() => undo(e)} style={{ color: V.accentInk }} />
                           : null}
                     </span>
                   </div>

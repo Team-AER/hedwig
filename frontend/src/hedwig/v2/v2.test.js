@@ -495,7 +495,15 @@ describe('Screener', () => {
     const log = await mock.mockRequest('GET', '/sort/today');
     assert.equal(log.entries[0].after.decision, 'people', 'the changed pick was sent, not the proposal');
 
-    await click(byText('button', 'Accept all'));
+    // Accept (per row) and Accept all are icon buttons named by their tooltips.
+    const rowAccept = byLabel('Accept: Block', prize);
+    assert.equal(rowAccept.getAttribute('title'), 'Accept: Block');
+    assert.equal(rowAccept.textContent, '', 'the row Accept is a check icon, no text');
+    const acceptAll = byLabel('Accept all');
+    assert.equal(acceptAll.getAttribute('title'), 'Accept all');
+    assert.equal(acceptAll.textContent, '');
+    assert.ok(acceptAll.querySelector('svg'), 'the check-check glyph');
+    await click(acceptAll);
     assert.match(text(), /No new senders/);
     assert.match(notifications.at(-1).title, /Accepted senders: 6/);
   });
@@ -592,13 +600,21 @@ describe('Thread', () => {
     // The reply bar: a 40px field that grows on focus with Draft in my voice and Send.
     const input = byLabel('Reply to Anna');
     assert.equal(input.tagName, 'TEXTAREA');
-    assert.equal(byText('button', 'Draft in my voice'), undefined, 'collapsed until focused');
+    assert.equal(byLabel('Draft in my voice'), null, 'collapsed until focused');
     await focusIn(input);
-    for (const label of ['Draft in my voice', 'Send']) assert.ok(byText('button', label), `${label} button`);
+    // Draft in my voice is a sparkles icon button named by its tooltip; Send keeps its label.
+    const voice = byLabel('Draft in my voice');
+    assert.ok(voice, 'Draft in my voice button');
+    assert.equal(voice.getAttribute('title'), 'Draft in my voice');
+    assert.equal(voice.textContent, '', 'an icon, no text label');
+    const sendBtn = byText('button', 'Send');
+    assert.ok(sendBtn, 'Send button');
+    assert.match(sendBtn.getAttribute('title'), /^Send \((⌘|Ctrl\+)↩\)$/);
+    assert.equal(sendBtn.getAttribute('aria-label'), sendBtn.getAttribute('title'));
 
     await click(byText('button', 'Sending them now.'));
     assert.equal(input.value, 'Sending them now.');
-    await click(byText('button', 'Draft in my voice'));
+    await click(byLabel('Draft in my voice'));
     await settle();
     assert.match(input.value, /Hi Anna, yes/);
     assert.ok(mock.mockRequests().includes('POST /work/draft'));
@@ -624,7 +640,7 @@ describe('Thread', () => {
     await settle(60);
     await focusIn(byLabel('Reply to Anna'));
     for (const label of ['Reply Later (L)', 'Set Aside (S)']) assert.equal(byLabel(label), null, label);
-    assert.equal(byText('button', 'Draft in my voice'), undefined);
+    assert.equal(byLabel('Draft in my voice'), null);
     assert.ok(byLabel('Done (E)'));
     assert.doesNotMatch(text(), /Not available yet/);
   });
@@ -662,7 +678,7 @@ describe('Thread', () => {
     await settle(60);
     await focusIn(byLabel('Reply to Anna'));
     assert.equal(byText('button', 'Sending them now.'), undefined);
-    assert.equal(byText('button', 'Draft in my voice'), undefined);
+    assert.equal(byLabel('Draft in my voice'), null);
   });
 
   test('no selection is a quiet line, not an error', async () => {
@@ -959,7 +975,9 @@ describe('Daily Brief', () => {
     assert.match(text(), /Needs you today/);
     assert.match(text(), /Due Friday, the board pack prints that morning/);
     assert.match(text(), /Waiting on others/);
-    assert.equal(all('button').filter((b) => b.textContent === 'Nudge').length, 2);
+    const nudges = all('button[aria-label="Nudge"]');
+    assert.equal(nudges.length, 2, 'Nudge is a bell icon button per waiting row');
+    for (const b of nudges) { assert.equal(b.getAttribute('title'), 'Nudge'); assert.equal(b.textContent, ''); }
     assert.match(text(), /Today, from your Records/);
     assert.match(text(), /NOK 1,240/);
     assert.match(text(), /PDFcontract\.pdf · Lease renewal/, 'a file name moves to the caption, the figure says PDF');
@@ -1029,8 +1047,9 @@ describe('Hedwig today', () => {
     assert.match(text(), /Screened Nordlys Travel into Records/);
     assert.match(text(), /Rescued Erik Haugen from spam/);
     assert.match(text(), /Delivered 2 in Deliveries/);
-    const undo = all('button').filter((b) => b.textContent === 'Undo');
+    const undo = all('button[aria-label="Undo"]');
     assert.equal(undo.length, 3, 'a bundle delivery is not undoable');
+    for (const b of undo) { assert.equal(b.getAttribute('title'), 'Undo'); assert.equal(b.textContent, '', 'an undo icon, no text'); }
     await click(undo[0]);
     assert.match(text(), /Undone/);
     const log = await mock.mockRequest('GET', '/sort/today');
@@ -1049,7 +1068,7 @@ describe('Hedwig today', () => {
     assert.equal(figure.style.fontSize, '20px');
     assert.equal(figure.style.fontWeight, '600');
     await click(byText('button', 'Review or undo', strip));
-    assert.equal(document.activeElement.textContent, 'Undo', 'Review or undo takes focus to the first Undo');
+    assert.equal(document.activeElement.getAttribute('aria-label'), 'Undo', 'Review or undo takes focus to the first Undo');
     await cleanup();
   });
 });

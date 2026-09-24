@@ -13,7 +13,7 @@ import { useV2, UI_DEFAULTS } from './state.js';
 import { v2Api, listOf, isMockMode } from './client.js';
 import { useV2Resource } from './hooks.js';
 import { nextScheme, schemeLabel } from './Rail.jsx';
-import { Code, ErrorLine, Hair, LinkBtn, Mono, Quiet, SectionLabel, V, Why } from './primitives.jsx';
+import { Code, ErrorLine, Hair, IconButton, LinkBtn, Mono, Quiet, SectionLabel, V, Why } from './primitives.jsx';
 import { listTime, percent } from './format.js';
 import { tv } from './i18n.js';
 import { tierLabel } from './tiers.js';
@@ -130,7 +130,7 @@ function BundleTimes({ label, help }) {
           <span style={{ fontSize: 13 }}>{label}</span>
           <span style={{ fontSize: 12, color: V.muted }}>{help}</span>
         </span>
-        <LinkBtn aria-expanded={open} onClick={() => setOpen((v) => !v)}>{open ? tv('hedwig.v2.records.hide', 'Hide') : tv('hedwig.v2.records.show', 'Show')}</LinkBtn>
+        <IconButton icon={open ? 'chevron-up' : 'chevron-down'} aria-expanded={open} label={open ? tv('hedwig.v2.records.hide', 'Hide') : tv('hedwig.v2.records.show', 'Show')} onClick={() => setOpen((v) => !v)} />
       </div>
       {open && (
         <div style={{ display: 'flex', flexDirection: 'column', paddingTop: 8 }}>

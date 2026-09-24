@@ -207,7 +207,7 @@ function TabsNode({ node }) {
               >
                 {title}
               </button>
-              <button type="button" className="hw-btn-quiet" aria-label={tr('tabs.close', 'Close {{title}} tab', { title })} onClick={() => useShell.getState().closePane(c.key)} style={{ ...ui.quietIconButton, width: 20, height: 20 }}>
+              <button type="button" className="hw-btn-quiet" aria-label={tr('tabs.close', 'Close {{title}} tab', { title })} title={tr('tabs.close', 'Close {{title}} tab', { title })} onClick={() => useShell.getState().closePane(c.key)} style={{ ...ui.quietIconButton, width: 20, height: 20 }}>
                 <Icon name="close" size={12} />
               </button>
             </div>

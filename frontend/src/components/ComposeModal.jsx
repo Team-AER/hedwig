@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, forwardRef } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, forwardRef } from 'react';
 import { shouldAutosave, isAutosaveDue } from '../utils/draftAutosave.js';
 import { useTranslation } from 'react-i18next';
 import DOMPurify from 'dompurify';
@@ -20,6 +20,7 @@ import { TableCell } from '@tiptap/extension-table-cell';
 import { ComposerLink } from '../utils/editorLink.js';
 import { copyToClipboard } from '../utils/clipboard.js';
 import { resolveInitialFrom } from '../utils/defaultSender.js';
+import { Icon } from '../hedwig/icons.jsx';
 
 // Resize an image blob/file to max maxW pixels wide, preserving aspect ratio.
 // Returns a Promise<string> of a base64 data URL.
@@ -1319,7 +1320,10 @@ export default function ComposeModal() {
           </span>
           <div style={{ display: 'flex', alignItems: 'center', gap: 2, minWidth: 60, justifyContent: 'flex-end' }}>
             <button
+              type="button"
               onClick={() => setShowPrioritySheet(true)}
+              title={t('compose.priority')}
+              aria-label={t('compose.priority')}
               style={{
                 background: 'none', border: 'none', padding: '4px 8px',
                 cursor: 'pointer', display: 'flex', alignItems: 'center',
@@ -2275,9 +2279,11 @@ export default function ComposeModal() {
       {/* Footer */}
       <div style={{
         padding: '10px 14px', borderTop: '1px solid var(--border-subtle)',
-        display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0,
+        display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0,
       }}>
         <button
+          type="button"
+          data-compose-send=""
           onClick={handleSend}
           disabled={sending || (toChips.length === 0 && !toInput.trim())}
           title={sending ? undefined : t('compose.sendTooltip')}
@@ -2296,19 +2302,11 @@ export default function ComposeModal() {
         </button>
 
         {plaintextEmail && (
-          <button
-            type="button"
-            title={t('compose.toolbar.attachFile')}
+          <FooterIconBtn
             onClick={() => fileInputRef.current?.click()}
-            style={{
-              background: 'none', border: 'none', borderRadius: 5, padding: '4px 8px',
-              color: 'var(--text-tertiary)', cursor: 'pointer', display: 'flex', alignItems: 'center',
-            }}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/>
-            </svg>
-          </button>
+            label={t('compose.toolbar.attachFile')}
+            icon="paperclip"
+          />
         )}
 
         {error && <span style={{ fontSize: 12, color: 'var(--red)', flex: 1 }}>{error}</span>}
@@ -2317,6 +2315,7 @@ export default function ComposeModal() {
           value={priority}
           onChange={e => setPriority(e.target.value)}
           title={t('compose.priority')}
+          aria-label={t('compose.priority')}
           style={{
             marginLeft: 'auto',
             background: 'var(--bg-tertiary)', border: '1px solid var(--border)',
@@ -2330,24 +2329,22 @@ export default function ComposeModal() {
           <option value="low">{t('compose.priorityLow')}</option>
         </select>
 
-        <button
-          type="button"
-          data-compose-discard=""
-          onClick={handleDiscardClick}
-          disabled={sending}
-          title={t('compose.discardDraft.title')}
-          style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: sending ? 'default' : 'pointer', fontSize: 12, padding: '4px 8px', display: 'inline-flex', alignItems: 'center', gap: 5 }}
-        >
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M19 6l-1 14H6L5 6" /><path d="M10 11v6M14 11v6" /></svg>
-          {t('compose.discard')}
-        </button>
-        <button
+        {/* Save, then (set apart, being destructive) Discard: icon buttons named by their tooltip. */}
+        <FooterIconBtn
+          data-compose-save=""
           onClick={() => handleSaveDraft()}
           disabled={savingDraft}
-          style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: savingDraft ? 'default' : 'pointer', fontSize: 12, padding: '4px 8px' }}
-        >
-          {savingDraft ? t('compose.savingDraft') : t('compose.saveDraft')}
-        </button>
+          label={savingDraft ? t('compose.savingDraft') : t('compose.saveDraft')}
+          icon="save"
+        />
+        <FooterIconBtn
+          data-compose-discard=""
+          data-danger=""
+          onClick={handleDiscardClick}
+          disabled={sending}
+          label={t('compose.discard')}
+          icon="trash"
+        />
       </div>
 
       {/* Discard confirmation (the footer's Discard button). A draft with nothing typed and no
@@ -2632,18 +2629,26 @@ const FONT_GROUPS = [
 ];
 
 // Defined at module level so React never remounts it due to reference change
-const TBtn = forwardRef(function TBtn({ active, title, onMouseDown, children }, ref) {
+// A formatting-bar button: 24×24 so the bar fits a 560px composer on one line. `title` is both
+// the tooltip and the accessible name ("Bold (⌘B)"); `pressed` marks a toggle (aria-pressed).
+const TBtn = forwardRef(function TBtn({ active, title, onMouseDown, children, pressed, style, ...rest }, ref) {
   return (
     <button
       ref={ref}
+      type="button"
       title={title}
+      aria-label={title}
+      aria-pressed={typeof pressed === 'boolean' ? pressed : undefined}
       onMouseDown={onMouseDown}
+      className="compose-icon-btn"
+      {...rest}
       style={{
+        width: 24, height: 24, flexShrink: 0, boxSizing: 'border-box',
         background: active ? 'var(--bg-hover)' : 'none',
-        border: 'none', borderRadius: 4, padding: '3px 6px',
+        border: 'none', borderRadius: 4, padding: 0,
         color: active ? 'var(--accent)' : 'var(--text-secondary)',
-        cursor: 'pointer', fontSize: 12, fontWeight: 600,
-        display: 'inline-flex', alignItems: 'center',
+        cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        ...style,
       }}
     >
       {children}
@@ -2652,7 +2657,16 @@ const TBtn = forwardRef(function TBtn({ active, title, onMouseDown, children }, 
 });
 
 function Sep() {
-  return <span style={{ width: 1, background: 'var(--border-subtle)', margin: '2px 4px', alignSelf: 'stretch' }} />;
+  return <span aria-hidden="true" style={{ width: 1, background: 'var(--border-subtle)', margin: '4px 3px', alignSelf: 'stretch', flexShrink: 0 }} />;
+}
+
+// Tooltip keys in the platform's spelling: "⌘⇧S" on a Mac, "Ctrl+Shift+S" elsewhere.
+const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '');
+function modKey(key, shift = false) {
+  return IS_MAC ? `⌘${shift ? '⇧' : ''}${key}` : `Ctrl+${shift ? 'Shift+' : ''}${key}`;
+}
+function withKey(label, key) {
+  return key ? `${label} (${key})` : label;
 }
 
 function ColorMenuSection({ title, colors, activeColor, onColor, onClear, clearLabel, customColorLabel, noColorLabel, showNoColor, showClear = true }) {
@@ -2746,6 +2760,14 @@ function RichToolbar({ editor, onAttach, onInsertImage, htmlMode, onToggleHtml, 
   const linkPopRef = useRef(null);
   const linkInputRef = useRef(null);
   const [showMobileMore, setShowMobileMore] = useState(false);
+  // The desktop bar never wraps: when it is narrower than its content, image, table and the
+  // HTML source view fold into a More menu. fullWidthRef is the content width with them shown.
+  const [collapsed, setCollapsed] = useState(false);
+  const collapsedRef = useRef(false);
+  const fullWidthRef = useRef(0);
+  const [morePos, setMorePos] = useState(null);
+  const moreBtnRef = useRef(null);
+  const morePopRef = useRef(null);
 
   // Refs on the toolbar rows so we can keep their controls out of the Tab order (#266).
   const desktopBarRef = useRef(null);
@@ -2763,6 +2785,26 @@ function RichToolbar({ editor, onAttach, onInsertImage, htmlMode, onToggleHtml, 
     );
   });
 
+  const measureBar = useCallback(() => {
+    const bar = desktopBarRef.current;
+    if (!bar) return;
+    if (!collapsedRef.current) fullWidthRef.current = bar.scrollWidth;
+    const next = fullWidthRef.current > bar.clientWidth + 1;
+    if (next !== collapsedRef.current) {
+      collapsedRef.current = next;
+      setCollapsed(next);
+      if (!next) setMorePos(null);
+    }
+  }, []);
+  useLayoutEffect(() => { measureBar(); });
+  useEffect(() => {
+    const bar = desktopBarRef.current;
+    if (!bar || typeof ResizeObserver === 'undefined') return undefined;
+    const ro = new ResizeObserver(() => measureBar());
+    ro.observe(bar);
+    return () => ro.disconnect();
+  }, [measureBar, isMobile, editor]);
+
   // Focus the link URL input without triggering a browser scroll — autoFocus
   // causes Chromium/Linux to scroll the viewport when the input is near the
   // right edge, making the compose window appear to shift left.
@@ -2773,12 +2815,14 @@ function RichToolbar({ editor, onAttach, onInsertImage, htmlMode, onToggleHtml, 
   }, [linkPos]);
 
   useEffect(() => {
-    if (!typeMenuPos && !emojiPos && !linkPos && !tablePos && !aiMenuPos) return;
+    if (!typeMenuPos && !emojiPos && !linkPos && !tablePos && !aiMenuPos && !morePos) return;
     const handler = (e) => {
       if (typeMenuPos && typeMenuBtnRef.current && !typeMenuBtnRef.current.contains(e.target) && typeMenuRef.current && !typeMenuRef.current.contains(e.target)) setTypeMenuPos(null);
       if (emojiPos && emojiBtnRef.current && !emojiBtnRef.current.contains(e.target) && emojiPopRef.current && !emojiPopRef.current.contains(e.target)) setEmojiPos(null);
       if (linkPos && linkBtnRef.current && !linkBtnRef.current.contains(e.target) && linkPopRef.current && !linkPopRef.current.contains(e.target)) setLinkPos(null);
-      if (tablePos && tableBtnRef.current && !tableBtnRef.current.contains(e.target) && tablePopRef.current && !tablePopRef.current.contains(e.target)) setTablePos(null);
+      const tableAnchor = tableBtnRef.current || moreBtnRef.current;
+      if (tablePos && tableAnchor && !tableAnchor.contains(e.target) && tablePopRef.current && !tablePopRef.current.contains(e.target)) setTablePos(null);
+      if (morePos && moreBtnRef.current && !moreBtnRef.current.contains(e.target) && morePopRef.current && !morePopRef.current.contains(e.target)) setMorePos(null);
       if (aiMenuPos && aiBtnRef.current && !aiBtnRef.current.contains(e.target) && aiMenuRef.current && !aiMenuRef.current.contains(e.target)) setAiMenuPos(null);
     };
     document.addEventListener('mousedown', handler);
@@ -2787,7 +2831,7 @@ function RichToolbar({ editor, onAttach, onInsertImage, htmlMode, onToggleHtml, 
       document.removeEventListener('mousedown', handler);
       document.removeEventListener('touchstart', handler);
     };
-  }, [typeMenuPos, emojiPos, linkPos, tablePos, aiMenuPos]);
+  }, [typeMenuPos, emojiPos, linkPos, tablePos, aiMenuPos, morePos]);
 
   const es = useEditorState({
     editor,
@@ -2876,13 +2920,25 @@ function RichToolbar({ editor, onAttach, onInsertImage, htmlMode, onToggleHtml, 
     setLinkUrl('');
   };
 
-  const openTable = (e) => {
-    e.preventDefault();
-    if (tablePos) { setTablePos(null); return; }
-    const r = tableBtnRef.current.getBoundingClientRect();
+  const openTableAt = (anchor) => {
+    if (!anchor) return;
+    const r = anchor.getBoundingClientRect();
     const left = Math.max(4, Math.min(r.left, window.innerWidth - 200));
     setTablePos({ top: r.bottom + 4, left });
     setTypeMenuPos(null); setEmojiPos(null); setLinkPos(null);
+  };
+  const openTable = (e) => {
+    e.preventDefault();
+    if (tablePos) { setTablePos(null); return; }
+    openTableAt(tableBtnRef.current);
+  };
+  const openMore = (e) => {
+    e.preventDefault();
+    if (morePos) { setMorePos(null); return; }
+    const r = moreBtnRef.current.getBoundingClientRect();
+    const left = Math.max(4, Math.min(r.left, window.innerWidth - 184));
+    setMorePos({ top: r.bottom + 4, left });
+    setTypeMenuPos(null); setEmojiPos(null); setLinkPos(null); setTablePos(null);
   };
 
   const applyFontFamily = (family) => {
@@ -2914,12 +2970,12 @@ function RichToolbar({ editor, onAttach, onInsertImage, htmlMode, onToggleHtml, 
     else chain.unsetBackgroundColor().run();
   };
 
-  const tb = (active, title, onMD, children) => (
-    <TBtn key={title} active={active} title={title} onMouseDown={onMD}>{children}</TBtn>
+  const tb = (active, title, onMD, children, toggle = false) => (
+    <TBtn key={title} active={active} pressed={toggle ? Boolean(active) : undefined} title={title} onMouseDown={onMD}>{children}</TBtn>
   );
 
   const mtb = (active, title, onMD, children) => (
-    <button key={title} title={title} onMouseDown={onMD} style={{ background: active ? 'var(--bg-hover)' : 'none', border: 'none', borderRadius: 4, padding: '6px 4px', color: active ? 'var(--accent)' : 'var(--text-secondary)', cursor: 'pointer', fontSize: 14, fontWeight: 600, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flex: 1, WebkitTapHighlightColor: 'transparent' }}>{children}</button>
+    <button key={title} type="button" title={title} aria-label={title} aria-pressed={Boolean(active)} onMouseDown={onMD} style={{ background: active ? 'var(--bg-hover)' : 'none', border: 'none', borderRadius: 4, padding: '6px 4px', color: active ? 'var(--accent)' : 'var(--text-secondary)', cursor: 'pointer', fontSize: 14, fontWeight: 600, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flex: 1, WebkitTapHighlightColor: 'transparent' }}>{children}</button>
   );
 
   return (
@@ -2927,24 +2983,24 @@ function RichToolbar({ editor, onAttach, onInsertImage, htmlMode, onToggleHtml, 
       {isMobile ? (
         <>
           <div ref={mobileBarRef} style={{ borderBottom: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', padding: '2px 0' }}>
-            {mtb(es.bold, 'Bold', e => { e.preventDefault(); editor.chain().focus().toggleBold().run(); }, <b>B</b>)}
-            {mtb(es.italic, 'Italic', e => { e.preventDefault(); editor.chain().focus().toggleItalic().run(); }, <i>I</i>)}
-            {mtb(es.underline, 'Underline', e => { e.preventDefault(); editor.chain().focus().toggleUnderline().run(); }, <u>U</u>)}
-            {mtb(es.strike, 'Strikethrough', e => { e.preventDefault(); editor.chain().focus().toggleStrike().run(); }, <s>S</s>)}
+            {mtb(es.bold, 'Bold', e => { e.preventDefault(); editor.chain().focus().toggleBold().run(); }, <Icon name="bold" size={16} strokeWidth={2} />)}
+            {mtb(es.italic, 'Italic', e => { e.preventDefault(); editor.chain().focus().toggleItalic().run(); }, <Icon name="italic" size={16} strokeWidth={2} />)}
+            {mtb(es.underline, 'Underline', e => { e.preventDefault(); editor.chain().focus().toggleUnderline().run(); }, <Icon name="underline" size={16} strokeWidth={2} />)}
+            {mtb(es.strike, 'Strikethrough', e => { e.preventDefault(); editor.chain().focus().toggleStrike().run(); }, <Icon name="strikethrough" size={16} strokeWidth={2} />)}
             {onAttach && (
-              <button title={t('compose.toolbar.attachFile')} onMouseDown={e => { e.preventDefault(); onAttach(); }}
+              <button type="button" title={t('compose.toolbar.attachFile')} aria-label={t('compose.toolbar.attachFile')} onMouseDown={e => { e.preventDefault(); onAttach(); }}
                 style={{ background: 'none', border: 'none', borderRadius: 4, padding: '6px 4px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flex: 1, color: 'var(--text-secondary)', WebkitTapHighlightColor: 'transparent' }}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/>
                 </svg>
               </button>
             )}
-            <button ref={linkBtnRef} title={t('compose.toolbar.insertLink')} onMouseDown={openLink}
+            <button ref={linkBtnRef} type="button" title={t('compose.toolbar.insertLink')} aria-label={t('compose.toolbar.insertLink')} aria-pressed={Boolean(es.link)} onMouseDown={openLink}
               style={{ background: es.link ? 'var(--bg-hover)' : 'none', border: 'none', borderRadius: 4, padding: '6px 4px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flex: 1, color: es.link ? 'var(--accent)' : 'var(--text-secondary)', WebkitTapHighlightColor: 'transparent' }}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>
             </button>
             {aiEnabled && (
-              <button ref={aiBtnRef} title={t('compose.toolbar.aiAssist')} onMouseDown={e => {
+              <button ref={aiBtnRef} type="button" title={t('compose.toolbar.aiAssist')} aria-label={t('compose.toolbar.aiAssist')} aria-haspopup="menu" aria-expanded={Boolean(aiMenuPos)} onMouseDown={e => {
                 e.preventDefault();
                 if (aiMenuPos) { setAiMenuPos(null); return; }
                 const r = aiBtnRef.current.getBoundingClientRect();
@@ -2961,12 +3017,12 @@ function RichToolbar({ editor, onAttach, onInsertImage, htmlMode, onToggleHtml, 
                 </svg>
               </button>
             )}
-            <button title={t('compose.toolbar.moreFormatting')} onMouseDown={e => { e.preventDefault(); setShowMobileMore(m => !m); }}
-              style={{ background: showMobileMore ? 'var(--bg-hover)' : 'none', border: 'none', borderRadius: 4, padding: '6px 4px', color: showMobileMore ? 'var(--accent)' : 'var(--text-secondary)', cursor: 'pointer', fontSize: 18, fontWeight: 300, lineHeight: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flex: 1, WebkitTapHighlightColor: 'transparent' }}>+</button>
+            <button type="button" title={t('compose.toolbar.moreFormatting')} aria-label={t('compose.toolbar.moreFormatting')} aria-expanded={showMobileMore} onMouseDown={e => { e.preventDefault(); setShowMobileMore(m => !m); }}
+              style={{ background: showMobileMore ? 'var(--bg-hover)' : 'none', border: 'none', borderRadius: 4, padding: '6px 4px', color: showMobileMore ? 'var(--accent)' : 'var(--text-secondary)', cursor: 'pointer', lineHeight: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flex: 1, WebkitTapHighlightColor: 'transparent' }}><Icon name="more-horizontal" size={16} strokeWidth={2} /></button>
           </div>
           {showMobileMore && (
             <div ref={mobileMoreRef} style={{ borderBottom: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', padding: '2px 0', flexWrap: 'wrap' }}>
-              <button ref={typeMenuBtnRef} title={t('compose.toolbar.typography')} onMouseDown={openTypeMenu}
+              <button ref={typeMenuBtnRef} type="button" title={t('compose.toolbar.typography')} aria-label={t('compose.toolbar.typography')} onMouseDown={openTypeMenu}
                 style={{ background: typeMenuPos ? 'var(--bg-hover)' : 'none', border: 'none', borderRadius: 4, padding: '6px 10px', cursor: 'pointer', display: 'inline-flex', flexDirection: 'row', alignItems: 'center', gap: 6, color: typeMenuPos ? 'var(--accent)' : 'var(--text-secondary)', WebkitTapHighlightColor: 'transparent' }}>
                 <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
                   <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-secondary)', lineHeight: 1 }}>A</span>
@@ -2986,36 +3042,37 @@ function RichToolbar({ editor, onAttach, onInsertImage, htmlMode, onToggleHtml, 
               {onToggleHtml && (
                 <>
                   <Sep />
-                  <button title={htmlMode ? 'Back to rich text' : 'Edit HTML source'} onMouseDown={e => { e.preventDefault(); onToggleHtml(); }}
-                    style={{ background: htmlMode ? 'var(--accent-dim)' : 'none', border: 'none', borderRadius: 4, padding: '6px 10px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', color: htmlMode ? 'var(--accent)' : 'var(--text-secondary)', fontFamily: 'monospace', fontSize: 11, fontWeight: 600, letterSpacing: '-0.5px', WebkitTapHighlightColor: 'transparent' }}>{'</>'}</button>
+                  <button type="button" title={htmlMode ? 'Back to rich text' : 'Edit HTML source'} aria-label={htmlMode ? 'Back to rich text' : 'Edit HTML source'} aria-pressed={Boolean(htmlMode)} onMouseDown={e => { e.preventDefault(); onToggleHtml(); }}
+                    style={{ background: htmlMode ? 'var(--accent-dim)' : 'none', border: 'none', borderRadius: 4, padding: '6px 10px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', color: htmlMode ? 'var(--accent)' : 'var(--text-secondary)', WebkitTapHighlightColor: 'transparent' }}><Icon name="code" size={16} strokeWidth={2} /></button>
                 </>
               )}
             </div>
           )}
         </>
       ) : (
-      <div ref={desktopBarRef} style={{ borderBottom: '1px solid var(--border-subtle)', display: 'flex', gap: 2, padding: '4px 10px', flexWrap: 'wrap', alignItems: 'center' }}>
-        {onAttach && (
-          <button title={t('compose.toolbar.attachFile')} onMouseDown={e => { e.preventDefault(); onAttach(); }}
-            style={{ background: 'none', border: 'none', borderRadius: 4, padding: '3px 6px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', color: 'var(--text-secondary)' }}>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/>
-            </svg>
-          </button>
-        )}
+      <div
+        ref={desktopBarRef}
+        role="toolbar"
+        aria-label="Formatting"
+        data-compose-toolbar=""
+        data-collapsed={collapsed ? '' : undefined}
+        style={{ borderBottom: '1px solid var(--border-subtle)', display: 'flex', gap: 2, padding: '4px 10px', flexWrap: 'nowrap', overflow: 'hidden', alignItems: 'center' }}
+      >
+        {onAttach && tb(false, t('compose.toolbar.attachFile'), e => { e.preventDefault(); onAttach(); }, <Icon name="paperclip" size={14} />)}
+
+        {onAttach && <Sep />}
+
+        {tb(es.bold, withKey('Bold', modKey('B')), e => { e.preventDefault(); editor.chain().focus().toggleBold().run(); }, <Icon name="bold" size={14} strokeWidth={2} />, true)}
+        {tb(es.italic, withKey('Italic', modKey('I')), e => { e.preventDefault(); editor.chain().focus().toggleItalic().run(); }, <Icon name="italic" size={14} strokeWidth={2} />, true)}
+        {tb(es.underline, withKey('Underline', modKey('U')), e => { e.preventDefault(); editor.chain().focus().toggleUnderline().run(); }, <Icon name="underline" size={14} strokeWidth={2} />, true)}
+        {tb(es.strike, withKey('Strikethrough', modKey('S', true)), e => { e.preventDefault(); editor.chain().focus().toggleStrike().run(); }, <Icon name="strikethrough" size={14} strokeWidth={2} />, true)}
 
         <Sep />
 
-        {tb(es.bold, 'Bold', e => { e.preventDefault(); editor.chain().focus().toggleBold().run(); }, <b>B</b>)}
-        {tb(es.italic, 'Italic', e => { e.preventDefault(); editor.chain().focus().toggleItalic().run(); }, <i>I</i>)}
-        {tb(es.underline, 'Underline', e => { e.preventDefault(); editor.chain().focus().toggleUnderline().run(); }, <u>U</u>)}
-        {tb(es.strike, 'Strikethrough', e => { e.preventDefault(); editor.chain().focus().toggleStrike().run(); }, <s>S</s>)}
-
-        <Sep />
-        
-        <button ref={typeMenuBtnRef} title={t('compose.toolbar.typography')} onMouseDown={openTypeMenu}
-          style={{ background: typeMenuPos ? 'var(--bg-hover)' : 'none', border: 'none', borderRadius: 4, padding: '3px 6px', cursor: 'pointer', display: 'inline-flex', flexDirection: 'row', alignItems: 'center', gap: 1, color: typeMenuPos ? 'var(--accent)' : 'var(--text-secondary)' }}>
-          <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
+        <button ref={typeMenuBtnRef} type="button" title={t('compose.toolbar.typography')} aria-label={t('compose.toolbar.typography')} aria-haspopup="dialog" aria-expanded={Boolean(typeMenuPos)} onMouseDown={openTypeMenu}
+          className="compose-icon-btn"
+          style={{ height: 24, flexShrink: 0, boxSizing: 'border-box', background: typeMenuPos ? 'var(--bg-hover)' : 'none', border: 'none', borderRadius: 4, padding: '0 4px', cursor: 'pointer', display: 'inline-flex', flexDirection: 'row', alignItems: 'center', gap: 1, color: typeMenuPos ? 'var(--accent)' : 'var(--text-secondary)' }}>
+          <span aria-hidden="true" style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
             <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', lineHeight: 1 }}>A</span>
             <span style={{ width: 12, height: 3, borderRadius: 1, background: es.color || 'var(--text-primary)' }} />
           </span>
@@ -3023,89 +3080,102 @@ function RichToolbar({ editor, onAttach, onInsertImage, htmlMode, onToggleHtml, 
             <path d="M5.2 7.4 10 12.2l4.8-4.8 1.1 1.2L10 14.5 4.1 8.6z"/>
           </svg>
         </button>
-        
-        <Sep />
-
-        {tb(es.alignLeft, 'Align left', e => { e.preventDefault(); editor.chain().focus().setTextAlign('left').run(); },
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="15" y2="12"/><line x1="3" y1="18" x2="18" y2="18"/></svg>)}
-        {tb(es.alignCenter, 'Align center', e => { e.preventDefault(); editor.chain().focus().setTextAlign('center').run(); },
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="6" y1="12" x2="18" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg>)}
-        {tb(es.alignRight, 'Align right', e => { e.preventDefault(); editor.chain().focus().setTextAlign('right').run(); },
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="9" y1="12" x2="21" y2="12"/><line x1="6" y1="18" x2="21" y2="18"/></svg>)}
 
         <Sep />
 
-        {tb(es.bulletList, 'Bullet list', e => { e.preventDefault(); editor.chain().focus().toggleBulletList().run(); },
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="9" y1="6" x2="20" y2="6"/><line x1="9" y1="12" x2="20" y2="12"/><line x1="9" y1="18" x2="20" y2="18"/><circle cx="4" cy="6" r="1.5" fill="currentColor" stroke="none"/><circle cx="4" cy="12" r="1.5" fill="currentColor" stroke="none"/><circle cx="4" cy="18" r="1.5" fill="currentColor" stroke="none"/></svg>)}
-        {tb(es.orderedList, 'Numbered list', e => { e.preventDefault(); editor.chain().focus().toggleOrderedList().run(); },
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="10" y1="6" x2="21" y2="6"/><line x1="10" y1="12" x2="21" y2="12"/><line x1="10" y1="18" x2="21" y2="18"/><text x="1" y="8" fontSize="7" fill="currentColor" stroke="none" fontFamily="sans-serif">1.</text><text x="1" y="14" fontSize="7" fill="currentColor" stroke="none" fontFamily="sans-serif">2.</text><text x="1" y="20" fontSize="7" fill="currentColor" stroke="none" fontFamily="sans-serif">3.</text></svg>)}
+        {tb(es.alignLeft, withKey('Align left', modKey('L', true)), e => { e.preventDefault(); editor.chain().focus().setTextAlign('left').run(); }, <Icon name="align-left" size={14} strokeWidth={2} />, true)}
+        {tb(es.alignCenter, withKey('Align center', modKey('E', true)), e => { e.preventDefault(); editor.chain().focus().setTextAlign('center').run(); }, <Icon name="align-center" size={14} strokeWidth={2} />, true)}
+        {tb(es.alignRight, withKey('Align right', modKey('R', true)), e => { e.preventDefault(); editor.chain().focus().setTextAlign('right').run(); }, <Icon name="align-right" size={14} strokeWidth={2} />, true)}
 
         <Sep />
 
-        <TBtn ref={linkBtnRef} active={es.link} title={t('compose.toolbar.insertLink')} onMouseDown={openLink}>
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>
+        {tb(es.bulletList, withKey('Bullet list', modKey('8', true)), e => { e.preventDefault(); editor.chain().focus().toggleBulletList().run(); }, <Icon name="list" size={14} strokeWidth={2} />, true)}
+        {tb(es.orderedList, withKey('Numbered list', modKey('7', true)), e => { e.preventDefault(); editor.chain().focus().toggleOrderedList().run(); }, <Icon name="list-ordered" size={14} strokeWidth={2} />, true)}
+
+        <Sep />
+
+        <TBtn ref={linkBtnRef} active={es.link} pressed={es.link} title={t('compose.toolbar.insertLink')} onMouseDown={openLink}>
+          <Icon name="link" size={14} strokeWidth={2} />
         </TBtn>
-        <button ref={emojiBtnRef} title="Emoji" onMouseDown={openEmoji}
-          style={{ background: 'none', border: 'none', borderRadius: 4, padding: '3px 6px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center' }}>
-          <span style={{ fontSize: 13, lineHeight: 1 }}>😀</span>
-        </button>
-
-        <Sep />
-
-        {onInsertImage && (
-          <button title={t('compose.toolbar.insertImage')} onMouseDown={e => { e.preventDefault(); onInsertImage(); }}
-            style={{ background: 'none', border: 'none', borderRadius: 4, padding: '3px 6px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', color: 'var(--text-secondary)' }}>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>
-            </svg>
-          </button>
-        )}
-
-        <button ref={tableBtnRef} title={t('compose.toolbar.insertTable')} onMouseDown={openTable}
-          style={{ background: tablePos ? 'var(--bg-hover)' : 'none', border: 'none', borderRadius: 4, padding: '3px 6px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', color: 'var(--text-secondary)' }}>
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <rect x="3" y="3" width="18" height="18" rx="1"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/>
-          </svg>
-        </button>
+        <TBtn ref={emojiBtnRef} active={Boolean(emojiPos)} title="Emoji" onMouseDown={openEmoji}>
+          <Icon name="smile" size={14} strokeWidth={2} />
+        </TBtn>
 
         {aiEnabled && (
           <>
             <Sep />
-            <button ref={aiBtnRef} title={t('compose.toolbar.aiAssist')} onMouseDown={e => {
+            <TBtn ref={aiBtnRef} title={t('compose.toolbar.aiAssist')} aria-haspopup="menu" aria-expanded={Boolean(aiMenuPos)} onMouseDown={e => {
               e.preventDefault();
               if (aiMenuPos) { setAiMenuPos(null); return; }
               const r = aiBtnRef.current.getBoundingClientRect();
               const left = Math.max(4, Math.min(r.left, window.innerWidth - 160));
               setAiMenuPos({ top: r.bottom + 4, left });
             }} style={{
-              background: (aiMenuPos || aiPanelOpen) ? 'var(--accent-dim)' : 'none', border: 'none', borderRadius: 4,
-              padding: '3px 6px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center',
+              background: (aiMenuPos || aiPanelOpen) ? 'var(--accent-dim)' : 'none',
               color: (aiMenuPos || aiPanelOpen) ? 'var(--accent)' : 'var(--text-secondary)',
             }}>
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-                <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/>
-                <path d="M5 3v4M19 17v4M3 5h4M17 19h4"/>
-              </svg>
-            </button>
+              <Icon name="sparkles" size={14} strokeWidth={1.75} />
+            </TBtn>
           </>
         )}
 
-        {onToggleHtml && (
+        {collapsed ? (
           <>
             <Sep />
-            <button title={htmlMode ? 'Back to rich text' : 'Edit HTML source'} onMouseDown={e => { e.preventDefault(); onToggleHtml(); }}
-              style={{
-                background: htmlMode ? 'var(--accent-dim)' : 'none', border: 'none', borderRadius: 4,
-                padding: '3px 6px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center',
-                color: htmlMode ? 'var(--accent)' : 'var(--text-secondary)',
-                fontFamily: 'monospace', fontSize: 11, fontWeight: 600, letterSpacing: '-0.5px',
-              }}>
-              {'</>'}
-            </button>
+            <TBtn ref={moreBtnRef} active={Boolean(morePos)} title={t('compose.toolbar.moreFormatting')} aria-haspopup="menu" aria-expanded={Boolean(morePos)} data-compose-toolbar-more="" onMouseDown={openMore}>
+              <Icon name="more-horizontal" size={14} strokeWidth={2} />
+            </TBtn>
+          </>
+        ) : (
+          <>
+            <Sep />
+            {onInsertImage && tb(false, t('compose.toolbar.insertImage'), e => { e.preventDefault(); onInsertImage(); }, <Icon name="image" size={14} strokeWidth={2} />)}
+            <TBtn ref={tableBtnRef} active={Boolean(tablePos)} title={t('compose.toolbar.insertTable')} onMouseDown={openTable}>
+              <Icon name="table" size={14} strokeWidth={2} />
+            </TBtn>
+            {onToggleHtml && (
+              <>
+                <Sep />
+                <TBtn active={htmlMode} pressed={htmlMode} title={htmlMode ? 'Back to rich text' : 'Edit HTML source'} onMouseDown={e => { e.preventDefault(); onToggleHtml(); }}
+                  style={{ background: htmlMode ? 'var(--accent-dim)' : 'none' }}>
+                  <Icon name="code" size={14} strokeWidth={2} />
+                </TBtn>
+              </>
+            )}
           </>
         )}
 
       </div>
+      )}
+
+      {morePos && (
+        <div ref={morePopRef} role="menu" aria-label={t('compose.toolbar.moreFormatting')} data-compose-toolbar-menu="" style={{
+          position: 'fixed', top: descale(morePos.top, uiScale), left: descale(morePos.left, uiScale), zIndex: 9900,
+          background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+          borderRadius: 8, boxShadow: 'var(--shadow-popover)', padding: '4px 0', minWidth: 180,
+        }}>
+          {[
+            onInsertImage && { key: 'image', icon: 'image', label: t('compose.toolbar.insertImage'), run: () => onInsertImage() },
+            { key: 'table', icon: 'table', label: t('compose.toolbar.insertTable'), run: () => openTableAt(moreBtnRef.current) },
+            onToggleHtml && { key: 'html', icon: 'code', label: htmlMode ? 'Back to rich text' : 'Edit HTML source', run: () => onToggleHtml() },
+          ].filter(Boolean).map(item => (
+            <button key={item.key} type="button" role="menuitem" onMouseDown={e => {
+              e.preventDefault();
+              setMorePos(null);
+              item.run();
+            }} style={{
+              display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left',
+              background: 'none', border: 'none', padding: '7px 12px',
+              fontSize: 13, color: 'var(--text-primary)', cursor: 'pointer',
+            }}
+              onMouseEnter={e => { e.currentTarget.style.background = 'var(--bg-hover)'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'none'; }}
+            >
+              <Icon name={item.icon} size={14} strokeWidth={2} />
+              {item.label}
+            </button>
+          ))}
+        </div>
       )}
 
       {/* Popups — position:fixed so they escape any overflow clipping */}
@@ -3274,10 +3344,32 @@ function RichToolbar({ editor, onAttach, onInsertImage, htmlMode, onToggleHtml, 
   );
 }
 
+// The composer footer's icon buttons: 28×28, radius 6, a 16px glyph; the label is the tooltip
+// and the accessible name.
+function FooterIconBtn({ icon, label, style, ...rest }) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      className="compose-icon-btn"
+      {...rest}
+      style={{
+        width: 28, height: 28, flexShrink: 0, boxSizing: 'border-box', padding: 0, border: 'none', borderRadius: 6,
+        background: 'none', color: 'var(--text-secondary)', cursor: rest.disabled ? 'default' : 'pointer',
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        ...style,
+      }}
+    >
+      <Icon name={icon} size={16} />
+    </button>
+  );
+}
+
 function TitleBtn({ children, onClick, danger, title }) {
   const [hov, setHov] = useState(false);
   return (
-    <button onClick={onClick} title={title}
+    <button type="button" onClick={onClick} title={title} aria-label={title}
       onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
       style={{
         background: hov ? (danger ? 'var(--red)' : 'var(--bg-hover)') : 'var(--bg-elevated)',
@@ -3323,6 +3415,7 @@ function formatBytes(bytes) {
 }
 
 function AttachmentChips({ attachments, onRemove, mobile }) {
+  const { t } = useTranslation();
   return (
     <div data-compose-attachments="" style={{
       display: 'flex', flexWrap: 'wrap', gap: 6,
@@ -3345,6 +3438,8 @@ function AttachmentChips({ attachments, onRemove, mobile }) {
           <button
             type="button"
             onClick={() => onRemove(i)}
+            title={`${t('common.remove')} ${a.name}`}
+            aria-label={`${t('common.remove')} ${a.name}`}
             style={{ background: 'none', border: 'none', padding: '0 0 0 2px', cursor: 'pointer', color: 'var(--text-tertiary)', display: 'flex', lineHeight: 1, flexShrink: 0 }}
           >
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">

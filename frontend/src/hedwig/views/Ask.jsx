@@ -10,7 +10,7 @@ import { v2Api, v2Stream, listOf } from '../v2/client.js';
 import { useV2Resource } from '../v2/hooks.js';
 import { openThread } from '../v2/nav.js';
 import { ASK2_INITIAL, askStarted, fromSaved, historyMark, reduceAsk2, coverageGap } from '../v2/ask.js';
-import { Btn, ErrorLine, Glyph, Hair, IconBtn, LinkBtn, Mono, Quiet, Reason, SectionLabel, V, ViewBody, ViewHead, usePhone } from '../v2/primitives.jsx';
+import { Btn, ErrorLine, Glyph, Hair, IconBtn, IconButton, LinkBtn, Mono, Quiet, Reason, SectionLabel, V, ViewBody, ViewHead, usePhone } from '../v2/primitives.jsx';
 import { Icon } from '../icons.jsx';
 import { ASK_FIELD_CSS, askFieldStyle, askInputStyle } from '../v2/Brief.jsx';
 import { fullTime, listTime } from '../v2/format.js';
@@ -331,15 +331,15 @@ function AnswerBlock({ state, phone, onFeedback, onAgain, onAgent }) {
       {state.status === 'error' && !state.answer && <ErrorLine error={new Error(state.error || tv('hedwig.v2.ask.failed', 'The answer failed.'))} onRetry={onAgain} retryLabel={tv('hedwig.v2.action.retry', 'Try again')} />}
 
       {done && !nothing && state.id && (
-        <div style={{ display: 'flex', gap: phone ? 8 : 18, alignItems: 'center', flexWrap: 'wrap', paddingTop: 4 }}>
+        <div style={{ display: 'flex', gap: phone ? 8 : 12, alignItems: 'center', flexWrap: 'wrap', paddingTop: 4 }}>
           {!wrong && !wrongOpen && <LinkBtn hit={phone} onClick={() => setWrongOpen(true)}>{tv('hedwig.v2.ask.wrong', 'Wrong answer')}</LinkBtn>}
           {wrong && (
             <>
               <Reason glyph="check" tone="accent">{tv('hedwig.v2.ask.markedWrong', 'Marked wrong. Hedwig learns from this.')}</Reason>
-              <LinkBtn muted hit={phone} disabled={sending} onClick={() => feedback(false)}>{tv('hedwig.v2.today.undo', 'Undo')}</LinkBtn>
+              <IconButton icon="undo" data-undo="" label={tv('hedwig.v2.today.undo', 'Undo')} size={phone ? 44 : 28} disabled={sending} onClick={() => feedback(false)} style={{ color: V.muted }} />
             </>
           )}
-          {state.answer && <LinkBtn muted hit={phone} onClick={() => navigator.clipboard?.writeText(state.answer)}>{tv('hedwig.v2.ask.copy', 'Copy')}</LinkBtn>}
+          {state.answer && <IconButton icon="copy" data-copy="" label={tv('hedwig.v2.ask.copy', 'Copy')} size={phone ? 44 : 28} onClick={() => navigator.clipboard?.writeText(state.answer)} style={{ color: V.muted }} />}
           {onAgent && <LinkBtn muted hit={phone} onClick={onAgent}>{tv('hedwig.v2.ask.agent', 'Ask the agent instead')}</LinkBtn>}
         </div>
       )}

@@ -7,7 +7,7 @@ import { createPortal } from 'react-dom';
 import { useStore } from '../../store/index.js';
 import { v2Api, announceSortChange } from './client.js';
 import { useV2 } from './state.js';
-import { Btn, Hair, LinkBtn, Mono, Pick, Reason, Sheet, V, usePhone } from './primitives.jsx';
+import { Btn, Hair, IconButton, LinkBtn, Mono, Pick, Reason, Sheet, V, usePhone } from './primitives.jsx';
 import { tv } from './i18n.js';
 
 // Read inside "Decided by {{layer}}", so they are lower case mid-sentence.
@@ -215,7 +215,7 @@ export function WhyDoor({ item, anchor, onClose }) {
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: phone ? 44 : 24 }}>
         <span style={{ fontSize: 13, fontWeight: 600, lineHeight: '18px', flexGrow: 1 }}>{title}</span>
-        <LinkBtn muted hit={phone} onClick={onClose} style={{ fontSize: 12 }}>{tv('hedwig.v2.action.close', 'Close')}</LinkBtn>
+        <IconButton icon="x" data-why-close="" label={tv('hedwig.v2.action.close', 'Close')} kbd="Esc" size={phone ? 44 : 24} onClick={onClose} style={{ color: V.muted, marginRight: phone ? -10 : -4 }} />
       </div>
       {why.loading && <span style={{ color: V.muted, fontSize: 12 }}>{tv('hedwig.v2.loading', 'Loading…')}</span>}
       {why.error && (

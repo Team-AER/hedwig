@@ -34,6 +34,7 @@ import { getEffectiveShortcuts, getGroupedActions, ACTION_DEFS, SPECIAL_KEY_LABE
 import { isValidForwardAddress } from '../utils/ruleActions.js';
 import { folderParentLabel } from '../utils/folderDisplay.js';
 import SpamSettings from './SpamSettings.jsx';
+import { Icon } from '../hedwig/icons.jsx';
 
 // ─── Shared field component ───────────────────────────────────────────────────
 function Field({ label, required, children }) {
@@ -1333,7 +1334,7 @@ function ThemesTab() {
 function IconBtn({ children, onClick, title, danger, disabled }) {
   const [hov, setHov] = useState(false);
   return (
-    <button onClick={disabled ? undefined : onClick} title={title} disabled={disabled}
+    <button type="button" onClick={disabled ? undefined : onClick} title={title} aria-label={title} disabled={disabled}
       onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
       style={{
         background: hov && !disabled ? (danger ? 'rgba(248,113,113,0.1)' : 'var(--bg-hover)') : 'transparent',
@@ -1344,6 +1345,34 @@ function IconBtn({ children, onClick, title, danger, disabled }) {
       }}
     >
       {children}
+    </button>
+  );
+}
+
+// A 28×28 icon button for a standard action (remove, refresh, copy, add): the label is the tooltip
+// and the accessible name. `danger` tints it red; `accent` is a filled primary.
+function ActionIcon({ icon, label, onClick, danger, accent, disabled, size = 28, style }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={label}
+      aria-label={label}
+      className="compose-icon-btn"
+      data-danger={danger ? '' : undefined}
+      data-accent={accent ? '' : undefined}
+      style={{
+        width: size, height: size, flexShrink: 0, boxSizing: 'border-box', padding: 0, borderRadius: 6,
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        border: accent ? 'none' : '1px solid transparent',
+        background: accent ? 'var(--accent)' : 'none',
+        color: accent ? 'var(--accent-text)' : danger ? 'var(--red)' : 'var(--text-tertiary)',
+        cursor: disabled ? 'default' : 'pointer',
+        ...style,
+      }}
+    >
+      <Icon name={icon} size={16} />
     </button>
   );
 }
@@ -2879,23 +2908,13 @@ function IntegrationsTab() {
                   </button>
 
                   {isAdmin && configs.google?.clientId && (
-                    <button onClick={async () => {
+                    <ActionIcon icon="trash" danger label={t('admin.integrations.google.remove')} style={{ marginLeft: 'auto', alignSelf: 'center' }} onClick={async () => {
                       await api.deleteIntegration('google');
                       setConfigs(c => { const n = {...c}; delete n.google; return n; });
                       setGoogleForm({ clientId: '', clientSecret: '', redirectUri: '' });
                       setGoogleStatus({ configured: false });
                       setSaveMsg('');
-                    }} style={{
-                      padding: '9px 12px', background: 'transparent',
-                      border: '1px solid transparent', borderRadius: 8,
-                      color: 'var(--text-tertiary)', cursor: 'pointer', fontSize: 13,
-                      marginLeft: 'auto',
-                    }}
-                    onMouseEnter={e => { e.currentTarget.style.color = 'var(--red)'; e.currentTarget.style.borderColor = 'rgba(248,113,113,0.3)'; }}
-                    onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-tertiary)'; e.currentTarget.style.borderColor = 'transparent'; }}
-                    >
-                      {t('admin.integrations.google.remove')}
-                    </button>
+                    }} />
                   )}
                 </div>
               </div>
@@ -3091,23 +3110,13 @@ function IntegrationsTab() {
                   </button>
 
                   {isAdmin && msConfigured && (
-                    <button onClick={async () => {
+                    <ActionIcon icon="trash" danger label={t('admin.integrations.microsoft.remove')} style={{ marginLeft: 'auto', alignSelf: 'center' }} onClick={async () => {
                       stopDeviceFlow();
                       await api.deleteIntegration('microsoft');
                       setConfigs(c => { const n = {...c}; delete n.microsoft; return n; });
                       setMsForm({ clientId: '', clientSecret: '', tenantId: '', redirectUri: '' });
                       setSaveMsg('');
-                    }} style={{
-                      padding: '9px 12px', background: 'transparent',
-                      border: '1px solid transparent', borderRadius: 8,
-                      color: 'var(--text-tertiary)', cursor: 'pointer', fontSize: 13,
-                      marginLeft: 'auto',
-                    }}
-                    onMouseEnter={e => { e.currentTarget.style.color = 'var(--red)'; e.currentTarget.style.borderColor = 'rgba(248,113,113,0.3)'; }}
-                    onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-tertiary)'; e.currentTarget.style.borderColor = 'transparent'; }}
-                    >
-                      {t('admin.integrations.microsoft.remove')}
-                    </button>
+                    }} />
                   )}
                 </div>
 
@@ -4467,13 +4476,7 @@ function AiActionsTab() {
                 onBlur={() => save(items)}
                 style={{ ...inputStyle, fontWeight: 500 }}
               />
-              <button
-                onClick={() => removeAction(a.id)}
-                title={t('admin.aiActions.remove')}
-                style={{ flexShrink: 0, padding: '7px 10px', background: 'none', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--red)', cursor: 'pointer', fontSize: 12 }}
-              >
-                {t('admin.aiActions.remove')}
-              </button>
+              <ActionIcon icon="trash" danger label={t('admin.aiActions.remove')} onClick={() => removeAction(a.id)} size={32} />
             </div>
             <textarea
               value={a.prompt}
@@ -4491,8 +4494,9 @@ function AiActionsTab() {
       <button
         onClick={addAction}
         disabled={items.length >= AI_ACTION_LIMITS.max}
-        style={{ marginTop: 14, padding: '8px 16px', background: 'var(--accent)', color: 'var(--accent-text)', border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 500, cursor: items.length >= AI_ACTION_LIMITS.max ? 'default' : 'pointer', opacity: items.length >= AI_ACTION_LIMITS.max ? 0.5 : 1 }}
+        style={{ marginTop: 14, padding: '8px 16px 8px 12px', background: 'var(--accent)', color: 'var(--accent-text)', border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 500, cursor: items.length >= AI_ACTION_LIMITS.max ? 'default' : 'pointer', opacity: items.length >= AI_ACTION_LIMITS.max ? 0.5 : 1, display: 'inline-flex', alignItems: 'center', gap: 6 }}
       >
+        <Icon name="plus" size={16} />
         {t('admin.aiActions.add')}
       </button>
       <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-tertiary)' }}>
@@ -4658,9 +4662,7 @@ function CategoriesSection({ initialSubTab }) {
                 </span>
               )}
               {s.source_type === 'url' && (
-                <button onClick={() => handleRefresh(s.id)} style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', fontSize: 11, padding: '2px 6px', flexShrink: 0 }}>
-                  {t('admin.categories.refresh')}
-                </button>
+                <ActionIcon icon="refresh" label={t('admin.categories.refresh')} onClick={() => handleRefresh(s.id)} />
               )}
               <button onClick={() => handleToggle(s.id, !s.enabled)} style={{
                 width: 32, height: 18, borderRadius: 9, border: 'none', cursor: 'pointer', padding: 0, flexShrink: 0,
@@ -4668,9 +4670,7 @@ function CategoriesSection({ initialSubTab }) {
               }}>
                 <span style={{ position: 'absolute', top: 1, left: s.enabled ? 15 : 1, width: 16, height: 16, borderRadius: '50%', background: 'white', transition: 'left 0.2s' }} />
               </button>
-              <button onClick={() => handleDelete(s.id)} style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', display: 'flex', padding: 2, flexShrink: 0 }}>
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>
-              </button>
+              <ActionIcon icon="trash" danger label={t('common.delete')} onClick={() => handleDelete(s.id)} style={{ marginLeft: 4 }} />
             </div>
           ))}
         </div>
@@ -4940,9 +4940,7 @@ function SystemEmailSection() {
             <button onClick={handleTest} disabled={testing} style={{ fontSize: 12, padding: '5px 12px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text-secondary)', cursor: 'pointer' }}>
               {testing ? t('admin.systemEmail.testing') : t('admin.systemEmail.test')}
             </button>
-            <button onClick={handleRemove} style={{ fontSize: 12, padding: '5px 12px', background: 'none', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--red)', cursor: 'pointer' }}>
-              {t('common.remove')}
-            </button>
+            <ActionIcon icon="trash" danger label={t('common.remove')} onClick={handleRemove} style={{ marginLeft: 4 }} />
           </div>
         </div>
       )}
@@ -5340,18 +5338,14 @@ function UsersAndInvitesPanel() {
               }}>
                 {inviteMsg.url}
               </code>
-              <button
-                onClick={() => copyInviteUrl(inviteMsg.url, 'new')}
-                style={{
-                  padding: '4px 10px', borderRadius: 6, fontSize: 11,
-                  background: 'var(--bg-tertiary)', border: '1px solid var(--border)',
-                  color: 'var(--text-secondary)', cursor: 'pointer', flexShrink: 0,
-                }}
-              >
-                {copiedId === 'new' ? t('admin.users.inviteCopied')
+              <ActionIcon
+                icon={copiedId === 'new' ? 'check' : 'copy'}
+                label={copiedId === 'new' ? t('admin.users.inviteCopied')
                   : copyFailedId === 'new' ? t('common.copyFailed')
                     : t('common.copy')}
-              </button>
+                onClick={() => copyInviteUrl(inviteMsg.url, 'new')}
+                danger={copyFailedId === 'new'}
+              />
             </div>
           )}
         </div>
@@ -7546,11 +7540,7 @@ function PrivacyTab() {
                 placeholder={t('admin.privacy.addSenderPh')}
                 style={{ ...inputStyle, flex: 1, maxWidth: 280 }}
               />
-              <button onClick={addAddress} disabled={saving} style={{
-                padding: '8px 14px', background: 'var(--accent)', border: 'none',
-                borderRadius: 7, color: 'var(--accent-text)', fontSize: 13, fontWeight: 500,
-                cursor: saving ? 'default' : 'pointer', opacity: saving ? 0.6 : 1,
-              }}>{t('common.add')}</button>
+              <ActionIcon icon="plus" accent label={t('common.add')} onClick={addAddress} disabled={saving} size={34} style={{ borderRadius: 7, opacity: saving ? 0.6 : 1 }} />
             </div>
           </div>
 
@@ -7587,11 +7577,7 @@ function PrivacyTab() {
                 placeholder={t('admin.privacy.addDomainPh')}
                 style={{ ...inputStyle, flex: 1, maxWidth: 280 }}
               />
-              <button onClick={addDomain} disabled={saving} style={{
-                padding: '8px 14px', background: 'var(--accent)', border: 'none',
-                borderRadius: 7, color: 'var(--accent-text)', fontSize: 13, fontWeight: 500,
-                cursor: saving ? 'default' : 'pointer', opacity: saving ? 0.6 : 1,
-              }}>{t('common.add')}</button>
+              <ActionIcon icon="plus" accent label={t('common.add')} onClick={addDomain} disabled={saving} size={34} style={{ borderRadius: 7, opacity: saving ? 0.6 : 1 }} />
             </div>
           </div>
         </>

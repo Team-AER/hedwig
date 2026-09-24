@@ -8,7 +8,7 @@ import { useStore } from '../../store/index.js';
 import { useV2Resource, useWork } from './hooks.js';
 import { useTldrs, withTldrs } from './tldrs.js';
 import { v2Api, listOf, announceSortChange } from './client.js';
-import { Avatar, Btn, ErrorLine, Hair, IconButton, Quiet, Reason, V, ViewBody, ViewHead, Why, usePhone } from './primitives.jsx';
+import { Avatar, ErrorLine, Hair, IconButton, Quiet, Reason, V, ViewBody, ViewHead, Why, usePhone } from './primitives.jsx';
 import { Icon } from '../icons.jsx';
 import { tv, tvn } from './i18n.js';
 import { tldrOf } from './format.js';
@@ -154,13 +154,12 @@ function SenderRow({ sender, choice, onChoose, onAccept, onOpen, busy, phone }) 
         <IconButton
           icon="check"
           label={acceptLabel}
+          data-accept=""
           disabled={busy}
           onClick={onAccept}
-          size={28}
-          style={{ width: 'auto', height: phone ? 44 : 28, padding: '0 10px 0 8px', marginTop: phone ? -12 : -6, color: V.accentInk, boxShadow: `inset 0 0 0 1px ${V.line2}` }}
-        >
-          <span>{tv('hedwig.v2.screener.acceptShort', 'Accept')}</span>
-        </IconButton>
+          size={phone ? 44 : 28}
+          style={{ marginTop: phone ? -12 : -6, color: V.accentInk, boxShadow: `inset 0 0 0 1px ${V.line2}` }}
+        />
       </div>
       <div style={{ paddingLeft: 18 }}>
         <DecisionPicker label={tv('hedwig.v2.screener.streamFor', 'Stream for {{name}}', { name })} value={choice} onChange={onChoose} phone={phone} />
@@ -244,10 +243,15 @@ export default function Screener() {
   const sub = senders.length ? tv('hedwig.v2.screener.waiting', '{{n}} waiting', { n: senders.length }) : null;
   const acceptAllBtn = senders.length > 1
     ? (
-      <Btn size={phone ? 'phone' : 'md'} disabled={Boolean(busy)} onClick={acceptAll} style={{ alignSelf: 'center' }}>
-        <Icon name="check" size={phone ? 16 : 14} />
-        {tv('hedwig.v2.screener.acceptAll', 'Accept all')}
-      </Btn>
+      <IconButton
+        icon="check-check"
+        label={tv('hedwig.v2.screener.acceptAll', 'Accept all')}
+        data-accept-all=""
+        size={phone ? 44 : 28}
+        disabled={Boolean(busy)}
+        onClick={acceptAll}
+        style={{ alignSelf: 'center', color: V.accentInk }}
+      />
     )
     : null;
   const intro = <Why>{tv('hedwig.v2.screener.intro', 'Each new sender comes with a proposed stream and the reason. Accept it or pick another; Hedwig remembers.')}</Why>;

@@ -956,6 +956,9 @@ describe('why door: Waiting for Reflex and the Power signals', () => {
     await render(h(WhyDoor, { item, anchor: null, onClose: () => {} }));
     await settle(40);
     assert.match(document.querySelector('[data-pending="reflex"]').textContent, /Waiting for Reflex/);
+    const close = byLabel('Close (Esc)');
+    assert.equal(close.getAttribute('title'), 'Close (Esc)', 'Close is an x icon whose tooltip names its key');
+    assert.equal(close.textContent, '');
     assert.equal(document.querySelector('[data-power-signals]'), null, 'Simple: plain signals');
     assert.match(text(), /You have written to them/);
     await cleanup();
@@ -987,7 +990,10 @@ describe('Brief: where the prose came from, undo any of it, coverage', () => {
     assert.equal(entries.length, 3);
     const first = entries.find((e) => e.textContent.includes('Screened Nordlys Travel into Records'));
     mock.mockRequests({ clear: true });
-    await click(byText('button', 'Undo', first));
+    const undoBtn = byLabel('Undo', first);
+    assert.equal(undoBtn.getAttribute('title'), 'Undo', 'an undo icon named by its tooltip');
+    assert.equal(undoBtn.textContent, '');
+    await click(undoBtn);
     await settle(400);
     assert.ok(requests().includes('POST /sort/undo'));
     assert.ok(!all('[data-undo-entry]').some((e) => e.textContent.includes('Screened Nordlys Travel')));

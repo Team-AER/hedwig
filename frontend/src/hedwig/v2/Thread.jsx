@@ -665,7 +665,7 @@ function DraftItem({ m, n, phone, busy, onEdit }) {
       {snippet && <p data-draft-snippet="" style={{ margin: 0, fontSize: 13, lineHeight: '19px', color: V.muted, maxWidth: '68ch', overflowWrap: 'anywhere', display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 3, overflow: 'hidden' }}>{snippet}</p>}
       <div>
         <Btn accent size={phone ? 'phone' : 'md'} disabled={busy} onClick={onEdit}>
-          <Icon name="file" size={14} />
+          <Icon name="pencil" size={14} />
           {busy ? tv('hedwig.v2.drafts.opening', 'Opening…') : tv('hedwig.v2.drafts.edit', 'Edit draft')}
         </Btn>
       </div>
@@ -716,27 +716,33 @@ function defaultWaitDays() {
   return Number.isFinite(n) && n >= 1 ? Math.min(60, n) : 3;
 }
 
-/** "Remind me if no reply" (a bell toggle) with its number of days. */
+/**
+ * "Remind me if no reply": a bell toggle (aria-pressed) whose tooltip explains it; the number of
+ * days shows only while it is on.
+ */
 function RemindIfNoReply({ on, days, onToggle, onDays, phone }) {
   const options = WAIT_DAYS.includes(days) ? WAIT_DAYS : [...WAIT_DAYS, days].sort((a, b) => a - b);
+  const label = tv('hedwig.v2.waiting.remindIfNoReply', 'Remind me if no reply');
   return (
-    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', fontSize: 12, color: on ? V.accentInk : V.muted }}>
-      <label
-        title={tv('hedwig.v2.waiting.remindTip', 'If nobody answers in time, Hedwig puts this thread back in front of you.')}
-        style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minHeight: phone ? 44 : 28, cursor: 'pointer' }}
-      >
-        <input type="checkbox" checked={on} onChange={(e) => onToggle(e.target.checked)} style={{ accentColor: 'var(--hw-accent)', width: 14, height: 14, margin: 0 }} />
-        <Icon name="bell" size={14} />
-        {tv('hedwig.v2.waiting.remindIfNoReply', 'Remind me if no reply')}
-      </label>
-      <select
+    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, color: on ? V.accentInk : V.muted }}>
+      <IconButton
+        icon={on ? 'bell' : 'bell-off'}
+        label={label}
+        active={on}
+        data-remind-toggle=""
+        className={`hw-icon-btn${phone ? ' hw-hit' : ''}`}
+        title={`${label}. ${tv('hedwig.v2.waiting.remindTip', 'If nobody answers in time, Hedwig puts this thread back in front of you.')}`}
+        onClick={() => onToggle(!on)}
+        style={{ color: on ? V.accent : V.muted }}
+      />
+      {on && <select
         value={days}
         onChange={(e) => { onDays(Number(e.target.value)); onToggle(true); }}
         aria-label={tv('hedwig.v2.waiting.remindAfter', 'Remind me after')}
         style={{ height: phone ? 44 : 24, border: 0, borderRadius: 6, padding: '0 4px', background: 'transparent', color: on ? V.ink : V.muted, font: 'inherit', fontSize: 12, cursor: 'pointer' }}
       >
         {options.map((n) => <option key={n} value={n}>{tvn(n, ['hedwig.v2.waiting.inOneDay', 'in 1 day'], ['hedwig.v2.waiting.inDays', 'in {{n}} days'])}</option>)}
-      </select>
+      </select>}
     </div>
   );
 }
@@ -1241,7 +1247,7 @@ export default function Thread({ props }) {
     ? (
       <div data-reply-bar="" style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '12px 16px 16px', flexShrink: 0 }}>
         <Btn accent size="phone" disabled={busy === 'editDraft'} onClick={() => editDraft(trailingDraft)}>
-          <Icon name="file" size={16} />
+          <Icon name="pencil" size={16} />
           {continueLabel}
         </Btn>
       </div>
@@ -1251,7 +1257,7 @@ export default function Thread({ props }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 40, boxSizing: 'border-box', padding: '0 6px 0 12px', borderRadius: 10, background: V.field }}>
           <span aria-hidden="true" style={{ display: 'inline-flex', color: V.attentionInk }}><Icon name="file" size={14} /></span>
           <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: V.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{tv('hedwig.v2.drafts.waiting', 'Your reply is saved as a draft.')}</span>
-          <Btn accent disabled={busy === 'editDraft'} onClick={() => editDraft(trailingDraft)}>{continueLabel}</Btn>
+          <Btn accent disabled={busy === 'editDraft'} onClick={() => editDraft(trailingDraft)}><Icon name="pencil" size={14} />{continueLabel}</Btn>
         </div>
       </div>
     ));
@@ -1301,27 +1307,31 @@ export default function Thread({ props }) {
             {!expanded && <IconButton icon="popout" label={tv('hedwig.v2.thread.popOut', 'Open in the composer')} onClick={popOut} />}
           </div>
           {expanded && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
               {helpMeWrite && work && (
-                <button
-                  type="button"
-                  className="hw-btn"
+                <IconButton
+                  icon="sparkles"
+                  label={busy === 'draft' ? tv('hedwig.v2.thread.drafting', 'Drafting…') : tv('hedwig.v2.thread.draftVoice', 'Draft in my voice')}
+                  data-draft-voice=""
+                  aria-busy={busy === 'draft' || undefined}
                   disabled={Boolean(busy)}
                   onClick={draftInVoice}
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: 5, height: 28, padding: '0 8px 0 6px', borderRadius: 6, border: 0, background: 'transparent', color: V.accentInk, font: 'inherit', fontSize: 12, fontWeight: 500, cursor: 'pointer' }}
-                >
-                  <Icon name="sparkles" size={14} />
-                  <span>{busy === 'draft' ? tv('hedwig.v2.thread.drafting', 'Drafting…') : tv('hedwig.v2.thread.draftVoice', 'Draft in my voice')}</span>
-                </button>
+                  style={{ color: V.accentInk }}
+                />
               )}
               {work && <RemindIfNoReply on={watchOn} days={remindDays} onToggle={setWatchOn} onDays={setRemindDays} />}
               <span style={{ flexGrow: 1 }} />
               {savedNote}
               <IconButton icon="popout" label={tv('hedwig.v2.thread.popOut', 'Open in the composer')} onClick={popOut} />
-              <span aria-hidden="true" style={{ fontSize: 11, color: V.muted, fontVariantNumeric: 'tabular-nums' }}>{SEND_KEYS}</span>
-              <Btn accent type="submit" title={`${tv('hedwig.v2.thread.send', 'Send')} (${SEND_KEYS})`} disabled={Boolean(busy) || !draft.trim()}>
-                {busy === 'send' ? tv('hedwig.v2.thread.sending', 'Sending…') : warned ? tv('hedwig.v2.thread.sendAnyway', 'Send anyway') : tv('hedwig.v2.thread.send', 'Send')}
-              </Btn>
+              <IconButton
+                icon="send"
+                type="submit"
+                primary
+                showLabel
+                label={busy === 'send' ? tv('hedwig.v2.thread.sending', 'Sending…') : warned ? tv('hedwig.v2.thread.sendAnyway', 'Send anyway') : tv('hedwig.v2.thread.send', 'Send')}
+                kbd={SEND_KEYS}
+                disabled={Boolean(busy) || !draft.trim()}
+              />
             </div>
           )}
         </form>

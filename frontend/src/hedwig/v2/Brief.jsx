@@ -13,7 +13,7 @@ import { listOf, v2Api, announceSortChange } from './client.js';
 import { openThread, showView, VIEW } from './nav.js';
 import { nudgeThread } from './mail.js';
 import { Question } from './Question.jsx';
-import { ErrorLine, Figure, LinkBtn, Mono, Quiet, Reason, SectionLabel, Slip, V, ViewBody, usePhone, ViewHead } from './primitives.jsx';
+import { ErrorLine, Figure, IconButton, LinkBtn, Mono, Quiet, Reason, SectionLabel, Slip, V, ViewBody, usePhone, ViewHead } from './primitives.jsx';
 import { Icon } from '../icons.jsx';
 import { ageLabel, briefDateLine, listTime, senderName } from './format.js';
 import { tv } from './i18n.js';
@@ -203,7 +203,18 @@ export default function Brief() {
               key={w.messageId || w.what || w.subject}
               time={ageLabel(w.since || w.askedAt || w.at || w.date)}
               action={w.messageId || w.threadId
-                ? <LinkBtn hit={phone} disabled={nudging === (w.threadId || w.messageId)} onClick={() => nudgeFrom(w)}>{nudging === (w.threadId || w.messageId) ? tv('hedwig.v2.thread.drafting', 'Drafting…') : tv('hedwig.v2.brief.nudge', 'Nudge')}</LinkBtn>
+                ? (
+                  <IconButton
+                    icon="bell"
+                    data-nudge=""
+                    label={nudging === (w.threadId || w.messageId) ? tv('hedwig.v2.thread.drafting', 'Drafting…') : tv('hedwig.v2.brief.nudge', 'Nudge')}
+                    aria-busy={nudging === (w.threadId || w.messageId) || undefined}
+                    size={phone ? 44 : 28}
+                    disabled={nudging === (w.threadId || w.messageId)}
+                    onClick={() => nudgeFrom(w)}
+                    style={{ alignSelf: 'center', color: V.accentInk }}
+                  />
+                )
                 : null}
             >
               <span style={{ fontSize: 13 }}>{[who(w), w.what || w.subject].filter(Boolean).join(' · ')}</span>
@@ -284,7 +295,7 @@ export default function Brief() {
             <div key={e.id} data-undo-entry="" style={{ display: 'flex', alignItems: 'baseline', gap: 12, padding: '6px 0', borderBottom: `1px solid ${V.line}`, fontSize: 13 }}>
               <Mono size={11}>{listTime(e.createdAt)}</Mono>
               <span style={{ flexGrow: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.text || e.subject || ''}</span>
-              <LinkBtn hit={phone} disabled={undoing === e.id} onClick={() => undo(e)}>{tv('hedwig.v2.today.undo', 'Undo')}</LinkBtn>
+              <IconButton icon="undo" data-undo="" label={tv('hedwig.v2.today.undo', 'Undo')} size={phone ? 44 : 28} disabled={undoing === e.id} onClick={() => undo(e)} style={{ alignSelf: 'center' }} />
             </div>
           ))}
         </section>
