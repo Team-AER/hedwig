@@ -35,7 +35,7 @@ const folderListOf = (d) => (Array.isArray(d) ? d : Array.isArray(d?.folders) ? 
 const timeOf = (m) => { const t = Date.parse(m?.date || ''); return Number.isFinite(t) ? t : 0; };
 
 /**
- * Every enabled account's drafts, merged newest first. `folders` is upstream's folders map
+ * Every account's drafts (a paused account keeps its cached drafts), merged newest first. `folders` is upstream's folders map
  * ({ [accountId]: [...] }); an account without a list there has its folders fetched. Returns
  * { items, folders: { [accountId]: draftsPath }, errors }: one failing account never hides
  * the others' drafts.
@@ -43,7 +43,7 @@ const timeOf = (m) => { const t = Date.parse(m?.date || ''); return Number.isFin
 export async function loadDrafts({ accounts = [], folders = {}, source = draftSource(), limit = DRAFTS_PER_ACCOUNT } = {}) {
   const map = {};
   const errors = [];
-  const lists = await Promise.all((accounts || []).filter((a) => a?.id && a.enabled !== false).map(async (account) => {
+  const lists = await Promise.all((accounts || []).filter((a) => a?.id).map(async (account) => {
     try {
       let path = draftsFolderFor(account, folders?.[account.id]) || resolvedPaths.get(account.id) || null;
       if (!path) path = draftsFolderFor(account, folderListOf(await source.getFolders(account.id)));
