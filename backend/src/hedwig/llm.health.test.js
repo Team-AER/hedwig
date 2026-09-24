@@ -123,7 +123,9 @@ describe('model probe', () => {
     expect(console.warn).toHaveBeenCalledWith(expect.stringMatching(/answers again/));
   });
 
-  it('treats a catalog entry that is offline as degraded without sending it a request', async () => {
+  it('still probes a model the catalog calls offline, and an answer wins over the catalog', async () => {
+    // 2026-09-24: the catalog listed Gemma offline during a reload while it answered in 200 ms,
+    // and Tier 1 fell back to rules. The catalog is a hint; the probe is the verdict.
     const offline = mockGateway({ catalog: [
       { id: GEMMA, capabilities: ['chat', 'streaming'], max_output_tokens: 4096, reasoning_efforts: ['none', 'high'], status: 'ready' },
       { id: QWEN, capabilities: ['chat', 'tools', 'streaming'], max_output_tokens: 32768, reasoning_efforts: ['off', 'low'], status: 'offline' },
@@ -131,8 +133,13 @@ describe('model probe', () => {
     gw.restore(); offline.install();
     try {
       const out = await probeModels();
-      expect(out.models.find((m) => m.model === QWEN)).toMatchObject({ ok: false, degraded: true, error: expect.stringMatching(/offline/) });
-      expect(offline.callsFor('runtime.probe').map((c) => c.model)).toEqual([GEMMA]);
+      expect(out.models.find((m) => m.model === QWEN)).toMatchObject({ ok: true, degraded: false });
+      expect(offline.callsFor('runtime.probe').map((c) => c.model).sort()).toEqual([GEMMA, QWEN].sort());
+      // When it does not answer, the catalog's word labels the failure.
+      offline.on('runtime.probe', (req) => (req.model === QWEN ? offline.hang() : 'ok'));
+      later(301);
+      const again = await probeModels();
+      expect(again.models.find((m) => m.model === QWEN)).toMatchObject({ ok: false, error: expect.stringMatching(/catalog lists it as offline/) });
     } finally { offline.restore(); gw.install(); }
   });
 

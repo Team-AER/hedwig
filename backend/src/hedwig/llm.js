@@ -371,10 +371,11 @@ async function probeOne(model, cfg, catalog, fetchFn) {
   const started = Date.now();
   healthOf(model).probedAt = started;
   let ok = false; let error = null; let source = 'probe';
-  if (info && ((info.status && OFFLINE.test(String(info.status))) || info.disabled_at)) {
-    error = `the gateway catalog lists it as ${info.status || 'disabled'}`;
-    source = 'catalog';
-  } else {
+  // The catalog is a hint, never a verdict: on 2026-09-24 it listed Gemma as offline while the model
+  // answered in 200 ms, and Tier 1 fell back to rules for hours. So a model the catalog calls
+  // offline is still probed, and an answer wins; the catalog's word only labels a failed probe.
+  const catalogSaysOffline = Boolean(info && ((info.status && OFFLINE.test(String(info.status))) || info.disabled_at));
+  {
     // The smallest request that proves the model answers: one output token, no reasoning, streamed,
     // and the connection dropped after the first chunk. It measures time to the first token (the
     // PRD's Tier 2 target), and a probe that gives up closes its request. A gateway may still leave
@@ -408,6 +409,10 @@ async function probeOne(model, cfg, catalog, fetchFn) {
     } finally {
       clearTimeout(timer);
       controller.abort();
+    }
+    if (!ok && catalogSaysOffline) {
+      error = `the gateway catalog lists it as ${info.status || 'disabled'} and it did not answer (${error})`;
+      source = 'catalog';
     }
   }
   const now = Date.now();
