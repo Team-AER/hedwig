@@ -1,5 +1,6 @@
-// The Hedwig desktop and tablet shell: the paper ground with its two light fields, the pane tree
-// drawn as glass sheets, the overlay sheet for views opened on request, and pop-out windows. The
+// The Hedwig desktop and tablet shell: the paper ground with its one cool light field, the pane
+// tree drawn as sheets (the rail glass, every other pane opaque content, 8px gutter and gaps,
+// radius 14), the overlay sheet for views opened on request, and pop-out windows. The
 // top bar only appears for layouts without the rail (which carries the wordmark, search and
 // settings itself). MailApp renders it in place of its classic desktop layout when
 // useHedwig.shellMode is 'hedwig'; everything else MailApp mounts (compose, admin, palette,
@@ -126,17 +127,17 @@ function OverlayDrawer() {
       tabIndex={-1}
       aria-label={title}
       className="hw-sheet"
+      data-material="content"
+      data-popover=""
       style={{
-        position: 'absolute', top: 'var(--hw-shell-pad, 24px)', right: 'var(--hw-shell-pad, 24px)', bottom: 'var(--hw-shell-pad, 24px)', zIndex: 40,
-        width: 'clamp(360px, 42%, 680px)', maxWidth: 'calc(100% - 2 * var(--hw-shell-pad, 24px))', borderRadius: 26, overflow: 'hidden',
-        display: 'flex', flexDirection: 'column', outline: 'none', boxShadow: '0 40px 90px -30px var(--hw-shadow-color)',
-        // Floats over other sheets, so its glass is nearly opaque.
-        '--hw-glass': 'color-mix(in srgb, var(--hw-paper) 95%, transparent)',
+        position: 'absolute', top: 'var(--hw-shell-pad, 8px)', right: 'var(--hw-shell-pad, 8px)', bottom: 'var(--hw-shell-pad, 8px)', zIndex: 40,
+        width: 'clamp(360px, 42%, 680px)', maxWidth: 'calc(100% - 2 * var(--hw-shell-pad, 8px))', borderRadius: 14, overflow: 'hidden',
+        display: 'flex', flexDirection: 'column', outline: 'none',
         animation: 'hw-drawer-in var(--motion-normal, 180ms) var(--ease-emphasized, ease) both',
       }}
     >
-      <div style={{ height: 48, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8, padding: '0 12px 0 22px', borderBottom: '1px solid var(--hw-line)' }}>
-        <span style={{ fontFamily: 'var(--hw-font-display)', fontSize: 20, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>
+      <div style={{ height: 44, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4, padding: '0 8px 0 16px', borderBottom: '1px solid var(--hw-line)' }}>
+        <span style={{ ...ui.display, fontSize: 15, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>
         <button type="button" className="hw-btn-quiet" aria-label={tr('overlay.dockNamed', 'Add {{title}} to the layout', { title })} title={tr('overlay.dock', 'Add to the layout')} onClick={() => useShell.getState().dockOverlay()} style={{ ...ui.quietIconButton, width: 28, height: 28 }}>
           <Icon name="dock" size={15} />
         </button>
@@ -216,19 +217,20 @@ export default function HedwigShell({ onOpenPalette }) {
   useKeymap(true);
 
   const hasRail = Boolean(tree && M.panesHosting(tree, 'hedwig.rail').length);
-  const pad = device === 'desktop' ? 24 : 16;
-  const gap = device === 'desktop' ? 20 : 14;
+  // Window gutter 8px, panes 8px apart (spec §f), on desktop and tablet alike.
+  const pad = 8;
+  const gap = 8;
 
   return (
     <div style={{
       flex: 1, minWidth: 0, height: '100%', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden',
       background: 'var(--hw-paper)', color: 'var(--hw-ink)', fontFamily: 'var(--hw-font-body)',
-      fontSize: 14, lineHeight: 1.45, fontVariantNumeric: 'tabular-nums', WebkitFontSmoothing: 'antialiased',
+      fontSize: 13, lineHeight: 1.45, fontVariantNumeric: 'tabular-nums', WebkitFontSmoothing: 'antialiased',
       '--hw-shell-pad': `${pad}px`, '--hw-gap': `${gap}px`,
     }}>
       <LightFields />
       {!hasRail && <TopBar onOpenPalette={onOpenPalette} />}
-      <main aria-label={tr('panes', 'Panes')} style={{ flex: 1, minHeight: 0, display: 'flex', position: 'relative', overflow: 'hidden', padding: hasRail ? pad : `${Math.round(pad / 2)}px ${pad}px ${pad}px`, zIndex: 1 }}>
+      <main aria-label={tr('panes', 'Panes')} style={{ flex: 1, minHeight: 0, display: 'flex', position: 'relative', overflow: 'hidden', padding: hasRail ? pad : `0 ${pad}px ${pad}px`, zIndex: 1 }}>
         {ready && tree ? <PaneNode node={tree} /> : <div aria-busy="true" style={{ flex: 1 }} />}
         <OverlayDrawer />
       </main>

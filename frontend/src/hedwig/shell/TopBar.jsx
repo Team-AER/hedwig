@@ -4,7 +4,7 @@
 import { useEffect, useState } from 'react';
 import { useStore } from '../../store/index.js';
 import { useHedwig } from '../store.js';
-import { Icon } from '../icons.jsx';
+import { Icon, OwlMark } from '../icons.jsx';
 import { ui } from '../theme/styles.js';
 import { useShell } from './state.js';
 import { listPanes } from './model.js';
@@ -63,9 +63,9 @@ export function SyncStatus({ compact = false }) {
       onClick={() => { setAdminTab('accounts'); setShowAdmin(true); }}
       aria-label={`${text}. Open account settings`}
       title={text}
-      style={{ display: 'flex', alignItems: 'center', gap: 6, height: 28, padding: '0 8px', border: 0, borderRadius: 8, background: 'transparent', color: 'var(--hw-muted)', fontFamily: 'inherit', fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}
+      style={{ display: 'flex', alignItems: 'center', gap: 6, height: 28, padding: '0 8px', border: 0, borderRadius: 6, background: 'transparent', color: 'var(--hw-muted)', fontFamily: 'inherit', fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}
     >
-      <span aria-hidden style={{ width: 8, height: 8, borderRadius: '50%', background: failing ? 'var(--hw-red)' : 'var(--hw-ink)', flexShrink: 0 }} />
+      <span aria-hidden style={{ width: 8, height: 8, borderRadius: '50%', background: failing ? 'var(--hw-red)' : 'var(--hw-muted)', flexShrink: 0 }} />
       {!compact && <span>{text}</span>}
     </button>
   );
@@ -106,12 +106,13 @@ export default function TopBar({ onOpenPalette }) {
 
   return (
     <header style={{
-      height: 56, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 16, padding: '0 24px',
+      height: 48, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 12, padding: '0 12px',
       background: 'transparent', color: 'var(--hw-ink)', position: 'relative', zIndex: 2,
       fontFamily: 'var(--hw-font-body)',
     }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, width: narrow ? 'auto' : 204, flexShrink: 0 }}>
-        <span style={{ ...ui.display, fontSize: 28, lineHeight: 1 }}>{tr('brand', 'Hedwig')}</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: narrow ? 'auto' : 216, flexShrink: 0 }}>
+        <OwlMark size={18} />
+        <span style={{ ...ui.display, fontSize: 13, lineHeight: 1 }}>{tr('brand', 'Hedwig')}</span>
       </div>
       <button
         type="button"
@@ -120,23 +121,23 @@ export default function TopBar({ onOpenPalette }) {
         onClick={onOpenPalette}
         className="hw-btn"
         style={{
-          flex: '1 1 auto', maxWidth: 560, minWidth: 0, height: 38, display: 'flex', alignItems: 'center', gap: 10,
-          padding: '0 12px', border: 0, borderBottom: '1px solid var(--hw-line2)', borderRadius: 0, background: 'transparent',
-          color: 'var(--hw-muted)', fontFamily: 'inherit', fontSize: 14, textAlign: 'left', cursor: 'pointer',
+          flex: '1 1 auto', maxWidth: 520, minWidth: 0, height: 30, display: 'flex', alignItems: 'center', gap: 8,
+          padding: '0 10px', border: 0, borderRadius: 8, background: 'var(--hw-field)',
+          color: 'var(--hw-muted)', fontFamily: 'inherit', fontSize: 13, textAlign: 'left', cursor: 'pointer',
         }}
       >
-        <Icon name="search" size={15} strokeWidth={2} />
+        <Icon name="search" size={14} />
         <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {tr('palette.placeholder', 'Search mail, people, topics, or run a command')}
         </span>
-        <kbd style={{ fontFamily: 'var(--hw-font-mono)', fontSize: 11, padding: 0, border: 0, color: 'var(--hw-muted)', background: 'transparent' }}>
+        <kbd style={{ fontFamily: 'inherit', fontSize: 11, padding: 0, border: 0, color: 'var(--hw-muted)', background: 'transparent' }}>
           {isMac ? '⌘K' : 'Ctrl K'}
         </kbd>
       </button>
       <div style={{ flex: 1 }} />
-      {!narrow && !hasRail && <TierNote size={13} style={{ whiteSpace: 'nowrap' }} />}
+      {!narrow && !hasRail && <TierNote style={{ maxWidth: 280 }} />}
       <SyncStatus compact={narrow} />
-      <MenuButton label={tr('layout.menu', 'Layout: {{name}}', { name: layoutName })} items={layoutMenuItems} align="right" buttonStyle={ui.iconButton}>
+      <MenuButton label={tr('layout.menu', 'Layout: {{name}}', { name: layoutName })} items={layoutMenuItems} align="right" buttonClassName="hw-btn" buttonStyle={ui.iconButton}>
         <Icon name="layout" size={16} />
       </MenuButton>
       <button type="button" className="hw-btn" aria-label={tr('settings', 'Settings')} title={tr('settings', 'Settings')} onClick={() => setShowAdmin(true)} style={ui.iconButton}>

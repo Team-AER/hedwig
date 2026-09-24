@@ -1,6 +1,8 @@
-// Phone chrome for the Hedwig shell (docs/hedwig/design Phone*.dc.html): the paper ground with
-// its light fields, a view stack per tab where each v2 view draws its own header sheet, and the
-// floating glass tab bar in text with counts: Screener · People · Reading · Records · Brief.
+// Phone chrome for the Hedwig shell (DESIGN-AUDIT-2026-09-24 §g): one column of full-bleed opaque
+// content, a view stack per tab where each v2 view draws its own top bar, and the bottom tab bar.
+// Glass only on the two bars (the `bar` material); no floating sheets and no big radii. Tabs are an
+// icon plus a 10px label with counts as badges (orange for Needs you): Screener · People · Reading
+// · Records · Brief.
 // Upstream's mobile list → message → back flow stays as it is underneath: opening a message in
 // upstream's reader (or the classic list, from the palette) shows it, and backing out returns to
 // the stack.
@@ -16,7 +18,7 @@ import { useViewRequests } from './useViewRequests.js';
 import { TAB_BAR_HEIGHT, useHedwigTabBar } from './tabBar.js';
 import { tr } from './tr.js';
 import { useV2, countText } from '../v2/state.js';
-import { LightFields, PhoneContext, Sheet, TextTabs } from '../v2/primitives.jsx';
+import { PhoneContext, Sheet } from '../v2/primitives.jsx';
 import { tv } from '../v2/i18n.js';
 
 export const PHONE_TABS = ['screener', 'people', 'reading', 'records', 'brief'];
@@ -39,27 +41,62 @@ function briefTime(fields) {
   return (f && typeof f.value === 'string' && f.value) || '07:00';
 }
 
+const TAB_ICONS = { screener: 'door-open', people: 'users', reading: 'book-open', records: 'receipt', brief: 'newspaper' };
+
 function TabBar({ current, onSelect }) {
   const counts = useV2((s) => s.counts);
   const more = useV2((s) => s.countsMore);
   const fields = useV2((s) => s.settingsFields);
   const items = useMemo(() => [
-    { id: 'screener', label: tv('hedwig.v2.rail.screener', 'Screener'), count: countText(counts, more, 'screener'), countAccent: true },
-    { id: 'people', label: tv('hedwig.v2.stream.people', 'People'), count: countText(counts, more, 'people'), dotWhenActive: true },
+    { id: 'screener', label: tv('hedwig.v2.rail.screener', 'Screener'), count: countText(counts, more, 'screener') },
+    { id: 'people', label: tv('hedwig.v2.stream.people', 'People'), count: countText(counts, more, 'people'), attention: true },
     { id: 'reading', label: tv('hedwig.v2.stream.reading', 'Reading'), count: countText(counts, more, 'reading') },
     { id: 'records', label: tv('hedwig.v2.stream.records', 'Records'), count: countText(counts, more, 'records') },
-    { id: 'brief', label: tv('hedwig.v2.tab.brief', 'Brief'), count: briefTime(fields) },
+    // The Brief's "count" is its time of day: said in the label, not drawn as a badge.
+    { id: 'brief', label: tv('hedwig.v2.tab.brief', 'Brief'), count: briefTime(fields), noBadge: true },
   ], [counts, more, fields]);
   return (
     <Sheet
       phone
-      radius={22}
+      material="bar"
+      radius={0}
       style={{
-        position: 'fixed', left: 14, right: 14, zIndex: 850, padding: '6px 8px',
-        bottom: 'calc(18px + env(safe-area-inset-bottom, 0px))', fontFamily: 'var(--hw-font-body)',
+        position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 850, borderTop: '0.5px solid var(--hw-line2)',
+        paddingBottom: 'env(safe-area-inset-bottom, 0px)', fontFamily: 'var(--hw-font-body)',
       }}
     >
-      <TextTabs variant="stacked" label={tv('hedwig.v2.tab.label', 'Streams')} items={items} value={current} onChange={onSelect} />
+      <nav aria-label={tv('hedwig.v2.tab.label', 'Streams')} style={{ display: 'flex', height: TAB_BAR_HEIGHT }}>
+        {items.map((t) => {
+          const on = t.id === current;
+          const has = t.count != null && t.count !== '';
+          return (
+            <button
+              key={t.id}
+              type="button"
+              aria-current={on ? 'page' : undefined}
+              aria-label={has ? `${t.label}, ${t.count}` : t.label}
+              onClick={() => onSelect(t.id)}
+              style={{
+                flex: '1 1 0', minWidth: 44, minHeight: 44, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2,
+                border: 0, background: 'none', padding: 0, cursor: 'pointer', fontFamily: 'inherit', position: 'relative',
+                color: on ? 'var(--hw-accent)' : 'var(--hw-muted)',
+              }}
+            >
+              <span style={{ position: 'relative', display: 'inline-flex' }}>
+                <Icon name={TAB_ICONS[t.id]} size={24} strokeWidth={on ? 1.75 : 1.5} />
+                {has && !t.noBadge && (
+                  <span aria-hidden="true" style={{
+                    position: 'absolute', top: -4, left: 16, minWidth: 16, height: 16, padding: '0 4px', boxSizing: 'border-box', borderRadius: 8,
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 600, lineHeight: 1,
+                    fontVariantNumeric: 'tabular-nums', color: 'var(--hw-content)', background: t.attention ? 'var(--hw-attention-ink)' : 'var(--hw-muted)',
+                  }}>{t.count}</span>
+                )}
+              </span>
+              <span style={{ fontSize: 10, lineHeight: '12px', fontWeight: on ? 600 : 500, whiteSpace: 'nowrap' }}>{t.label}</span>
+            </button>
+          );
+        })}
+      </nav>
     </Sheet>
   );
 }
@@ -70,15 +107,15 @@ function PlainHeader({ title, depth, onBack, onOpenPalette }) {
   const headRef = useRef(null);
   useEffect(() => { headRef.current?.focus({ preventScroll: true }); }, [title]);
   return (
-    <Sheet as="header" phone radius={0} style={{ borderTop: 0, borderRadius: '0 0 28px 28px', padding: 'calc(var(--sat, env(safe-area-inset-top, 0px)) + 10px) 12px 10px', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, zIndex: 3 }}>
+    <Sheet as="header" phone material="bar" radius={0} style={{ borderBottom: '0.5px solid var(--hw-line2)', padding: 'calc(var(--sat, env(safe-area-inset-top, 0px)) + 4px) 4px 4px', display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, zIndex: 3 }}>
       {depth > 0 && (
-        <button type="button" className="hw-btn-quiet" aria-label={tr('mobile.back', 'Back')} onClick={onBack} style={{ ...ui.iconButton, width: 44, height: 44, borderRadius: 12, border: 0 }}>
-          <Icon name="chevron-left" size={22} strokeWidth={1.6} />
+        <button type="button" className="hw-btn-quiet" aria-label={tr('mobile.back', 'Back')} onClick={onBack} style={{ ...ui.iconButton, width: 44, height: 44, borderRadius: 8, color: 'var(--hw-accent)' }}>
+          <Icon name="chevron-left" size={24} />
         </button>
       )}
-      <span ref={headRef} tabIndex={-1} style={{ ...ui.display, fontSize: 20, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', outline: 'none', paddingLeft: depth > 0 ? 0 : 8 }}>{title}</span>
-      <button type="button" className="hw-btn-quiet" aria-label={tr('mobile.search', 'Search and commands')} onClick={onOpenPalette} style={{ ...ui.iconButton, width: 44, height: 44, borderRadius: 12, border: 0 }}>
-        <Icon name="search" size={20} strokeWidth={1.6} />
+      <span ref={headRef} tabIndex={-1} style={{ ...ui.display, fontSize: 17, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', outline: 'none', paddingLeft: depth > 0 ? 0 : 12 }}>{title}</span>
+      <button type="button" className="hw-btn-quiet" aria-label={tr('mobile.search', 'Search and commands')} onClick={onOpenPalette} style={{ ...ui.iconButton, width: 44, height: 44, borderRadius: 8 }}>
+        <Icon name="search" size={20} />
       </button>
     </Sheet>
   );
@@ -161,18 +198,17 @@ export default function HedwigMobile({ onOpenPalette }) {
   // Upstream owns the screen while a message is open in its reading pane.
   const showStack = Boolean(top) && !selectedMessageId;
   const showBar = visible && !(showStack && topView?.hideTabBar);
-  const barSpace = `calc(${TAB_BAR_HEIGHT}px + 18px + env(safe-area-inset-bottom, 0px))`;
+  const barSpace = `calc(${TAB_BAR_HEIGHT}px + 12px + env(safe-area-inset-bottom, 0px))`;
 
   return (
     <>
       {showStack && (
         <div style={{
           position: 'fixed', inset: 0, zIndex: 800, display: 'flex', flexDirection: 'column', overflow: 'hidden',
-          background: 'var(--hw-paper)', color: 'var(--hw-ink)', fontFamily: 'var(--hw-font-body)', fontSize: 15, lineHeight: 1.4,
+          background: 'var(--hw-content)', color: 'var(--hw-ink)', fontFamily: 'var(--hw-font-body)', fontSize: 15, lineHeight: 1.4,
           WebkitFontSmoothing: 'antialiased', fontVariantNumeric: 'tabular-nums',
           '--hw-tabbar-space': showBar ? barSpace : 'env(safe-area-inset-bottom, 16px)',
         }}>
-          <LightFields phone />
           <StackScreen key={top.key} entry={top} depth={stack.length - 1} onBack={onBack} onOpenPalette={openPalette} />
         </div>
       )}

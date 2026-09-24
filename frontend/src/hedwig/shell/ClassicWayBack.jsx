@@ -43,7 +43,7 @@ export default function ClassicWayBack({ collapsed = false }) {
         color: 'var(--text-secondary, var(--hw-muted))', font: 'inherit', fontSize: 13, textAlign: 'left', cursor: 'pointer', flexShrink: 0,
       }}
     >
-      <span style={{ fontFamily: 'var(--hw-font-why, var(--hw-font-display, Georgia, serif))', fontStyle: 'italic', fontSize: 15, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
+      <span style={{ fontFamily: 'var(--hw-font-body, inherit)', fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
         {tr('classic.here', 'Classic layout')}
       </span>
       <span style={{ flexGrow: 1 }} />

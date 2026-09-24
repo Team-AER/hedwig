@@ -176,20 +176,20 @@ describe('format helpers', () => {
 });
 
 describe('theme tokens', () => {
-  test('the Hedwig themes carry the v2 palette from the contract, light and dark', () => {
+  test('the Hedwig themes carry the redesign palette (DESIGN-AUDIT-2026-09-24 §e), light and dark', () => {
     const light = tokens.hwVarsFor('hedwig');
-    assert.equal(light['--hw-paper'], '#F4F2EC');
-    assert.equal(light['--hw-ink'], '#17181A');
-    assert.equal(light['--hw-accent'], '#E0561A');
-    assert.equal(light['--hw-accent-ink'], '#9E3B0E');
+    assert.equal(light['--hw-paper'], '#EEF0F3');
+    assert.equal(light['--hw-ink'], '#1D1D1F');
+    assert.equal(light['--hw-accent'], '#007AFF');
+    assert.equal(light['--hw-accent-ink'], '#0062CC');
     assert.equal(light['--hw-on-accent'], '#FFFFFF');
-    assert.equal(light['--hw-glass'], 'rgba(255,255,255,0.52)');
+    assert.equal(light['--hw-glass'], 'rgba(248,248,250,0.72)');
     const dark = tokens.hwVarsFor('hedwig-night');
-    assert.equal(dark['--hw-paper'], '#111214');
-    assert.equal(dark['--hw-accent'], '#FF7A40');
-    assert.equal(dark['--hw-edge'], 'rgba(255,255,255,0.10)');
-    assert.equal(dark['--hw-on-accent'], '#111214', 'dark icons on the bright dark-theme accent');
-    assert.match(light['--hw-font-why'], /Instrument Serif/);
+    assert.equal(dark['--hw-paper'], '#161618');
+    assert.equal(dark['--hw-accent'], '#0A84FF');
+    assert.equal(dark['--hw-edge'], 'rgba(255,255,255,0.08)');
+    assert.equal(dark['--hw-on-accent'], '#FFFFFF', 'white glyphs on the blue in both themes');
+    assert.equal(light['--hw-font-why'], light['--hw-font-body'], 'reasons are the body face, no serif');
   });
 
   test('ui.accent and ui.blur become CSS that wins over the theme block', () => {
@@ -220,7 +220,7 @@ describe('theme tokens', () => {
   test('ui.* values are read from GET /settings field descriptions', () => {
     assert.deepEqual(prefsFromFields([
       { key: 'ui.powerMode', value: true }, { key: 'ui.blur', value: 100 }, { key: 'ui.accent', value: 'nope' }, { key: 'sort.autoScreen', value: true },
-    ]), { powerMode: true, blur: 48, accent: '#E0561A' });
+    ]), { powerMode: true, blur: 48, accent: tokens.DEFAULT_ACCENT });
   });
 });
 
@@ -248,7 +248,7 @@ describe('primitives', () => {
     const door = byLabel('Why: busy');
     assert.equal(door.tagName, 'BUTTON');
     assert.equal(door.getAttribute('aria-haspopup'), 'dialog');
-    assert.equal(door.style.fontStyle, 'italic');
+    assert.equal(door.style.fontStyle, 'normal', 'reasons are no longer italic');
     await click(door);
     assert.equal(opened, true);
     assert.equal(byText('span', 'plain reason').tagName, 'SPAN', 'a reason without a door is not a button');

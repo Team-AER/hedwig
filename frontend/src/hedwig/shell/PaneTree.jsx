@@ -1,5 +1,6 @@
 // Renders a pane tree: splits with resizable splitters, tab groups, and a PaneFrame per view.
-// Each pane is a glass sheet (v2 design) and the splitters are the gaps between sheets. Splitter
+// Each pane is a sheet (radius 14): the rail (hedwig.rail) is glass, every other pane opaque
+// content (DESIGN-AUDIT-2026-09-24 §e), and the splitters are the 8px gaps between sheets. Splitter
 // drags move the DOM directly and commit the size once on release, so a drag never re-renders
 // the mail list sixty times a second. A view registered with `wide: true` (the Daily Brief)
 // takes the room of any sibling registered with `hideBesideWide: true` (the thread) while it is
@@ -18,6 +19,12 @@ import { MenuButton } from './Menu.jsx';
 import { tr } from './tr.js';
 
 const KEY_STEP = 16;
+const SHEET_RADIUS = 14;
+
+// Navigation is glass; everything that holds mail or a page is opaque content.
+export function materialFor(viewId) {
+  return viewId === 'hedwig.rail' ? 'glass' : 'content';
+}
 
 export function PaneNode({ node }) {
   if (!node) return null;
@@ -153,9 +160,9 @@ function Splitter({ node, index, refs, row }) {
       onDoubleClick={resetBoth}
       onKeyDown={onKeyDown}
       style={{
-        position: 'relative', flex: '0 0 var(--hw-gap, 20px)', zIndex: 5, touchAction: 'none',
+        position: 'relative', flex: '0 0 var(--hw-gap, 8px)', zIndex: 5, touchAction: 'none',
         cursor: row ? 'col-resize' : 'row-resize',
-        [row ? 'width' : 'height']: 'var(--hw-gap, 20px)',
+        [row ? 'width' : 'height']: 'var(--hw-gap, 8px)',
       }}
     >
       <span style={{
@@ -180,13 +187,13 @@ function TabsNode({ node }) {
     requestAnimationFrame(() => document.getElementById(`hw-tab-${node.children[j].key}`)?.focus());
   };
   return (
-    <div className="hw-sheet" style={{ position: 'relative', flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', borderRadius: 26, overflow: 'hidden' }}>
-      <div role="tablist" aria-label={tr('tabs.label', 'Pane tabs')} style={{ display: 'flex', alignItems: 'stretch', gap: 2, padding: '0 14px', height: 44, flexShrink: 0, borderBottom: '1px solid var(--hw-line)', overflowX: 'auto' }}>
+    <div className="hw-sheet" data-material="content" style={{ position: 'relative', flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', borderRadius: SHEET_RADIUS, overflow: 'hidden' }}>
+      <div role="tablist" aria-label={tr('tabs.label', 'Pane tabs')} style={{ display: 'flex', alignItems: 'stretch', gap: 2, padding: '0 10px', height: 36, flexShrink: 0, borderBottom: '1px solid var(--hw-line)', overflowX: 'auto' }}>
         {node.children.map((c, i) => {
           const active = i === node.active;
           const title = getView(c.id)?.title || c.id;
           return (
-            <div key={c.key} style={{ display: 'flex', alignItems: 'center', borderBottom: active ? '2px solid var(--hw-ink)' : '2px solid transparent' }}>
+            <div key={c.key} style={{ display: 'flex', alignItems: 'center', borderBottom: active ? '2px solid var(--hw-accent)' : '2px solid transparent' }}>
               <button
                 id={`hw-tab-${c.key}`}
                 type="button"
@@ -196,7 +203,7 @@ function TabsNode({ node }) {
                 tabIndex={active ? 0 : -1}
                 onClick={() => edit((t) => M.setActiveTab(t, node.key, i))}
                 onKeyDown={(e) => onKey(e, i)}
-                style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 6px 0 8px', height: '100%', border: 0, background: 'transparent', color: active ? 'var(--hw-ink)' : 'var(--hw-muted)', fontFamily: 'inherit', fontSize: 14, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 6px 0 8px', height: '100%', border: 0, background: 'transparent', color: active ? 'var(--hw-ink)' : 'var(--hw-muted)', fontFamily: 'inherit', fontSize: 13, fontWeight: active ? 600 : 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
               >
                 {title}
               </button>
@@ -249,7 +256,8 @@ export function PaneFrame({ node, inTabs = false }) {
       onFocusCapture={onFocusCapture}
       onPointerDownCapture={onFocusCapture}
       className={inTabs ? 'hw-pane' : 'hw-pane hw-sheet'}
-      style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative', borderRadius: inTabs ? 0 : 26, overflow: 'hidden', background: inTabs ? 'transparent' : undefined }}
+      data-material={inTabs ? undefined : materialFor(node.id)}
+      style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative', borderRadius: inTabs ? 0 : SHEET_RADIUS, overflow: 'hidden', background: inTabs ? 'transparent' : undefined }}
     >
       {showHeader && <PaneHeader node={node} view={view} title={title} focused={isFocused} />}
       <ViewHost
@@ -275,7 +283,7 @@ function PaneHeader({ node, view, title, focused }) {
     <div style={{
       height: 36, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4, padding: '0 10px 0 10px',
       borderBottom: '1px solid var(--hw-line)',
-      background: focused ? 'var(--hw-accent-tint)' : 'transparent', fontSize: 12, color: 'var(--hw-ink)',
+      background: focused ? 'var(--hw-select)' : 'transparent', fontSize: 12, color: 'var(--hw-ink)',
     }}>
       <MenuButton
         label={tr('pane.changeView', '{{title}} — change view', { title })}

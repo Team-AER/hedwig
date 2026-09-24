@@ -63,8 +63,8 @@ function PickerView({ paneId }) {
   useRegistryVersion();
   const replace = (id) => useShell.getState().replaceView(paneId, id);
   return (
-    <div style={{ flex: 1, overflowY: 'auto', padding: '26px 26px 32px', background: 'transparent', color: 'var(--hw-ink)' }}>
-      <h2 style={{ ...ui.display, margin: '0 0 4px', fontSize: 30 }}>{tr('picker.title', 'Choose a view')}</h2>
+    <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px 32px', background: 'transparent', color: 'var(--hw-ink)' }}>
+      <h2 style={{ ...ui.display, margin: '0 0 4px', fontSize: 17 }}>{tr('picker.title', 'Choose a view')}</h2>
       <p style={{ margin: '0 0 18px', fontSize: 13, color: 'var(--hw-muted)' }}>{tr('picker.body', 'Any view can live in any pane. Plugin views appear here once their plugin is on.')}</p>
       {groupedViews().map((g) => (
         <section key={g.group} aria-label={g.label} style={{ marginBottom: 18 }}>
@@ -76,9 +76,9 @@ function PickerView({ paneId }) {
                 type="button"
                 className="hw-btn"
                 onClick={() => replace(v.id)}
-                style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', textAlign: 'left', border: `1px solid ${v.pluginId ? 'var(--hw-teal)' : 'var(--hw-border)'}`, borderRadius: 10, background: 'var(--hw-surface)', color: 'var(--hw-ink)', fontFamily: 'inherit', cursor: 'pointer' }}
+                style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', textAlign: 'left', border: `1px solid ${v.pluginId ? 'var(--hw-accent)' : 'var(--hw-line2)'}`, borderRadius: 8, background: 'var(--hw-content)', color: 'var(--hw-ink)', fontFamily: 'inherit', cursor: 'pointer' }}
               >
-                <span style={{ color: v.pluginId ? 'var(--hw-teal)' : 'var(--hw-muted)', marginTop: 2 }}><Icon name={v.icon || 'grid'} size={16} /></span>
+                <span style={{ color: 'var(--hw-accent)', marginTop: 2 }}><Icon name={v.icon || 'grid'} size={16} /></span>
                 <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
                   <span style={{ fontSize: 13, fontWeight: 600 }}>{v.title || v.id}</span>
                   <span style={{ fontSize: 11, color: 'var(--hw-muted)', fontFamily: 'var(--hw-font-mono)', overflow: 'hidden', textOverflow: 'ellipsis' }}>{v.id}</span>

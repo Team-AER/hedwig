@@ -1,8 +1,8 @@
 import { useStore } from '../../store/index.js';
 
-// The floating tab bar: 52px tabs in a sheet with 6px padding, 18px above the bottom edge.
-export const TAB_BAR_HEIGHT = 64;
-const TAB_BAR_OFFSET = 18;
+// The bottom tab bar (spec §g): 49px of frosted bar flush with the bottom edge, plus the safe area.
+export const TAB_BAR_HEIGHT = 49;
+const TAB_BAR_OFFSET = 0;
 
 // Whether the tab bar is on screen, and the style MailApp applies to its content so nothing
 // sits under the bar: bottom padding, and a larger --sab so upstream's floating buttons and

@@ -3,13 +3,30 @@
 //   mono  — code, headers display, email metadata
 //   display — headings, subject lines (can be serif/expressive)
 
+// The system UI stack (DESIGN-AUDIT-2026-09-24, Direction). Kept in step with
+// hedwig/theme/tokens.js FONT_STACKS; duplicated here so this module stays import-free.
+const SYSTEM_SANS = '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", InterVariable, Inter, Roboto, "Helvetica Neue", Arial, sans-serif';
+const SYSTEM_MONO = 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace';
+
 export const FONT_SETS = {
+  system: {
+    label: 'System',
+    description: 'The platform face (SF Pro, Segoe UI, Roboto) — familiar, quick, nothing to download',
+    preview: { heading: 'System UI', body: 'System UI', mono: 'System mono' },
+    vars: {
+      '--font-sans': SYSTEM_SANS,
+      '--font-mono': SYSTEM_MONO,
+      '--font-display': SYSTEM_SANS,
+    },
+  },
+
   hedwig: {
     label: 'Hedwig',
     description: 'Instrument Serif × Instrument Sans × DM Mono — quiet, editorial, exact',
     preview: { heading: 'Instrument Serif', body: 'Instrument Sans', mono: 'DM Mono' },
     vars: {
-      // Loaded by hedwig/theme/fontFaces.js (one Google Fonts css2 link); system fallbacks.
+      // Loaded by hedwig/theme/fontFaces.js (one Google Fonts css2 link, only while this set is
+      // the effective one); system fallbacks.
       '--font-sans': "'Instrument Sans', system-ui, -apple-system, 'Segoe UI', sans-serif",
       '--font-mono': "'DM Mono', ui-monospace, SFMono-Regular, Menlo, monospace",
       '--font-display': "'Instrument Serif', Georgia, 'Times New Roman', serif",
@@ -466,8 +483,9 @@ export function isRetroFont(key) { return RETRO_FONTS.has(key); }
 const HEDWIG_THEMES = new Set(['hedwig', 'hedwig-night']);
 export function effectiveFontSet(theme, savedFont) {
   if (THEME_FONT[theme]) return THEME_FONT[theme];
-  // Hedwig themes pair with the Hedwig type unless the user picked another set: 'default' is
-  // what the store holds for "no choice made", so it resolves to the Hedwig set here.
-  if (HEDWIG_THEMES.has(theme) && (!savedFont || savedFont === 'default' || isRetroFont(savedFont))) return 'hedwig';
+  // Hedwig themes pair with the system type unless the user picked another set: 'default' is
+  // what the store holds for "no choice made", so it resolves to the system set here. The
+  // Instrument 'hedwig' set stays pickable.
+  if (HEDWIG_THEMES.has(theme) && (!savedFont || savedFont === 'default' || isRetroFont(savedFont))) return 'system';
   return isRetroFont(savedFont) ? 'default' : (savedFont || 'default');
 }

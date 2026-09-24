@@ -320,10 +320,10 @@ export default function LayoutEditor() {
   const chips = listViews().filter((v) => !v.hidden).sort((a, b) => a.id.localeCompare(b.id));
 
   return (
-    <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', background: 'var(--hw-ground)', color: 'var(--hw-ink)', fontFamily: 'var(--hw-font-body)', fontSize: 14 }}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: '24px 32px 32px', minWidth: 0 }}>
+    <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', background: 'transparent', color: 'var(--hw-ink)', fontFamily: 'var(--hw-font-body)', fontSize: 13 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: '20px 24px 32px', minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
-          <h1 style={{ ...ui.display, margin: 0, fontSize: 24 }}>{tr('editor.title', 'Layouts')}</h1>
+          <h1 style={{ ...ui.display, margin: 0, fontSize: 20 }}>{tr('editor.title', 'Layouts')}</h1>
           <span style={{ fontSize: 12, color: 'var(--hw-muted)' }}>{tr('editor.caption', 'A layout is a tree of panes; each pane hosts a view. Saved per device.')}</span>
           <span style={{ flex: 1 }} />
           <input ref={fileRef} type="file" accept="application/json,.json" onChange={onImport} style={{ display: 'none' }} />
@@ -344,8 +344,8 @@ export default function LayoutEditor() {
                   aria-pressed={active}
                   onClick={() => { useShell.getState().applyTemplate(t.id); setSelectedKey(null); }}
                   style={{
-                    display: 'flex', flexDirection: 'column', gap: 8, padding: 10, borderRadius: 10, textAlign: 'left', cursor: 'pointer',
-                    border: `1px solid ${active ? 'var(--hw-ink)' : 'var(--hw-border)'}`, boxShadow: active ? 'inset 0 0 0 1px var(--hw-ink)' : 'none',
+                    display: 'flex', flexDirection: 'column', gap: 8, padding: 10, borderRadius: 8, textAlign: 'left', cursor: 'pointer',
+                    border: `1px solid ${active ? 'var(--hw-accent)' : 'var(--hw-border)'}`, boxShadow: active ? 'inset 0 0 0 1px var(--hw-accent)' : 'none',
                     background: 'var(--hw-surface)', color: 'var(--hw-ink)', fontFamily: 'inherit',
                   }}
                 >

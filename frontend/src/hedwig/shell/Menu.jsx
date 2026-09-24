@@ -80,12 +80,12 @@ export function MenuButton({
           aria-label={label}
           onKeyDown={onMenuKey}
           className="hw-sheet"
+          data-material="content"
+          data-popover=""
           style={{
             position: 'fixed', top: pos.top, left: pos.left, width, maxHeight: pos.maxHeight,
-            overflowY: 'auto', zIndex: 9000, padding: 6,
-            '--hw-glass': 'color-mix(in srgb, var(--hw-paper) 84%, transparent)',
-            color: 'var(--hw-ink)', borderRadius: 16,
-            boxShadow: '0 24px 60px -24px var(--hw-shadow-color)', fontFamily: 'var(--hw-font-body)', fontSize: 14,
+            overflowY: 'auto', zIndex: 9000, padding: 5,
+            color: 'var(--hw-ink)', borderRadius: 12, fontFamily: 'var(--hw-font-body)', fontSize: 13,
             animation: 'hw-pop-in var(--motion-fast, 120ms) var(--ease-standard, ease) both',
           }}
         >
@@ -93,7 +93,7 @@ export function MenuButton({
             if (item.type === 'separator') return <div key={`sep${i}`} role="separator" style={{ height: 1, margin: '6px 10px', background: 'var(--hw-line)' }} />;
             if (item.type === 'header') {
               return (
-                <div key={`h${i}`} role="presentation" style={{ padding: '8px 10px 4px', fontFamily: 'var(--hw-font-why)', fontStyle: 'italic', fontSize: 15, color: 'var(--hw-muted)' }}>
+                <div key={`h${i}`} role="presentation" style={{ padding: '8px 8px 4px', fontFamily: 'var(--hw-font-body)', fontSize: 11, lineHeight: '14px', fontWeight: 600, color: 'var(--hw-muted)' }}>
                   {item.label}
                 </div>
               );
@@ -110,9 +110,9 @@ export function MenuButton({
                 tabIndex={-1}
                 onClick={() => { if (item.disabled) return; close(); item.onSelect?.(); }}
                 style={{
-                  width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '0 10px', minHeight: 36,
-                  border: 0, borderRadius: 8, background: 'transparent', color: 'inherit',
-                  fontFamily: 'inherit', fontSize: 14, textAlign: 'left', cursor: item.disabled ? 'default' : 'pointer',
+                  width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '0 8px', minHeight: 28,
+                  border: 0, borderRadius: 6, background: 'transparent', color: 'inherit',
+                  fontFamily: 'inherit', fontSize: 13, textAlign: 'left', cursor: item.disabled ? 'default' : 'pointer',
                 }}
               >
                 <span style={{ width: 16, display: 'inline-flex', color: 'var(--hw-muted)' }}>
@@ -121,7 +121,7 @@ export function MenuButton({
                 <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: item.checked ? 600 : 400 }}>
                   {item.label}
                 </span>
-                {item.hint && <span style={{ fontFamily: 'var(--hw-font-mono)', fontSize: 11, color: 'var(--hw-muted)' }}>{item.hint}</span>}
+                {item.hint && <span style={{ fontSize: 11, color: 'var(--hw-muted)' }}>{item.hint}</span>}
               </button>
             );
           })}
