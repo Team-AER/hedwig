@@ -4,22 +4,21 @@
 // then the preview in two muted lines, or Hedwig's TL;DR behind a sparkle when there is one. What
 // needs you (or was rescued from spam, or waits in the Screener) ends in the reason line, which
 // opens the why door; other rows keep the door behind a quiet info glyph that shows on hover and
-// keyboard focus (on a phone, the thread's Change does it). Hover swaps the date for Done, Snooze
-// and Reply Later. The row's main area is one real button (Enter opens the thread); the reason, the
+// keyboard focus (on a phone, the thread's Change does it). Hover swaps the date for Done, Snooze,
+// Reply Later and Delete, which go through the optimistic layer (actions.js) with Undo. The row's main area is one real button (Enter opens the thread); the reason, the
 // quiet door and the hover buttons are siblings, never nested in it. A reminder row (synthetic, no
 // message) has nothing to open or explain.
-import { memo, useCallback, useEffect, useId, useState } from 'react';
+import { memo, useCallback, useEffect, useId, useMemo, useState } from 'react';
 import i18n from 'i18next';
-import { api } from '../../utils/api.js';
 import { useStore } from '../../store/index.js';
 import { useHedwig } from '../store.js';
 import { getView } from '../registry.js';
 import { useShell } from '../shell/state.js';
 import { MenuButton } from '../shell/Menu.jsx';
 import { Icon } from '../icons.jsx';
-import { useV2 } from './state.js';
-import { isMockMode } from './client.js';
-import { archiveThread, addToList, snooze, snoozeTimes } from './mail.js';
+import { useV2, liveRows } from './state.js';
+import { snoozeTimes } from './mail.js';
+import { performAction } from './actions.js';
 import { Avatar, Hair, IconButton, Num, Reason, SectionLabel, V } from './primitives.jsx';
 import { senderName, tldrOf, tldrLighter } from './format.js';
 import { tv } from './i18n.js';
@@ -74,34 +73,17 @@ export function rowPreview(item) {
   return snip ? { tldr: null, text: snip } : null;
 }
 
-// Done from the list: archive the thread's inbox copies (the reader's Done, without opening it).
-async function doneFromRow(item) {
-  let messages = [{ id: item.messageId }];
-  if (!isMockMode() && item.threadId) {
-    const t = await api.getThread(item.threadId).catch(() => null);
-    if (Array.isArray(t?.messages) && t.messages.length) messages = t.messages.map((m) => ({ id: m.id, folder: m.folder }));
-  }
-  await archiveThread(messages);
-}
-
-function failed(title, e) {
-  useStore.getState().addNotification?.({ type: 'error', title, body: e?.message });
-}
-
-// The three hover buttons that take the date's place on line 1.
-function RowActions({ item, visible, work, list }) {
-  const threadId = item.threadId || item.messageId;
-  const run = (title, fn) => async () => { try { await fn(); } catch (e) { failed(title, e); } };
-  const snoozeItems = () => snoozeTimes().map((s) => ({
-    id: s.id, label: s.label, icon: 'alarm-clock',
-    onSelect: run(tv('hedwig.v2.row.snoozeFailed', 'Could not snooze it'), () => snooze(item.messageId, s.until, threadId)),
-  }));
+// The four hover buttons that take the date's place on line 1: Done, Snooze, Reply Later (with
+// the work routes, and not in Reply Later itself) and Delete, 24px each.
+function RowActions({ item, visible, work, list, stream }) {
+  const act = (kind, extra = {}) => () => performAction({ kind, items: [item], stream: item.stream || stream, ...extra });
+  const snoozeItems = () => snoozeTimes().map((s) => ({ id: s.id, label: s.label, icon: 'alarm-clock', onSelect: act('snooze', { until: s.until }) }));
   return (
     <div
       data-row-actions=""
       style={{ position: 'absolute', top: 6, right: 10, display: 'flex', gap: 2, visibility: visible ? 'visible' : 'hidden', zIndex: 1 }}
     >
-      <IconButton icon="circle-check" size={24} label={tv('hedwig.v2.thread.done', 'Done')} kbd="E" onClick={run(tv('hedwig.v2.row.doneFailed', 'Could not archive it'), () => doneFromRow(item))} />
+      <IconButton icon="circle-check" size={24} label={tv('hedwig.v2.thread.done', 'Done')} kbd="E" onClick={act('done')} />
       <MenuButton
         label={tv('hedwig.v2.thread.snooze', 'Snooze')}
         title={`${tv('hedwig.v2.thread.snooze', 'Snooze')} (H)`}
@@ -114,8 +96,9 @@ function RowActions({ item, visible, work, list }) {
         <Icon name="alarm-clock" size={14} />
       </MenuButton>
       {work && list !== 'replyLater' && (
-        <IconButton icon="reply" size={24} label={tv('hedwig.v2.rail.replyLater', 'Reply Later')} kbd="L" onClick={run(tv('hedwig.v2.row.laterFailed', 'Could not add it to Reply Later'), () => addToList('replyLater', threadId))} />
+        <IconButton icon="reply" size={24} label={tv('hedwig.v2.rail.replyLater', 'Reply Later')} kbd="L" onClick={act('replyLater')} />
       )}
+      <IconButton icon="trash" size={24} label={tv('hedwig.v2.thread.delete', 'Delete')} kbd="⌫" onClick={act('delete')} />
     </div>
   );
 }
@@ -239,7 +222,7 @@ export const StreamRow = memo(function StreamRow({ item, onOpen, onWhy, phone = 
           <Icon name="info" size={12} strokeWidth={1.75} />
         </button>
       )}
-      {actions && <RowActions item={item} visible={active} work={work} list={list} />}
+      {actions && <RowActions item={item} visible={active} work={work} list={list} stream={stream} />}
     </article>
   );
 });
@@ -248,9 +231,13 @@ export const StreamRow = memo(function StreamRow({ item, onOpen, onWhy, phone = 
  * Rows with the hairline between them: inset past the avatar (62px), and hidden next to a hovered
  * or selected row, so the fill reads as one shape.
  */
-export function RowList({ items, stream, list, phone, onWhy, onOpen }) {
+export function RowList({ items: given, stream, list, phone, onWhy, onOpen }) {
   const [hot, setHot] = useState(null);
   const selectedId = useV2((s) => s.selected?.messageId || null);
+  // Rows an action took away stay away, and a flag or read change shows before the reload.
+  const hidden = useV2((s) => s.hidden);
+  const patches = useV2((s) => s.patches);
+  const items = useMemo(() => liveRows(given, hidden, patches), [given, hidden, patches]);
   const onHover = useCallback((i) => setHot(i), []);
   const lit = (i) => i === hot || (selectedId && items[i]?.messageId === selectedId);
   return items.map((it, i) => (

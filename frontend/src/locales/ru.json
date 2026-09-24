@@ -1796,10 +1796,8 @@
         "accounts": "Учётные записи: {{n}}",
         "accountsFailing": "Требуют внимания: {{n}} из {{total}}",
         "brief": "Сводка дня",
-        "hedwigSettings": "Настройки Hedwig",
         "label": "Потоки",
         "mailSettings": "Настройки почты",
-        "more": "Раскладка и настройки",
         "palette": "Открыть палитру команд",
         "replyLater": "Ответить позже",
         "screener": "Фильтр",
@@ -1827,8 +1825,7 @@
       "scheme": {
         "auto": "Авто",
         "dark": "Тёмная",
-        "light": "Светлая",
-        "menu": "Светлая или тёмная: {{scheme}}"
+        "light": "Светлая"
       },
       "screener": {
         "accept": "Принять: {{stream}}",

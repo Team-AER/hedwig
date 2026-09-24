@@ -1796,10 +1796,8 @@
         "accounts": "{{n}} 个账户",
         "accountsFailing": "{{total}} 个中有 {{n}} 个需要处理",
         "brief": "每日简报",
-        "hedwigSettings": "Hedwig 设置",
         "label": "邮件流",
         "mailSettings": "邮件设置",
-        "more": "布局和设置",
         "palette": "打开命令面板",
         "replyLater": "稍后回复",
         "screener": "筛选",
@@ -1827,8 +1825,7 @@
       "scheme": {
         "auto": "自动",
         "dark": "深色",
-        "light": "浅色",
-        "menu": "浅色或深色：{{scheme}}"
+        "light": "浅色"
       },
       "screener": {
         "accept": "接受：{{stream}}",

@@ -82,6 +82,8 @@ const Brief = (await import('./Brief.jsx')).default;
 const Today = (await import('./Today.jsx')).default;
 const HedwigSettingsV2 = (await import('./HedwigSettings.jsx')).default;
 const { v2Views, v2SessionAllowed, startV2Session, stopV2Session, isV2SessionRunning } = await import('./index.js');
+const actions = await import('./actions.js');
+const toastTitles = () => actions.useUndo.getState().toasts.map((t) => t.title);
 
 setMockMode(true);
 const notifications = [];
@@ -120,7 +122,7 @@ async function cleanup() {
   document.body.innerHTML = '';
 }
 
-beforeEach(() => { mock.resetMock(); notifications.length = 0; useV2.setState({ selected: null, prefs: { ...UI_DEFAULTS }, caps: { work: null } }); });
+beforeEach(() => { mock.resetMock(); notifications.length = 0; actions.resetActions(); useV2.setState({ selected: null, prefs: { ...UI_DEFAULTS }, caps: { work: null }, hidden: {}, patches: {}, order: null }); });
 // Event-driven reloads wait REFRESH_DEBOUNCE_MS (300) so one burst is one fetch.
 const AFTER_EVENT = 420;
 const phoneView = (el) => h(P.PhoneContext.Provider, { value: { phone: true, depth: 0 } }, el);
@@ -555,7 +557,7 @@ describe('Thread', () => {
 
     // The toolbar: every button names its key, in its tooltip too; Done shows its label.
     const bar = document.querySelector('[role="toolbar"]');
-    for (const label of ['Done (E)', 'Reply Later (L)', 'Snooze (H)', 'Set Aside (S)', 'Reply (R)', 'Reply all (A)', 'Forward (F)', 'Move (V)', 'Flag', 'More']) {
+    for (const label of ['Done (E)', 'Delete (⌫)', 'Junk (!)', 'Flag (⇧S)', 'Reply Later (L)', 'Snooze (H)', 'Set Aside (S)', 'Reply (R)', 'Reply all (A)', 'Forward (F)', 'Move (V)', 'More']) {
       const b = byLabel(label, bar);
       assert.ok(b, `${label} in the toolbar`);
       assert.equal(b.getAttribute('title'), label);
@@ -632,7 +634,8 @@ describe('Thread', () => {
     await render(h(Thread, { props: { item: await annaItem() } }));
     await settle(60);
     await click(byLabel('Reply Later (L)'));
-    assert.equal(notifications.at(-1).title, 'Added to Reply Later.');
+    assert.deepEqual(toastTitles(), ['Added to Reply Later'], 'one undo toast, no second notification');
+    assert.equal(notifications.length, 0);
     const list = await mock.mockRequest('GET', '/work/lists/replyLater');
     assert.ok(list.items.some((i) => i.threadId === 't-anna'));
     assert.equal(useV2.getState().counts.replyLater, 4);
@@ -643,14 +646,13 @@ describe('Thread', () => {
     await render(h(Thread, { props: { item: await annaItem() } }));
     await settle(60);
     const key = async (k, target = document.body) => { await React.act(async () => { target.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true })); }); await settle(); };
-    notifications.length = 0;
     await key('s', byLabel('Reply to Anna'));
-    assert.equal(notifications.length, 0, 'typing an s in the reply is text');
+    assert.deepEqual(toastTitles(), [], 'typing an s in the reply is text');
     await key('g');
     await key('s');
-    assert.equal(notifications.length, 0, 'g then s is not Set Aside');
+    assert.deepEqual(toastTitles(), [], 'g then s is not Set Aside');
     await key('s');
-    assert.equal(notifications.at(-1).title, 'Set aside.');
+    assert.deepEqual(toastTitles(), ['Set aside']);
   });
 
   test('help me write off hides quick replies and drafting', async () => {
@@ -692,15 +694,14 @@ describe('Thread', () => {
     shortcutBus.on('toggleStar', star);
     useStore.setState({ selectedMessageId: 'upstream-1' });
     try {
-      notifications.length = 0;
       await key('s');
-      assert.equal(notifications.length, 0, 'S is upstream\'s star here, not Set Aside as well');
+      assert.deepEqual(toastTitles(), [], 'S is upstream\'s star here, not Set Aside as well');
     } finally {
       shortcutBus.off('toggleStar', star);
       useStore.setState({ selectedMessageId: null });
     }
     await key('s');
-    assert.equal(notifications.at(-1).title, 'Set aside.', 'with nobody upstream listening, S is Set Aside');
+    assert.deepEqual(toastTitles(), ['Set aside'], 'with nobody upstream listening, S is Set Aside');
     assert.equal(upstreamOwnsKey('e', { selectedMessageId: 'x', hasListener: (a) => a === 'archive' }), true);
     assert.equal(upstreamOwnsKey('e', { selectedMessageId: null, hasListener: () => true }), false, 'no upstream selection: nothing to act on');
     assert.equal(upstreamOwnsKey('e', { shortcuts: { archive: 'y' }, selectedMessageId: 'x', hasListener: () => true }), false, 'the user moved archive off E');
@@ -716,7 +717,7 @@ describe('Thread', () => {
     notifications.length = 0;
     await React.act(async () => { document.body.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 's', bubbles: true, cancelable: true })); });
     await settle();
-    assert.equal(notifications.length, 0);
+    assert.deepEqual(toastTitles(), []);
     assert.equal(hiddenInPage(document.querySelector('section.hw-v2')), true);
   });
 
@@ -1068,7 +1069,7 @@ describe('Settings → Hedwig (Simple and Power)', () => {
 describe('registration', () => {
   test('every v2 view is registered with the contract ids, the thread yields to the wide Brief', () => {
     const ids = v2Views().map((v) => v.id);
-    for (const id of ['hedwig.rail', 'hedwig.stream.people', 'hedwig.stream.reading', 'hedwig.stream.records', 'hedwig.screener', 'hedwig.thread', 'hedwig.brief', 'hedwig.today']) {
+    for (const id of ['hedwig.rail', 'hedwig.stream.people', 'hedwig.stream.reading', 'hedwig.stream.records', 'hedwig.screener', 'hedwig.thread', 'hedwig.brief', 'hedwig.today', 'hedwig.drafts']) {
       assert.ok(ids.includes(id), id);
     }
     const byId = Object.fromEntries(v2Views().map((v) => [v.id, v]));
@@ -1181,7 +1182,8 @@ describe('list and rail (redesign)', () => {
     assert.ok(people.querySelector('svg'), 'each place has a glyph');
     assert.equal(people.style.height, '28px');
     assert.equal(people.lastElementChild.style.color, 'var(--hw-attention-ink, #A8420F)', 'the Needs-you count is in the attention ink');
-    assert.deepEqual(all('h2', nav).map((x) => x.textContent), useV2.getState().caps.work === true ? ['Later', 'Hedwig'] : ['Hedwig']);
+    assert.deepEqual(all('h2', nav).map((x) => x.textContent), ['Later', 'Hedwig'], 'Later always holds Drafts; Reply Later and the rest join it with the work routes');
+    assert.ok(all('button.hw-nav', nav).some((b) => b.textContent.startsWith('Drafts')), 'Drafts under Later');
     const account = nav.querySelector('footer [data-account-line]');
     assert.ok(account, 'the account line is in the footer');
     assert.equal(account.querySelector('[data-avatar]').style.width, '20px');

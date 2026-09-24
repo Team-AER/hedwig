@@ -110,7 +110,12 @@ Object.assign(PATHS, {
   refresh: <><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" /><path d="M8 16H3v5" /></>,
   bell: <><path d="M10.27 21a2 2 0 0 0 3.46 0" /><path d="M3.26 15.33A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.67C19.41 13.96 18 12.5 18 8A6 6 0 0 0 6 8c0 4.5-1.41 5.96-2.74 7.33" /></>,
   archive: <><rect x="2" y="3" width="20" height="5" rx="1" /><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" /><path d="M10 12h4" /></>,
+  // The reader's Delete (to Trash) and Junk.
+  trash: <><path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><path d="M10 11v6M14 11v6" /></>,
+  'alert-octagon': <><path d="M7.86 2h8.28L22 7.86v8.28L16.14 22H7.86L2 16.14V7.86z" /><path d="M12 8v4M12 16h.01" /></>,
+  'shield-off': <><path d="m2 2 20 20" /><path d="M5 5a1 1 0 0 0-1 1v7c0 5 3.5 7.5 7.67 8.94a1 1 0 0 0 .67.01c2.35-.82 4.48-1.97 5.9-3.71" /><path d="M9.31 3.84A13 13 0 0 0 12 2.24a1.19 1.19 0 0 1 1.52 0C15.5 3.8 17.5 5 20 5a1 1 0 0 1 1 1v7a9.3 9.3 0 0 1-.3 2.32" /></>,
 });
+PATHS['trash-2'] = PATHS.trash;
 PATHS['more-horizontal'] = PATHS.ellipsis;
 PATHS['square-pen'] = PATHS.compose;
 PATHS.zap = PATHS.bolt;
@@ -138,7 +143,8 @@ Object.assign(PATHS, {
 
 export const ICON_NAMES = Object.keys(PATHS);
 
-export function Icon({ name, size = 16, strokeWidth = 1.5, style, title }) {
+/** `fill` fills the shape (a flag that is on: fill="currentColor"); the stroke stays. */
+export function Icon({ name, size = 16, strokeWidth = 1.5, style, title, fill = 'none' }) {
   if (name && typeof name === 'object') return name; // a React element passed through
   const body = PATHS[name];
   if (!body) return null;
@@ -147,7 +153,7 @@ export function Icon({ name, size = 16, strokeWidth = 1.5, style, title }) {
       width={size}
       height={size}
       viewBox="0 0 24 24"
-      fill="none"
+      fill={fill}
       stroke="currentColor"
       strokeWidth={strokeWidth}
       strokeLinecap="round"

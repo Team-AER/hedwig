@@ -78,6 +78,12 @@ msg('personal', 'INBOX', 'Dr Anand', 'reception@anandclinic.example', ['prakhar.
 msg('personal', 'INBOX', 'Dr Anand', 'reception@anandclinic.example', ['prakhar.demo@gmail.com'], 'Re: Follow-up appointment options', 'Just checking in: could you confirm which slot works? We will release them on Friday.\n\nKind regards,\nReception, Anand Clinic\n\nOn Wed, 17 Sep 2026 at 09:02, Dr Anand <reception@anandclinic.example> wrote:\n> We have Tuesday 10:30 or Thursday 16:00 available for your follow-up. Which would you prefer?', 1, { thread: 'doc', mid: 'doc-2', replyTo: 'doc-1', read: false, html: DOCTOR_REPLY_HTML });
 msg('domain', 'INBOX', 'Sam Wilson', 'sam.wilson@lettings.example', ['me@prafiles.example'], 'Boiler inspection Thursday?', 'Hi, the engineer can come on Thursday between 8 and 12 for the annual boiler inspection. Is someone going to be in?', 1.1, { thread: 'boiler', mid: 'boiler-1', read: false });
 
+// Two saved drafts in the personal account's Drafts folder: a reply at the end of the clinic
+// thread (the reader shows it as a draft block with Edit draft) and a new message with no
+// recipient yet (the Drafts view shows "No recipient").
+msg('personal', 'Drafts', 'Prakhar', 'prakhar.demo@gmail.com', ['reception@anandclinic.example'], 'Re: Follow-up appointment options', 'Hi, Thursday 16:00 works for me. Could you also send the', 0.1, { thread: 'doc', mid: 'doc-draft', replyTo: 'doc-2', read: true, hour: 11 });
+msg('personal', 'Drafts', 'Prakhar', 'prakhar.demo@gmail.com', [], 'Cabin trip: what I owe', 'Amaan, sending my £160 for the cabin tonight. Also, for next year', 1.6, { mid: 'trip-draft', read: true });
+
 // Waiting on: user asked, nobody answered.
 msg('work', 'Sent Items', 'Prakhar', 'prakhar@vantage.example', ['ops@vantage.example'], 'Laptop replacement request', 'Hi Ops, my laptop battery is failing. Can we get a replacement before the offsite on the 10th?', 6, { thread: 'laptop', mid: 'laptop-1', read: true });
 
@@ -131,7 +137,7 @@ async function main() {
        VALUES ($1,$2,$3,$4,$5,'imap',$6,$6,$4,false)`,
       [id, userId, a.name, a.email, a.color, a.host],
     );
-    for (const [path, special] of [['INBOX', null], ['Sent', '\\Sent'], ['Sent Items', '\\Sent'], ['Junk', '\\Junk']]) {
+    for (const [path, special] of [['INBOX', null], ['Sent', '\\Sent'], ['Sent Items', '\\Sent'], ['Drafts', '\\Drafts'], ['Junk', '\\Junk']]) {
       await query('INSERT INTO folders (account_id, path, name, special_use) VALUES ($1,$2,$2,$3) ON CONFLICT DO NOTHING', [id, path, special]);
     }
   }

@@ -1815,10 +1815,8 @@
         "accounts": "Konta: {{n}}",
         "accountsFailing": "Wymaga uwagi: {{n}} z {{total}}",
         "brief": "Podsumowanie dnia",
-        "hedwigSettings": "Ustawienia Hedwiga",
         "label": "Strumienie",
         "mailSettings": "Ustawienia poczty",
-        "more": "Układ i ustawienia",
         "palette": "Otwórz paletę poleceń",
         "replyLater": "Odpowiedz później",
         "screener": "Sito",
@@ -1846,8 +1844,7 @@
       "scheme": {
         "auto": "Automatycznie",
         "dark": "Ciemny",
-        "light": "Jasny",
-        "menu": "Jasny czy ciemny: {{scheme}}"
+        "light": "Jasny"
       },
       "screener": {
         "accept": "Akceptuj: {{stream}}",

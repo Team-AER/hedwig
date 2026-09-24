@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { openReplyFromMessage, openForwardFromMessage } from './composeFromMessage.js';
+import { openReplyFromMessage, openForwardFromMessage, openDraftInComposer, isDraftsFolder, draftsFolderFor } from './composeFromMessage.js';
 
 function harness(body = null) {
   let payload = null;
@@ -286,5 +286,59 @@ describe('quoted body templates', () => {
       h.payload().quotedBody,
       `\n\n---------- Forwarded message ----------\nFrom: ann@example.com\nDate: ${when}\nSubject: Hello\n\nplain`,
     );
+  });
+});
+
+describe('openDraftInComposer', () => {
+  const draft = {
+    id: 'd1', uid: 42, folder: 'Drafts', account_id: 'acc',
+    to_addresses: [{ name: 'Anna', address: 'anna@example.com' }], cc_addresses: JSON.stringify([{ email: 'b@example.com' }]),
+    subject: 'Plans',
+  };
+
+  it('hands the composer the draft uid and folder so a save replaces it and a send deletes it', async () => {
+    const h = harness({ html: '<p>Hi Anna</p><div data-mailflow-signature="1"><p>-- P</p></div>', text: 'Hi Anna' });
+    await openDraftInComposer(draft, { openCompose: h.openCompose, getMessageBody: h.getMessageBody });
+    const p = h.payload();
+    assert.equal(p.draftUid, 42);
+    assert.equal(p.draftFolder, 'Drafts');
+    assert.equal(p.accountId, 'acc');
+    assert.deepEqual(p.to, ['Anna <anna@example.com>']);
+    assert.deepEqual(p.cc, ['b@example.com'], 'an address list stored as JSON text reads too');
+    assert.equal(p.subject, 'Plans');
+    assert.equal(p.body, '<p>Hi Anna</p>');
+    assert.equal(p.signature, '<p>-- P</p>', 'the signature is lifted out, never duplicated');
+    assert.equal(p.bodyIsHtml, true);
+  });
+
+  it('a plain-text draft stays plain, with no signature override', async () => {
+    const h = harness({ html: null, text: 'Just text' });
+    await openDraftInComposer({ ...draft, subject: null }, { openCompose: h.openCompose, getMessageBody: h.getMessageBody });
+    assert.equal(h.payload().body, 'Just text');
+    assert.equal(h.payload().bodyIsHtml, false);
+    assert.equal(h.payload().subject, '');
+    assert.equal('signature' in h.payload(), false);
+  });
+
+  it('rejects when the body cannot be loaded, and opens nothing', async () => {
+    let opened = false;
+    await assert.rejects(openDraftInComposer(draft, { openCompose: () => { opened = true; }, getMessageBody: () => Promise.reject(new Error('gone')) }));
+    assert.equal(opened, false);
+  });
+});
+
+describe('isDraftsFolder / draftsFolderFor', () => {
+  const accounts = [{ id: 'a', folder_mappings: { drafts: 'Entwürfe' } }, { id: 'b' }];
+  const folders = { b: [{ path: 'INBOX' }, { path: '[Gmail]/Drafts', special_use: '\\Drafts' }] };
+
+  it('the folder mapping wins, else the \\Drafts special-use folder', () => {
+    assert.equal(isDraftsFolder('a', 'Entwürfe', { accounts, folders }), true);
+    assert.equal(isDraftsFolder('b', '[Gmail]/Drafts', { accounts, folders }), true);
+    assert.equal(isDraftsFolder('b', 'INBOX', { accounts, folders }), false);
+    assert.equal(isDraftsFolder(null, 'Drafts', { accounts, folders }), false);
+    assert.equal(isDraftsFolder('zz', 'Drafts', { accounts, folders }), false);
+    assert.equal(draftsFolderFor(accounts[0], []), 'Entwürfe');
+    assert.equal(draftsFolderFor(accounts[1], folders.b), '[Gmail]/Drafts');
+    assert.equal(draftsFolderFor(accounts[1], []), null);
   });
 });

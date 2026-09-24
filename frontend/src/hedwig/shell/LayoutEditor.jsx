@@ -1,26 +1,33 @@
-// Settings · Layouts (view 'hedwig.layouts'): template gallery, the pane tree as an editable
-// outline, add-a-view chips, density, saved layouts, import/export and a live preview. Edits
-// apply to the layout on screen immediately and are saved like any other layout change.
+// Customize layout (view 'hedwig.layouts', opened from the View menu): pick a starting layout,
+// the panes in reading order (add, remove, move, resize, change the view; drag to reorder), arrange
+// on screen, density, name and save, the saved layouts (use, delete), export and import as JSON,
+// and "Reset to Streams". Edits apply to the layout on screen at once and are saved like any other
+// layout change. Sections are 14px sheets with SectionLabel headings; controls are IconButtons.
 import { useEffect, useRef, useState } from 'react';
-import { getView, listViews } from '../registry.js';
+import { getView } from '../registry.js';
 import { Icon } from '../icons.jsx';
-import { ui } from '../theme/styles.js';
 import * as M from './model.js';
 import { useShell } from './state.js';
-import { TEMPLATES, buildTemplate } from './templates.js';
+import { HEDWIG_TEMPLATES, buildTemplate, DEFAULT_TEMPLATE } from './templates.js';
+import { savedLayoutsFor } from './layouts.js';
 import { exportCurrentLayout, importLayoutFile } from './layoutFile.js';
 import { useRegistryVersion, groupedViews } from './useRegistry.js';
+import { viewMenuItems } from './viewMenu.js';
+import { MenuButton } from './Menu.jsx';
+import { Btn, IconButton, SectionLabel, V } from '../v2/primitives.jsx';
 import { tr } from './tr.js';
 
 const REF_W = 1440;
 const REF_H = 900;
 
+function titleOf(id) {
+  return getView(id)?.title || id;
+}
+
 function tone(id) {
-  if (id === 'core.nav') return 'var(--hw-border)';
-  if (/^(core\.list|hedwig\.(needs|ask))$/.test(id)) return 'var(--hw-faint)';
-  if (/^(core\.thread|hedwig\.timeline)$/.test(id)) return 'var(--hw-muted)';
-  if (getView(id)?.pluginId || /context|sidebar/i.test(id)) return 'var(--hw-teal)';
-  return 'var(--hw-faint)';
+  if (id === 'hedwig.rail' || id === 'core.nav') return V.accentTint;
+  if (id === 'hedwig.thread' || id === 'core.thread') return V.select;
+  return V.field;
 }
 
 function basis(size, dir) {
@@ -28,13 +35,13 @@ function basis(size, dir) {
   return { flex: `0 1 ${((size / (dir === 'row' ? REF_W : REF_H)) * 100).toFixed(2)}%` };
 }
 
-// Boxes for a tree. `labelled` draws pane cards with titles (the big preview); otherwise solid
-// swatches (template cards).
+// Boxes for a tree. `labelled` draws each pane with its title (the preview); otherwise swatches
+// (the starting-layout cards).
 export function MiniPreview({ node, labelled = false, selectedKey }) {
   if (!node) return null;
   if (node.type === 'split') {
     return (
-      <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: node.dir, gap: labelled ? 6 : 3 }}>
+      <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: node.dir, gap: labelled ? 4 : 2 }}>
         {node.children.map((c, i) => (
           <div key={c.key || i} style={{ display: 'flex', minWidth: 0, minHeight: 0, ...basis(node.sizes?.[i], node.dir) }}>
             <MiniPreview node={c} labelled={labelled} selectedKey={selectedKey} />
@@ -45,47 +52,58 @@ export function MiniPreview({ node, labelled = false, selectedKey }) {
   }
   if (node.type === 'tabs') {
     const active = node.children[node.active] || node.children[0];
-    return (
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-        {labelled && <div style={{ fontSize: 10, color: 'var(--hw-muted)', padding: '0 2px 3px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{node.children.map((c) => getView(c.id)?.title || c.id).join(' · ')}</div>}
-        <MiniPreview node={active} labelled={labelled} selectedKey={selectedKey} />
-      </div>
-    );
+    return <MiniPreview node={active} labelled={labelled} selectedKey={selectedKey} />;
   }
-  if (!labelled) return <div style={{ flex: 1, borderRadius: 3, background: tone(node.id) }} />;
-  const plugin = Boolean(getView(node.id)?.pluginId);
+  if (!labelled) return <div style={{ flex: 1, borderRadius: 3, background: tone(node.id), boxShadow: `inset 0 0 0 .5px ${V.line2}` }} />;
   const selected = node.key === selectedKey;
   return (
     <div style={{
-      flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 6, padding: 10, borderRadius: 8, overflow: 'hidden',
-      background: 'var(--hw-surface)', border: `1px solid ${plugin ? 'var(--hw-teal)' : 'var(--hw-border)'}`,
-      boxShadow: selected ? '0 0 0 2px var(--hw-ink)' : 'none',
+      flex: 1, minWidth: 0, display: 'flex', alignItems: 'flex-start', gap: 4, padding: '6px 7px', borderRadius: 6, overflow: 'hidden',
+      background: tone(node.id), boxShadow: selected ? `inset 0 0 0 1.5px ${V.accent}` : `inset 0 0 0 .5px ${V.line2}`,
+      color: V.ink, fontSize: 11, lineHeight: '14px', fontWeight: 500,
     }}>
-      <span style={{ fontSize: 11, fontWeight: 600, color: plugin ? 'var(--hw-teal-text)' : 'var(--hw-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        {node.id}{node.follows ? ` · follows ${node.follows}` : ''}
-      </span>
-      <span style={{ height: 8, width: '70%', borderRadius: 4, background: plugin ? 'var(--hw-teal-tint)' : 'var(--hw-tint)' }} />
-      <span style={{ height: 8, width: '55%', borderRadius: 4, background: plugin ? 'var(--hw-teal-tint)' : 'var(--hw-tint)' }} />
+      <span aria-hidden="true" style={{ display: 'inline-flex', color: V.muted, flexShrink: 0 }}><Icon name={getView(node.id)?.icon || 'grid'} size={12} /></span>
+      <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{titleOf(node.id)}</span>
     </div>
   );
 }
 
-function outlineRows(node, depth = 0, parent = null, index = 0, last = true, out = []) {
-  out.push({ node, depth, parent, index, last });
-  if (Array.isArray(node.children)) node.children.forEach((c, i) => outlineRows(c, depth + 1, node, i, i === node.children.length - 1, out));
+function Section({ label, action, children, style }) {
+  return (
+    <section aria-label={label} style={{ display: 'flex', flexDirection: 'column', gap: 0, minWidth: 0, ...style }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 28 }}>
+        <SectionLabel as="h2" style={{ padding: '0 2px', flex: 1 }}>{label}</SectionLabel>
+        {action}
+      </div>
+      <div style={{ marginTop: 6, padding: 12, borderRadius: 14, background: V.content, boxShadow: `0 0 0 .5px ${V.line2}`, display: 'flex', flexDirection: 'column', gap: 10, minWidth: 0 }}>
+        {children}
+      </div>
+    </section>
+  );
+}
+
+function outlineRows(node, depth = 0, parent = null, index = 0, out = []) {
+  out.push({ node, depth, parent, index });
+  if (Array.isArray(node.children)) node.children.forEach((c, i) => outlineRows(c, depth + 1, node, i, out));
   return out;
 }
 
-function describe(row) {
-  const { node, parent, index } = row;
-  const bits = [];
-  if (parent?.type === 'split') bits.push(parent.sizes[index] == null ? 'flex' : `${parent.sizes[index]}px`);
-  if (node.type === 'split') bits.unshift(node.dir);
-  if (node.follows) bits.push(`follows ${node.follows}`);
-  if (node.type === 'view' && getView(node.id)?.pluginId) bits.push('plugin');
-  if (node.type === 'view' && !getView(node.id)) bits.push('not available');
-  return bits.join(' · ');
+function sizeText(row) {
+  const { parent, index } = row;
+  if (parent?.type !== 'split') return '';
+  const px = parent.sizes[index];
+  return px == null ? tr('editor.fills', 'fills the rest') : `${px} px`;
 }
+
+function groupLabel(node) {
+  if (node.type === 'tabs') return tr('editor.tabs', 'Tabs');
+  return node.dir === 'row' ? tr('editor.sideBySide', 'Side by side') : tr('editor.stacked', 'Stacked');
+}
+
+const fieldStyle = {
+  height: 28, padding: '0 8px', border: `1px solid ${V.line2}`, borderRadius: 8, background: V.content, color: V.ink,
+  fontFamily: 'inherit', fontSize: 13, boxSizing: 'border-box',
+};
 
 function SizeField({ parent, index }) {
   const current = parent.sizes[index];
@@ -97,21 +115,21 @@ function SizeField({ parent, index }) {
     useShell.getState().edit((t) => M.resizeChild(t, parent.key, index, n));
   };
   return (
-    <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--hw-muted)' }}>
-      {parent.dir === 'row' ? tr('editor.width', 'Width') : tr('editor.height', 'Height')}
+    <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: V.muted }}>
+      <span style={{ width: 64 }}>{parent.dir === 'row' ? tr('editor.width', 'Width') : tr('editor.height', 'Height')}</span>
       <input
         type="number"
         min={M.MIN_PANE_PX}
         step={10}
         inputMode="numeric"
         value={value}
-        placeholder="flex"
+        placeholder={tr('editor.fillsShort', 'fills')}
         onChange={(e) => setValue(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => { if (e.key === 'Enter') commit(); }}
-        style={{ width: 90, height: 28, padding: '0 8px', border: '1px solid var(--hw-border)', borderRadius: 6, background: 'var(--hw-surface)', color: 'var(--hw-ink)', fontFamily: 'var(--hw-font-mono)', fontSize: 12 }}
+        style={{ ...fieldStyle, width: 96, fontVariantNumeric: 'tabular-nums' }}
       />
-      <span>{tr('editor.sizeHint', 'px · empty = flex')}</span>
+      <span style={{ fontSize: 12 }}>{tr('editor.sizeHint2', 'px · empty fills the rest')}</span>
     </label>
   );
 }
@@ -120,18 +138,14 @@ function ViewSelect({ value, onChange, label, allowNone = false }) {
   const views = groupedViews();
   const known = views.some((g) => g.views.some((v) => v.id === value));
   return (
-    <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--hw-muted)' }}>
-      {label}
-      <select
-        value={value || ''}
-        onChange={(e) => onChange(e.target.value || null)}
-        style={{ height: 28, maxWidth: 220, padding: '0 6px', border: '1px solid var(--hw-border)', borderRadius: 6, background: 'var(--hw-surface)', color: 'var(--hw-ink)', fontFamily: 'inherit', fontSize: 12 }}
-      >
-        {allowNone && <option value="">nothing</option>}
-        {value && !known && <option value={value}>{value} (not available)</option>}
+    <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: V.muted }}>
+      <span style={{ width: 64 }}>{label}</span>
+      <select value={value || ''} onChange={(e) => onChange(e.target.value || null)} style={{ ...fieldStyle, flex: 1, minWidth: 0, maxWidth: 280 }}>
+        {allowNone && <option value="">{tr('editor.nothing', 'Nothing')}</option>}
+        {value && !known && <option value={value}>{tr('editor.unavailable', '{{id}} (not available)', { id: value })}</option>}
         {views.map((g) => (
           <optgroup key={g.group} label={g.label}>
-            {g.views.map((v) => <option key={v.id} value={v.id}>{v.title || v.id} — {v.id}</option>)}
+            {g.views.map((v) => <option key={v.id} value={v.id}>{v.title || v.id}</option>)}
           </optgroup>
         ))}
       </select>
@@ -141,45 +155,37 @@ function ViewSelect({ value, onChange, label, allowNone = false }) {
 
 function SelectedControls({ row }) {
   const s = useShell.getState;
-  if (!row) return <p style={{ margin: 0, fontSize: 12, color: 'var(--hw-muted)' }}>{tr('editor.selectHint', 'Select a pane in the tree to change it.')}</p>;
   const { node, parent, index } = row;
-  const btn = (label, icon, onClick, disabled = false) => (
-    <button type="button" className="hw-btn" onClick={onClick} disabled={disabled} style={{ ...ui.button, height: 28, fontSize: 12, padding: '0 8px' }}>
-      <Icon name={icon} size={13} />{label}
-    </button>
-  );
   const isView = node.type === 'view';
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      {isView && <ViewSelect label="View" value={node.id} onChange={(id) => id && s().replaceView(node.key, id)} />}
+    <div data-editor-selected="" style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '10px 10px 12px', borderRadius: 10, background: V.field }}>
+      {isView && <ViewSelect label={tr('editor.view', 'View')} value={node.id} onChange={(id) => id && s().replaceView(node.key, id)} />}
       {node.type === 'split' && (
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--hw-muted)' }}>
-          Direction
-          <select value={node.dir} onChange={(e) => s().edit((t) => M.setDirection(t, node.key, e.target.value))} style={{ height: 28, padding: '0 6px', border: '1px solid var(--hw-border)', borderRadius: 6, background: 'var(--hw-surface)', color: 'var(--hw-ink)', fontFamily: 'inherit', fontSize: 12 }}>
-            <option value="row">row (side by side)</option>
-            <option value="column">column (stacked)</option>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: V.muted }}>
+          <span style={{ width: 64 }}>{tr('editor.direction', 'Direction')}</span>
+          <select value={node.dir} onChange={(e) => s().edit((t) => M.setDirection(t, node.key, e.target.value))} style={fieldStyle}>
+            <option value="row">{tr('editor.sideBySide', 'Side by side')}</option>
+            <option value="column">{tr('editor.stacked', 'Stacked')}</option>
           </select>
         </label>
       )}
       {parent?.type === 'split' && <SizeField parent={parent} index={index} />}
-      {isView && (
-        <ViewSelect label="Follows" allowNone value={node.follows || null} onChange={(id) => s().edit((t) => M.setFollows(t, node.key, id))} />
+      {isView && (node.follows || node.id === 'hedwig.context') && (
+        <ViewSelect label={tr('editor.follows', 'Follows')} allowNone value={node.follows || null} onChange={(id) => s().edit((t) => M.setFollows(t, node.key, id))} />
       )}
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-        {btn('Split right', 'split-right', () => s().edit((t) => M.splitPane(t, node.key, 'row', M.view('core.picker'))))}
-        {btn('Split down', 'split-down', () => s().edit((t) => M.splitPane(t, node.key, 'column', M.view('core.picker'))))}
-        {isView && btn('Add tab', 'tabs', () => s().edit((t) => M.addTab(t, node.key, M.view('core.picker'))))}
-        {btn('Earlier', 'arrow-up', () => s().edit((t) => M.moveBy(t, node.key, -1)), !parent || index === 0)}
-        {btn('Later', 'arrow-down', () => s().edit((t) => M.moveBy(t, node.key, 1)), !parent || index === parent.children.length - 1)}
-        {btn('Remove', 'close', () => s().closePane(node.key), !parent)}
+        <Btn onClick={() => s().edit((t) => M.splitPane(t, node.key, 'row', M.view('core.picker')))}><Icon name="split-right" size={14} />{tr('editor.splitRight', 'Split right')}</Btn>
+        <Btn onClick={() => s().edit((t) => M.splitPane(t, node.key, 'column', M.view('core.picker')))}><Icon name="split-down" size={14} />{tr('editor.splitDown', 'Split down')}</Btn>
+        {isView && <Btn onClick={() => s().edit((t) => M.addTab(t, node.key, M.view('core.picker')))}><Icon name="tabs" size={14} />{tr('editor.addTab', 'Add tab')}</Btn>}
       </div>
     </div>
   );
 }
 
-function Outline({ tree, selectedKey, onSelect }) {
+function PaneList({ tree, selectedKey, onSelect }) {
   const rows = outlineRows(tree);
   const drag = useRef(null);
+  const s = useShell.getState;
   const onDrop = (e, target) => {
     e.preventDefault();
     const key = drag.current;
@@ -189,39 +195,87 @@ function Outline({ tree, selectedKey, onSelect }) {
     const before = e.clientY < rect.top + rect.height / 2;
     const dir = target.parent?.type === 'split' ? target.parent.dir : 'row';
     const where = target.parent?.type === 'tabs' ? 'tab' : dir === 'row' ? (before ? 'left' : 'right') : (before ? 'top' : 'bottom');
-    useShell.getState().edit((t) => M.movePane(t, key, target.node.key, where));
+    s().edit((t) => M.movePane(t, key, target.node.key, where));
   };
+  const selected = rows.find((r) => r.node.key === selectedKey) || null;
   return (
-    <div role="tree" aria-label={tr('editor.tree', 'Pane tree')} style={{ ...ui.card, padding: '10px 8px', fontFamily: 'var(--hw-font-mono)', fontSize: 12, lineHeight: 1.7, display: 'flex', flexDirection: 'column' }}>
+    <div role="list" aria-label={tr('editor.panes', 'Panes')} style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
       {rows.map((row) => {
-        const { node, depth, last } = row;
-        const selected = node.key === selectedKey;
-        const label = node.type === 'view' ? 'view' : node.type;
-        const name = node.type === 'view' ? node.id : '';
-        const plugin = node.type === 'view' && getView(node.id)?.pluginId;
+        const { node, depth, parent, index } = row;
+        const on = node.key === selectedKey;
+        const isView = node.type === 'view';
+        const count = parent ? parent.children.length : 0;
+        const missing = isView && !getView(node.id);
+        return (
+          <div key={node.key} role="listitem" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div
+              draggable={isView}
+              onDragStart={(e) => { drag.current = node.key; e.dataTransfer.effectAllowed = 'move'; }}
+              onDragOver={(e) => { if (drag.current) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; } }}
+              onDrop={(e) => onDrop(e, row)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6, minHeight: 32, padding: `0 4px 0 ${6 + depth * 16}px`, borderRadius: 8,
+                background: on ? V.select : 'transparent',
+              }}
+            >
+              <button
+                type="button"
+                aria-pressed={on}
+                onClick={() => onSelect(on ? null : node.key)}
+                style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, height: 32, padding: 0, border: 0, background: 'transparent', color: V.ink, fontFamily: 'inherit', fontSize: 13, textAlign: 'left', cursor: 'pointer' }}
+              >
+                <span aria-hidden="true" style={{ display: 'inline-flex', color: isView ? V.accent : V.muted, flexShrink: 0 }}>
+                  <Icon name={isView ? (getView(node.id)?.icon || 'grid') : (node.type === 'tabs' ? 'tabs' : node.dir === 'row' ? 'split-right' : 'split-down')} size={14} />
+                </span>
+                <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: isView ? 500 : 400, color: isView ? V.ink : V.muted }}>
+                  {isView ? titleOf(node.id) : groupLabel(node)}
+                </span>
+                <span style={{ fontSize: 12, color: missing ? V.red : V.muted, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+                  {missing ? tr('editor.notAvailable', 'not available') : sizeText(row)}
+                </span>
+              </button>
+              {parent && (
+                <>
+                  <IconButton icon={parent.dir === 'column' ? 'arrow-up' : 'chevron-left'} label={tr('editor.earlier', 'Move earlier')} disabled={index === 0} onClick={() => s().edit((t) => M.moveBy(t, node.key, -1))} style={{ color: V.muted, opacity: index === 0 ? 0.35 : 1 }} />
+                  <IconButton icon={parent.dir === 'column' ? 'arrow-down' : 'chevron-right'} label={tr('editor.later', 'Move later')} disabled={index === count - 1} onClick={() => s().edit((t) => M.moveBy(t, node.key, 1))} style={{ color: V.muted, opacity: index === count - 1 ? 0.35 : 1 }} />
+                  <IconButton icon="close" label={isView ? tr('editor.removeNamed', 'Remove {{title}}', { title: titleOf(node.id) }) : tr('editor.remove', 'Remove')} onClick={() => { s().closePane(node.key); if (on) onSelect(null); }} style={{ color: V.muted }} />
+                </>
+              )}
+            </div>
+            {on && selected && <SelectedControls row={selected} />}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function StartFrom() {
+  const name = useShell((s) => s.name);
+  const templateId = useShell((s) => s.templateId);
+  return (
+    <div role="radiogroup" aria-label={tr('editor.startFrom', 'Start from')} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 8 }}>
+      {HEDWIG_TEMPLATES.map((t) => {
+        const active = templateId === t.id && name === t.label;
         return (
           <button
-            key={node.key}
+            key={t.id}
             type="button"
-            role="treeitem"
-            aria-selected={selected}
-            aria-level={depth + 1}
-            draggable={node.type === 'view'}
-            onDragStart={(e) => { drag.current = node.key; e.dataTransfer.effectAllowed = 'move'; }}
-            onDragOver={(e) => { if (drag.current) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; } }}
-            onDrop={(e) => onDrop(e, row)}
-            onClick={() => onSelect(node.key)}
-            className="hw-row"
+            role="radio"
+            aria-checked={active}
+            data-template={t.id}
+            onClick={() => useShell.getState().applyTemplate(t.id)}
             style={{
-              display: 'flex', alignItems: 'baseline', gap: 6, padding: `1px 8px 1px ${8 + depth * 16}px`, border: 0, borderRadius: 6,
-              background: selected ? 'var(--hw-tint)' : 'transparent', color: 'var(--hw-ink)', fontFamily: 'inherit', fontSize: 12,
-              textAlign: 'left', cursor: 'pointer', boxShadow: selected ? 'inset 2px 0 0 var(--hw-ink)' : 'none',
+              display: 'flex', flexDirection: 'column', gap: 6, padding: 8, borderRadius: 10, textAlign: 'left', cursor: 'pointer',
+              border: 0, boxShadow: active ? `inset 0 0 0 1.5px ${V.accent}` : `inset 0 0 0 .5px ${V.line2}`,
+              background: active ? V.accentTint : 'transparent', color: V.ink, fontFamily: 'inherit',
             }}
           >
-            {depth > 0 && <span aria-hidden style={{ color: 'var(--hw-faint)' }}>{last ? '└' : '├'}</span>}
-            <span>{label}</span>
-            {name && <strong style={{ color: plugin ? 'var(--hw-teal)' : 'var(--hw-ink)' }}>{name}</strong>}
-            <span style={{ color: 'var(--hw-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{describe(row)}</span>
+            <div aria-hidden="true" style={{ height: 52, display: 'flex', padding: 3, borderRadius: 6, background: V.paper }}>
+              <MiniPreview node={buildTemplate(t.id)} />
+            </div>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>{t.label}</span>
+            <span style={{ fontSize: 12, lineHeight: '16px', color: V.muted }}>{t.description}</span>
           </button>
         );
       })}
@@ -233,74 +287,69 @@ function SavedLayouts() {
   const rows = useShell((s) => s.rows);
   const device = useShell((s) => s.device);
   const name = useShell((s) => s.name);
-  const saveState = useShell((s) => s.saveState);
   const [newName, setNewName] = useState('');
-  const saved = rows.filter((r) => r.device === device);
+  const saved = savedLayoutsFor(rows, device);
   return (
-    <div style={{ ...ui.card, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-        <div style={ui.label}>Saved · {device}</div>
-        <span style={{ flex: 1 }} />
-        <span role="status" style={{ fontSize: 11, color: saveState === 'error' ? 'var(--hw-red)' : 'var(--hw-muted)' }}>
-          {saveState === 'error' ? 'Not saved — the server refused it' : saveState === 'idle' ? 'Saved' : 'Saving…'}
-        </span>
-      </div>
-      {saved.length === 0 && <span style={{ fontSize: 12, color: 'var(--hw-muted)' }}>Nothing saved for this device yet. Changes save automatically as “{name}”.</span>}
-      {saved.map((r) => (
-        <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
-          <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: r.name === name ? 600 : 400 }}>
-            {r.name}{r.is_active ? ' · active' : ''}
-          </span>
-          {r.name !== name && (
-            <button type="button" className="hw-btn" onClick={() => useShell.getState().applySaved(r)} style={{ ...ui.button, height: 26, fontSize: 12, padding: '0 8px' }}>{tr('editor.use', 'Use')}</button>
-          )}
-          <button type="button" className="hw-btn" aria-label={`Delete ${r.name}`} onClick={() => useShell.getState().deleteSaved(r)} style={{ ...ui.button, height: 26, fontSize: 12, padding: '0 8px' }}>{tr('editor.delete', 'Delete')}</button>
-        </div>
-      ))}
+    <>
       <form
         onSubmit={(e) => { e.preventDefault(); if (newName.trim()) { useShell.getState().saveAs(newName); setNewName(''); } }}
-        style={{ display: 'flex', gap: 6, marginTop: 4 }}
+        style={{ display: 'flex', gap: 6 }}
       >
         <input
           aria-label={tr('editor.saveAsLabel', 'Save the current layout as')}
           value={newName}
           maxLength={80}
-          placeholder={tr('editor.saveAsPlaceholder', 'Save current layout as…')}
+          placeholder={tr('editor.saveAsPlaceholder2', 'Name this layout')}
           onChange={(e) => setNewName(e.target.value)}
-          style={{ flex: 1, minWidth: 0, height: 28, padding: '0 8px', border: '1px solid var(--hw-border)', borderRadius: 6, background: 'var(--hw-surface)', color: 'var(--hw-ink)', fontFamily: 'inherit', fontSize: 12 }}
+          style={{ ...fieldStyle, flex: 1, minWidth: 0 }}
         />
-        <button type="submit" className="hw-btn" disabled={!newName.trim()} style={{ ...ui.primaryButton, height: 28, fontSize: 12 }}>{tr('editor.save', 'Save')}</button>
+        <Btn type="submit" accent disabled={!newName.trim()} style={{ opacity: newName.trim() ? 1 : 0.5 }}>{tr('editor.save', 'Save')}</Btn>
       </form>
-    </div>
+      {saved.length === 0
+        ? <span style={{ fontSize: 12, color: V.muted }}>{tr('editor.nothingSaved', 'Nothing saved on this {{device}} yet. Changes save automatically as “{{name}}”.', { device, name })}</span>
+        : (
+          <div role="list" aria-label={tr('editor.savedList', 'Saved layouts')} style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+            {saved.map((r) => (
+              <div key={r.id} role="listitem" style={{ display: 'flex', alignItems: 'center', gap: 6, minHeight: 32, padding: '0 4px 0 8px', borderRadius: 8, background: r.name === name ? V.select : 'transparent' }}>
+                <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13, fontWeight: r.name === name ? 600 : 400 }}>
+                  {r.name}
+                </span>
+                {r.name === name
+                  ? <span style={{ fontSize: 12, color: V.muted }}>{tr('editor.onScreen', 'on screen')}</span>
+                  : <Btn onClick={() => useShell.getState().applySaved(r)}>{tr('editor.use', 'Use')}</Btn>}
+                <IconButton icon="close" label={tr('editor.deleteNamed', 'Delete {{name}}', { name: r.name })} onClick={() => useShell.getState().deleteSaved(r)} style={{ color: V.muted }} />
+              </div>
+            ))}
+          </div>
+        )}
+    </>
   );
+}
+
+function SaveState() {
+  const saveState = useShell((s) => s.saveState);
+  const text = saveState === 'error' ? tr('editor.notSaved', 'Not saved — the server refused it')
+    : saveState === 'idle' ? tr('editor.saved', 'Saved') : tr('editor.saving', 'Saving…');
+  return <span role="status" style={{ fontSize: 12, color: saveState === 'error' ? V.red : V.muted, whiteSpace: 'nowrap' }}>{text}</span>;
 }
 
 export default function LayoutEditor() {
   useRegistryVersion();
   const tree = useShell((s) => s.tree);
   const name = useShell((s) => s.name);
-  const templateId = useShell((s) => s.templateId);
-  const device = useShell((s) => s.device);
+  const arrange = useShell((s) => s.arrange);
   const [selectedKey, setSelectedKey] = useState(null);
   const [message, setMessage] = useState(null);
   const fileRef = useRef(null);
-  const [vp, setVp] = useState({ w: window.innerWidth, h: window.innerHeight });
-
-  useEffect(() => {
-    const onResize = () => setVp({ w: window.innerWidth, h: window.innerHeight });
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, []);
 
   if (!tree) return null;
-  const rows = outlineRows(tree);
-  const selected = rows.find((r) => r.node.key === selectedKey) || null;
-  const density = tree.density || 'default';
+  const selected = outlineRows(tree).find((r) => r.node.key === selectedKey) || null;
+  const density = tree.density || null;
 
   const addView = (id) => {
     const target = selected?.node.key || tree.key;
     const node = M.view(id);
-    const dir = selected?.parent?.type === 'split' ? selected.parent.dir : 'row';
+    const dir = selected?.parent?.type === 'split' ? selected.parent.dir : (tree.type === 'split' ? tree.dir : 'row');
     useShell.getState().edit((t) => M.splitPane(t, target, dir, node));
     setSelectedKey(node.key);
   };
@@ -311,108 +360,101 @@ export default function LayoutEditor() {
     if (!file) return;
     try {
       const imported = await importLayoutFile(file);
-      setMessage({ ok: true, text: `Imported “${imported}”.` });
+      setMessage({ ok: true, text: tr('editor.imported', 'Imported “{{name}}”.', { name: imported }) });
     } catch (err) {
       setMessage({ ok: false, text: err.message });
     }
   };
 
-  const chips = listViews().filter((v) => !v.hidden).sort((a, b) => a.id.localeCompare(b.id));
+  const reset = () => { useShell.getState().applyTemplate(DEFAULT_TEMPLATE); setSelectedKey(null); };
 
   return (
-    <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', background: 'transparent', color: 'var(--hw-ink)', fontFamily: 'var(--hw-font-body)', fontSize: 13 }}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: '20px 24px 32px', minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
-          <h1 style={{ ...ui.display, margin: 0, fontSize: 20 }}>{tr('editor.title', 'Layouts')}</h1>
-          <span style={{ fontSize: 12, color: 'var(--hw-muted)' }}>{tr('editor.caption', 'A layout is a tree of panes; each pane hosts a view. Saved per device.')}</span>
+    <div className="hw-v2 hw-scroll" style={{ flex: 1, minHeight: 0, overflowY: 'auto', color: V.ink, fontFamily: V.sans, fontSize: 13 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 18, padding: '14px 16px 28px', minWidth: 0, maxWidth: 760 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
+          <h1 style={{ margin: 0, fontSize: 17, lineHeight: '22px', fontWeight: 600, letterSpacing: '-0.01em', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {tr('editor.heading', 'Customize “{{name}}”', { name })}
+          </h1>
           <span style={{ flex: 1 }} />
-          <input ref={fileRef} type="file" accept="application/json,.json" onChange={onImport} style={{ display: 'none' }} />
-          <button type="button" className="hw-btn" onClick={() => fileRef.current?.click()} style={ui.button}><Icon name="import" size={14} />{tr('editor.import', 'Import JSON')}</button>
-          <button type="button" className="hw-btn" onClick={exportCurrentLayout} style={ui.button}><Icon name="export" size={14} />{tr('editor.export', 'Export')}</button>
+          <SaveState />
         </div>
-        {message && <div role="status" style={{ fontSize: 12, color: message.ok ? 'var(--hw-teal-text)' : 'var(--hw-red)' }}>{message.text}</div>}
 
-        <section aria-label={tr('editor.templates', 'Templates')} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <div style={ui.label}>Templates · {device}</div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 10 }}>
-            {TEMPLATES.map((t) => {
-              const active = templateId === t.id && name === t.label;
-              return (
+        <Section label={tr('editor.startFrom', 'Start from')} action={<Btn onClick={reset}>{tr('editor.reset', 'Reset to Streams')}</Btn>}>
+          <StartFrom />
+        </Section>
+
+        <Section
+          label={tr('editor.panes', 'Panes')}
+          action={(
+            <MenuButton
+              label={tr('editor.addPane', 'Add pane')}
+              items={() => viewMenuItems(null, addView)}
+              align="right"
+              width={240}
+              buttonClassName="hw-btn"
+              buttonStyle={{ display: 'inline-flex', alignItems: 'center', gap: 6, height: 28, padding: '0 10px', borderRadius: 8, border: `1px solid ${V.line2}`, background: 'transparent', color: V.ink, fontFamily: 'inherit', fontSize: 13, fontWeight: 500, cursor: 'pointer' }}
+            >
+              <Icon name="plus" size={14} />{tr('editor.addPane', 'Add pane')}
+            </MenuButton>
+          )}
+        >
+          <div aria-hidden="true" style={{ aspectRatio: `${REF_W} / ${REF_H - 40}`, maxHeight: 220, display: 'flex', padding: 6, borderRadius: 10, background: V.paper }}>
+            <MiniPreview node={tree} labelled selectedKey={selectedKey} />
+          </div>
+          <PaneList tree={tree} selectedKey={selectedKey} onSelect={setSelectedKey} />
+          <span style={{ fontSize: 12, color: V.muted }}>
+            {tr('editor.panesHint', 'Select a pane to change its view or size. Drag a pane onto another to move it. New panes go beside the selected one.')}
+          </span>
+        </Section>
+
+        <Section label={tr('editor.display', 'Display')}>
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, fontSize: 13, cursor: 'pointer' }}>
+            <input type="checkbox" checked={arrange} onChange={() => useShell.getState().toggleArrange()} style={{ marginTop: 2 }} />
+            <span style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+              <span>{tr('editor.arrange', 'Arrange panes')}</span>
+              <span style={{ fontSize: 12, color: V.muted }}>{tr('editor.arrangeHint', 'Shows a header on every pane to change, split, pop out or close it in place.')}</span>
+            </span>
+          </label>
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, fontSize: 13, cursor: 'pointer' }}>
+            <input type="checkbox" checked={Boolean(tree.headers)} onChange={(e) => useShell.getState().edit((t) => M.setMeta(t, { headers: e.target.checked || null }))} style={{ marginTop: 2 }} />
+            <span>{tr('editor.headers', 'Always show pane headers')}</span>
+          </label>
+          <div role="radiogroup" aria-label={tr('editor.density', 'Row density')} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 13, width: 96 }}>{tr('editor.density', 'Row density')}</span>
+            <div style={{ display: 'flex', gap: 2, padding: 2, borderRadius: 8, background: V.field }}>
+              {[[null, tr('editor.densityDefault', 'Default')], ['compact', tr('editor.compact', 'Compact')], ['comfortable', tr('editor.comfortable', 'Comfortable')], ['spacious', tr('editor.spacious', 'Spacious')]].map(([d, label]) => (
                 <button
-                  key={t.id}
+                  key={d || 'default'}
                   type="button"
-                  aria-pressed={active}
-                  onClick={() => { useShell.getState().applyTemplate(t.id); setSelectedKey(null); }}
+                  role="radio"
+                  aria-checked={density === d}
+                  onClick={() => useShell.getState().edit((t) => M.setMeta(t, { density: d }))}
                   style={{
-                    display: 'flex', flexDirection: 'column', gap: 8, padding: 10, borderRadius: 8, textAlign: 'left', cursor: 'pointer',
-                    border: `1px solid ${active ? 'var(--hw-accent)' : 'var(--hw-border)'}`, boxShadow: active ? 'inset 0 0 0 1px var(--hw-accent)' : 'none',
-                    background: 'var(--hw-surface)', color: 'var(--hw-ink)', fontFamily: 'inherit',
+                    height: 24, padding: '0 10px', border: 0, borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit', fontSize: 12,
+                    fontWeight: density === d ? 600 : 500, color: V.ink,
+                    background: density === d ? V.content : 'transparent',
+                    boxShadow: density === d ? `0 0 0 .5px ${V.line2}, 0 1px 2px rgba(0,0,0,.08)` : 'none',
                   }}
                 >
-                  <div aria-hidden style={{ height: 64, display: 'flex', padding: 4, borderRadius: 6, background: 'var(--hw-raised)' }}>
-                    <MiniPreview node={buildTemplate(t.id)} />
-                  </div>
-                  <span style={{ fontSize: 13, fontWeight: 600 }}>{t.label}</span>
-                  <span style={{ fontSize: 11, color: 'var(--hw-muted)' }}>{t.note}</span>
-                </button>
-              );
-            })}
-          </div>
-        </section>
-
-        <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-          <div style={{ flex: '1 1 340px', maxWidth: 420, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-              <h2 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>Tree · {name}</h2>
-              <span style={{ fontSize: 12, color: 'var(--hw-muted)' }}>{tr('editor.treeHint', 'drag to reorder · split any pane')}</span>
-            </div>
-            <Outline tree={tree} selectedKey={selectedKey} onSelect={setSelectedKey} />
-            <div style={{ ...ui.card, padding: '12px 14px' }}>
-              <div style={{ ...ui.label, marginBottom: 8 }}>{selected ? `Selected · ${selected.node.type === 'view' ? selected.node.id : selected.node.type}` : 'Selected pane'}</div>
-              <SelectedControls row={selected} />
-            </div>
-            <div style={{ ...ui.card, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <div style={ui.label}>{tr('editor.addView', 'Add a view')}</div>
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                {chips.map((v) => (
-                  <button
-                    key={v.id}
-                    type="button"
-                    className="hw-chip"
-                    onClick={() => addView(v.id)}
-                    title={`${v.title || v.id} — add ${selected ? 'next to the selected pane' : 'to the layout'}`}
-                    style={{ ...ui.chip(false), padding: '4px 9px', borderColor: v.pluginId ? 'var(--hw-teal)' : 'var(--hw-border)', color: v.pluginId ? 'var(--hw-teal-text)' : 'var(--hw-ink)' }}
-                  >
-                    {v.id}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div role="group" aria-label={tr('editor.density', 'Density')} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--hw-muted)', flexWrap: 'wrap' }}>
-              <span>{tr('editor.density', 'Density')}</span>
-              {['compact', 'comfortable', 'spacious'].map((d) => (
-                <button key={d} type="button" aria-pressed={density === d} className="hw-chip" onClick={() => useShell.getState().edit((t) => M.setMeta(t, { density: density === d ? null : d }))} style={{ ...ui.chip(density === d), padding: '2px 8px' }}>
-                  {d}
+                  {label}
                 </button>
               ))}
             </div>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--hw-muted)' }}>
-              <input type="checkbox" checked={Boolean(tree.headers)} onChange={(e) => useShell.getState().edit((t) => M.setMeta(t, { headers: e.target.checked || null }))} />
-              {tr('editor.headers', 'Always show pane headers')}
-            </label>
-            <SavedLayouts />
           </div>
+        </Section>
 
-          <div style={{ flex: '2 1 420px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-              <h2 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>{tr('editor.preview', 'Preview')}</h2>
-              <span style={{ fontSize: 12, color: 'var(--hw-muted)' }}>{vp.w} × {vp.h} · {device}</span>
-            </div>
-            <div aria-hidden style={{ aspectRatio: `${vp.w} / ${Math.max(1, vp.h - 48)}`, maxHeight: 560, display: 'flex', padding: 8, borderRadius: 12, background: 'var(--hw-raised)', border: '1px solid var(--hw-border)' }}>
-              <MiniPreview node={tree} labelled selectedKey={selectedKey} />
-            </div>
+        <Section label={tr('editor.saveSection', 'Save')}>
+          <SavedLayouts />
+        </Section>
+
+        <Section label={tr('editor.share', 'Export and import')}>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+            <input ref={fileRef} type="file" accept="application/json,.json" onChange={onImport} style={{ display: 'none' }} />
+            <Btn onClick={exportCurrentLayout}><Icon name="export" size={14} />{tr('editor.exportJson', 'Export as JSON')}</Btn>
+            <Btn onClick={() => fileRef.current?.click()}><Icon name="import" size={14} />{tr('editor.importJson', 'Import JSON…')}</Btn>
           </div>
-        </div>
+          {message && <span role="status" style={{ fontSize: 12, color: message.ok ? V.muted : V.red }}>{message.text}</span>}
+        </Section>
       </div>
     </div>
   );

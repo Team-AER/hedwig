@@ -1,12 +1,16 @@
 // Renders the registered view for a pane (or the overlay, a pop-out, a phone screen), with a
 // quiet placeholder when the view is missing or its feature is off, and an error boundary so a
 // failing view never takes the rest of the layout down with it.
+// A pane that follows the v2 reader (`follows: 'hedwig.thread'`, the context card in Triage) is
+// given the open conversation's messageId and mounted afresh when it changes, so it shows the
+// person of the thread on screen rather than upstream's selection.
 import { Component } from 'react';
 import { getView } from '../registry.js';
 import { useHedwig } from '../store.js';
 import { Icon } from '../icons.jsx';
 import { ui } from '../theme/styles.js';
 import { useShell } from './state.js';
+import { useV2 } from '../v2/state.js';
 import { useRegistryVersion } from './useRegistry.js';
 import { viewMenuItems } from './viewMenu.js';
 import { MenuButton } from './Menu.jsx';
@@ -70,6 +74,7 @@ export function ViewHost({ paneKey, viewId, props, follows, onChangeView }) {
   const settled = useShell((s) => s.pluginsSettled);
   const status = useHedwig((s) => s.status);
   const view = getView(viewId);
+  const followed = useV2((s) => (follows === 'hedwig.thread' ? (s.selected?.messageId || null) : null));
 
   let body;
   if (!view) {
@@ -97,7 +102,9 @@ export function ViewHost({ paneKey, viewId, props, follows, onChangeView }) {
     const ViewComponent = view.component;
     body = (
       <PaneBoundary key={viewId} viewId={viewId} title={view.title || viewId}>
-        <ViewComponent paneId={paneKey} props={props || EMPTY} follows={follows} />
+        {followed
+          ? <ViewComponent key={followed} paneId={paneKey} props={{ ...(props || EMPTY), messageId: followed }} follows={follows} />
+          : <ViewComponent paneId={paneKey} props={props || EMPTY} follows={follows} />}
       </PaneBoundary>
     );
   }

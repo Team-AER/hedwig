@@ -22,12 +22,12 @@ export async function markRead(ids) {
  * Done: archive the thread's messages that are in the inbox. Only rows upstream returned for this
  * thread are touched, and only INBOX copies (never Sent or anything already filed).
  */
-export async function archiveThread(messages) {
+export async function archiveThread(messages, { quiet = false } = {}) {
   const ids = (messages || []).filter((m) => m?.id && (m.folder === undefined || m.folder === 'INBOX')).map((m) => m.id);
-  if (isMockMode()) { notify('success', tv('hedwig.v2.thread.doneToast', 'Done. Archived.')); announceSortChange({ done: ids }); return; }
+  if (isMockMode()) { if (!quiet) notify('success', tv('hedwig.v2.thread.doneToast', 'Done. Archived.')); announceSortChange({ done: ids }); return; }
   if (!ids.length) return;
   await api.bulkArchive(ids);
-  notify('success', tv('hedwig.v2.thread.doneToast', 'Done. Archived.'));
+  if (!quiet) notify('success', tv('hedwig.v2.thread.doneToast', 'Done. Archived.'));
   announceSortChange({ done: ids });
 }
 
@@ -46,13 +46,13 @@ export function snoozeTimes(now = new Date()) {
  * Snooze through POST /work/snooze when the work routes are there (it snoozes upstream and keeps
  * the thread out of People until then), otherwise upstream's own snooze route.
  */
-export async function snooze(messageId, until, threadId) {
+export async function snooze(messageId, until, threadId, { quiet = false } = {}) {
   if (useV2.getState().caps.work === true) {
     await v2Api.post('/work/snooze', { ...(messageId ? { messageId } : { threadId }), until: until.toISOString() });
   } else if (!isMockMode()) {
     await api.snoozeMessage(messageId, until.toISOString());
   }
-  notify('success', tv('hedwig.v2.snooze.done', 'Snoozed until {{when}}.', { when: until.toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' }) }));
+  if (!quiet) notify('success', tv('hedwig.v2.snooze.done', 'Snoozed until {{when}}.', { when: until.toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' }) }));
   announceSortChange({ snoozed: messageId });
 }
 
@@ -61,11 +61,11 @@ export const LIST_KIND = { replyLater: 'reply_later', setAside: 'set_aside', sno
 const kindOf = (list) => LIST_KIND[list] || list;
 
 /** Reply Later / Set Aside: POST /work/lists/:kind { threadId }. */
-export async function addToList(list, threadId, extra = {}) {
+export async function addToList(list, threadId, extra = {}, { quiet = false } = {}) {
   if (!threadId) return;
   const res = await v2Api.post(`/work/lists/${encodeURIComponent(kindOf(list))}`, { threadId, ...extra });
   if (res?.counts) useV2.getState().applyListCounts(res.counts);
-  notify('success', list === 'replyLater'
+  if (!quiet) notify('success', list === 'replyLater'
     ? tv('hedwig.v2.list.addedReplyLater', 'Added to Reply Later.')
     : tv('hedwig.v2.list.addedSetAside', 'Set aside.'));
   announceSortChange({ list, threadId });

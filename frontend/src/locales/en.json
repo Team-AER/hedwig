@@ -1796,10 +1796,8 @@
         "accounts": "{{n}} accounts",
         "accountsFailing": "{{n}} of {{total}} need attention",
         "brief": "Daily Brief",
-        "hedwigSettings": "Hedwig settings",
         "label": "Streams",
         "mailSettings": "Mail settings",
-        "more": "Layout and settings",
         "palette": "Open the command palette",
         "replyLater": "Reply Later",
         "screener": "Screener",
@@ -1827,8 +1825,7 @@
       "scheme": {
         "auto": "Auto",
         "dark": "Dark",
-        "light": "Light",
-        "menu": "Light or dark: {{scheme}}"
+        "light": "Light"
       },
       "screener": {
         "accept": "Accept: {{stream}}",

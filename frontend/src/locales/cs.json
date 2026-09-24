@@ -1815,10 +1815,8 @@
         "accounts": "Účty: {{n}}",
         "accountsFailing": "Pozornost potřebuje: {{n}} z {{total}}",
         "brief": "Denní přehled",
-        "hedwigSettings": "Nastavení Hedwiga",
         "label": "Proudy",
         "mailSettings": "Nastavení pošty",
-        "more": "Rozvržení a nastavení",
         "palette": "Otevřít paletu příkazů",
         "replyLater": "Odpovědět později",
         "screener": "Síto",
@@ -1846,8 +1844,7 @@
       "scheme": {
         "auto": "Automaticky",
         "dark": "Tmavé",
-        "light": "Světlé",
-        "menu": "Světlé nebo tmavé: {{scheme}}"
+        "light": "Světlé"
       },
       "screener": {
         "accept": "Přijmout: {{stream}}",

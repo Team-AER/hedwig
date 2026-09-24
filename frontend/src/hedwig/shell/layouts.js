@@ -1,6 +1,6 @@
 // Layout selection rules, kept pure so they are testable: which device class a width is, and
 // which layout to show given the saved rows from GET /api/hedwig/layouts.
-import { normalise, validTree, listPanes, LAYOUT_VERSION } from './model.js';
+import { normalise, validTree, listPanes, findNode, LAYOUT_VERSION } from './model.js';
 import { buildTemplate, getTemplate, DEFAULT_TEMPLATE } from './templates.js';
 
 export const PHONE_MAX = 768;
@@ -30,7 +30,23 @@ const V2_VIEW = /^hedwig\.(rail|stream\.|screener$|thread$|brief$|today$|list$|l
 export function isPreV2Layout(tree) {
   if (!tree || typeof tree !== 'object') return false;
   if (Number.isInteger(tree.version) && tree.version >= LAYOUT_VERSION) return false;
-  return !listPanes(tree, false).some((p) => V2_VIEW.test(p.node.id));
+  return !hasHedwigViews(tree);
+}
+
+/** Whether a tree holds any of the v2 views (the rail, a stream, the reader…). */
+export function hasHedwigViews(tree) {
+  if (!tree || typeof tree !== 'object') return false;
+  return listPanes(tree, false).some((p) => V2_VIEW.test(p.node.id));
+}
+
+/**
+ * A saved row that is really the classic MailFlow shell in panes: the pre-v2 layout kept as
+ * "Classic", or an upstream preset saved under its name (folders, the classic list and reader, no
+ * Hedwig view). The View menu offers the classic shell itself instead of these.
+ */
+export function isClassicRow(row) {
+  if (!row?.tree) return false;
+  return row.name === CLASSIC_NAME || !hasHedwigViews(row.tree);
 }
 
 // { name, tree, templateId, source, classic? } for the layout to show.
@@ -63,7 +79,28 @@ export function templateIdForName(name) {
   return t ? t.id : null;
 }
 
-// Rows for the layout switcher: this device's saved layouts, newest first.
+// Rows for the layout editor: this device's saved layouts, newest first.
 export function savedLayoutsFor(rows, device) {
   return rowsFor(rows, device).sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')));
+}
+
+// Rows for the View menu's "Saved" section: only layouts the user made (saved under a name of their
+// own in the layout editor, or imported). The rows the shell keeps under a template's name (the
+// active Streams, Triage…) and the classic-shell rows are left out.
+export function customLayoutsFor(rows, device) {
+  return savedLayoutsFor(rows, device).filter((r) => !getTemplate(String(r.name || '').toLowerCase()) && !isClassicRow(r));
+}
+
+/**
+ * The "list slot" of a layout with the rail: the pane right after the rail, unless it is the
+ * reader. In Research that is Ask, so a rail click on People or the Brief shows it there (as in
+ * Streams) instead of in a drawer over the reader. Null when there is no rail or no such pane.
+ */
+export function listSlot(tree) {
+  if (!tree) return null;
+  const rail = listPanes(tree).find((p) => p.visible && p.node.id === 'hedwig.rail');
+  if (!rail) return null;
+  const hit = findNode(tree, rail.node.key);
+  const next = hit?.parent?.type === 'split' ? hit.parent.children[hit.index + 1] : null;
+  return next?.type === 'view' && next.id !== 'hedwig.thread' ? next.key : null;
 }

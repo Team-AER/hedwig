@@ -313,6 +313,16 @@ describe('message body rendering', () => {
     assert.match(frame?.getAttribute('srcdoc') ?? '', /Hello from HTML/, 'body must be handed to the frame');
   });
 
+  test('the frame sends no referrer, so hotlink-protected newsletter images load', async () => {
+    // The Ken's images sit behind Cloudflare hotlink protection (error 1011): a request that
+    // carries a foreign Referer gets 403, one with none gets the image. Apple Mail and Gmail's
+    // proxy send none either; this is also what keeps the mailbox origin out of image logs.
+    await open('h1');
+    const frame = document.querySelector('iframe');
+    assert.equal(frame?.getAttribute('referrerpolicy'), 'no-referrer');
+    assert.match(frame?.getAttribute('srcdoc') ?? '', /<meta name="referrer" content="no-referrer">/);
+  });
+
   test('the frame is sandboxed and scripts are not allowed to run', async () => {
     // The body is attacker-controlled. Whatever else the extraction changes, it must not
     // loosen this.

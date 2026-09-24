@@ -560,6 +560,40 @@ const THREADS = {
   },
 };
 
+// A thread whose newest message is a saved draft (in acc-work's Drafts folder): the reader shows
+// it as a draft block with Edit draft, and the reply bar as Continue draft.
+THREADS['t-lease'] = {
+  subject: 'Lease renewal: two options',
+  label: 'Home',
+  participants: 'Marcus Oduya and you',
+  messages: [
+    { id: 'm-lease-1', from: { name: 'Marcus Oduya', email: 'marcus@oduya-lettings.example' }, to: 'you', date: daysAgoAt(3, 14, 5), folder: 'INBOX', accountId: ACCOUNT_WORK,
+      text: 'Hi, your lease ends in November. Would you like a 12-month renewal at the same rent, or 24 months with a 2% increase?' },
+    { id: 'm-lease-draft', uid: 41, folder: 'Drafts', accountId: ACCOUNT_WORK, from: { name: 'You', email: 'me@example.org' }, to: 'Marcus Oduya', date: todayAt(8, 15),
+      subject: 'Re: Lease renewal: two options', to_addresses: [{ name: 'Marcus Oduya', address: 'marcus@oduya-lettings.example' }],
+      text: 'Hi Marcus, the 12-month renewal works for me. Could we' },
+  ],
+  story: null,
+  deadline: null,
+  quickReplies: [],
+};
+
+// Upstream rows in acc-work's Drafts folder (GET /mail/messages?folder=Drafts), newest first.
+function mockDrafts() {
+  return [
+    { id: 'd-1', uid: 41, folder: 'Drafts', account_id: ACCOUNT_WORK, subject: 'Re: Lease renewal: two options', date: todayAt(8, 15),
+      from_name: 'You', from_email: 'me@example.org', to_addresses: [{ name: 'Marcus Oduya', address: 'marcus@oduya-lettings.example' }], cc_addresses: [],
+      snippet: 'Hi Marcus, the 12-month renewal works for me. Could we', is_read: true },
+    { id: 'd-2', uid: 40, folder: 'Drafts', account_id: ACCOUNT_WORK, subject: '', date: daysAgoAt(2, 18, 30),
+      from_name: 'You', from_email: 'me@example.org', to_addresses: [], cc_addresses: [], snippet: 'Ideas for the offsite: a morning walk, then', is_read: true },
+  ];
+}
+const MOCK_BODIES = {
+  'd-1': { html: '<p>Hi Marcus, the 12-month renewal works for me. Could we</p>', text: 'Hi Marcus, the 12-month renewal works for me. Could we' },
+  'd-2': { html: null, text: 'Ideas for the offsite: a morning walk, then' },
+  'm-lease-draft': { html: '<p>Hi Marcus, the 12-month renewal works for me. Could we</p>', text: 'Hi Marcus, the 12-month renewal works for me. Could we' },
+};
+
 function threadFor(threadId) {
   if (THREADS[threadId]) return THREADS[threadId];
   const it = ALL_ITEMS().find((i) => i.threadId === threadId || i.messageId === threadId);
@@ -966,6 +1000,23 @@ function route(method, path, body) {
     const t = threadFor(decodeURIComponent(seg[2]));
     if (!t) throw notFound();
     return { subject: t.subject, label: t.label || null, participants: t.participants || null, messages: clone(t.messages) };
+  }
+
+  // Stand-ins for upstream's folder list, folder messages and message body (the Drafts view).
+  if (method === 'GET' && seg[0] === 'mock' && seg[1] === 'folders' && seg[2]) {
+    const id = decodeURIComponent(seg[2]);
+    return id === ACCOUNT_WORK
+      ? [{ path: 'INBOX', name: 'INBOX', special_use: null }, { path: 'Drafts', name: 'Drafts', special_use: '\\Drafts' }, { path: 'Sent', name: 'Sent', special_use: '\\Sent' }]
+      : [{ path: 'INBOX', name: 'INBOX', special_use: null }];
+  }
+  if (method === 'GET' && seg[0] === 'mock' && seg[1] === 'messages') {
+    const rows = mockDrafts().filter((m) => m.account_id === params.get('accountId') && m.folder === params.get('folder'));
+    return { messages: rows, total: rows.length };
+  }
+  if (method === 'GET' && seg[0] === 'mock' && seg[1] === 'body' && seg[2]) {
+    const b = MOCK_BODIES[decodeURIComponent(seg[2])];
+    if (!b) throw notFound();
+    return { ...clone(b), attachments: [] };
   }
 
   // onboarding/routing.js GET /routing: the table for everyone, read-only, with this person's tokens today.

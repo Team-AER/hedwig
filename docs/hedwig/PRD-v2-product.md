@@ -17,7 +17,7 @@ Hedwig is for two people at once: the one who wants mail to just be sorted, and 
 1. **Decide, then explain.** Hedwig acts on its own for sorting, bundling and screening, and always shows the reason. Actions that change mail (send, delete, move to spam) wait for the user unless they have opted in.
 2. **Every correction teaches.** Changing a decision creates a rule, a training label, or both. The user never has to say the same thing twice.
 3. **Small model always, big model rarely.** A small local model reads every message. The large model is called for questions, drafts and hard cases only, on a budget.
-4. **Nothing is lost, nothing is silent.** Mail is never deleted by Hedwig. Every AI job is visible, retryable, and versioned so it can be redone.
+4. **Nothing is lost, nothing is silent.** Hedwig never deletes on its own; the owner can delete (to Trash) and undo. Every AI job is visible, retryable, and versioned so it can be redone.
 5. **The mailbox is the source of truth.** Hedwig's sorting lives in its own tables and can be rebuilt from IMAP at any time. Leaving Hedwig loses nothing.
 6. **Simple has no settings; Power has all of them.** Any feature must work with zero configuration and expose every knob.
 
@@ -206,7 +206,7 @@ Hedwig blocks what watches you and learns what you consider junk. The server's s
 
 **Spam rescue.** Hedwig reads the server's spam folder too (786 messages today). Anything that looks legitimate, such as a sender you have replied to, a passing DMARC check, a personal message, an order you placed, appears in a **Rescued** view and in the Screener as "in spam but looks real". One tap moves it to its stream and marks the sender as trusted; "always" adds a rule. At Sort the past, the count is shown up front ("786 in spam, about 30 look real").
 
-**Actions.** By default Hedwig marks suspected spam and leaves it in a **Suspected** view for 30 days, and suggests rescues rather than moving them. Auto-moving in either direction is opt-in with a confidence threshold, a log, and one-tap undo. Hedwig never deletes.
+**Actions.** By default Hedwig marks suspected spam and leaves it in a **Suspected** view for 30 days, and suggests rescues rather than moving them. Auto-moving in either direction is opt-in with a confidence threshold, a log, and one-tap undo. Hedwig never deletes on its own; the owner can delete (to Trash) and undo.
 
 **Blocked senders.** Blocking hides a sender forever without unsubscribing or bouncing. Blocks apply to address, domain or list, and are listed under Screener with an unblock button.
 

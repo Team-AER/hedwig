@@ -7,14 +7,18 @@ import {
   addTab, setActiveTab, reveal, setMeta, setDirection, parseLayoutJson, exportLayoutJson, treeDepth,
   MIN_PANE_PX, MAX_SPLIT_CHILDREN,
 } from './model.js';
-import { TEMPLATES, buildTemplate, getTemplate } from './templates.js';
-import { deviceClass, pickLayout, templateIdForName, isPreV2Layout, CLASSIC_NAME } from './layouts.js';
+import { TEMPLATES, HEDWIG_TEMPLATES, buildTemplate, getTemplate } from './templates.js';
+import { deviceClass, pickLayout, templateIdForName, isPreV2Layout, isClassicRow, customLayoutsFor, listSlot, CLASSIC_NAME } from './layouts.js';
 import { parseKeys, chordFromEvent, upstreamConflict, createMatcher, normaliseChord } from './keymap.js';
 import { filterPalette, paletteMatches } from './paletteMatch.js';
 import { buildKeyMap, buildModKeyMap } from '../../utils/defaultShortcuts.js';
 
 const ids = (tree) => listPanes(tree).map((p) => p.node.id);
 const three = () => normalise(split('row', [view('core.nav'), view('core.list'), view('core.thread')], [220, 360, null]));
+// The v1 Triage layout accounts created before v2 have saved (upstream folders in a pane, no v2 view).
+const v1Triage = () => normalise(split('row', [
+  view('core.nav'), view('hedwig.needs'), view('core.thread'), view('hedwig.context', { follows: 'core.thread' }),
+], [220, 420, null, 320]));
 
 describe('validTree mirrors the backend validator', () => {
   it('accepts views, splits and tabs', () => {
@@ -207,15 +211,15 @@ describe('sizes', () => {
     const t = buildTemplate('triage');
     const moved = resizeChild(t, t.key, 1, 600);
     assert.equal(moved.sizes[1], 600);
-    assert.equal(resetSize(moved, moved.key, 1).sizes[1], 420);
+    assert.equal(resetSize(moved, moved.key, 1).sizes[1], 340);
   });
 
   it('keeps defaults aligned when panes are added and removed', () => {
     const t = buildTemplate('triage');
     const added = splitPane(t, t.children[0].key, 'row', view('x'));
-    assert.deepEqual(added.defaults, [220, null, 420, null, 320]);
+    assert.deepEqual(added.defaults, [224, null, 340, null, 280]);
     const removed = closePane(added, added.children[1].key);
-    assert.deepEqual(removed.defaults, [220, 420, null, 320]);
+    assert.deepEqual(removed.defaults, [224, 340, null, 280]);
   });
 });
 
@@ -301,7 +305,7 @@ describe('settings and JSON', () => {
     assert.equal(name, 'Mine');
     assert.deepEqual(ids(tree), ids(t));
     assert.notEqual(tree.key, t.key);
-    assert.equal(tree.children[3].follows, 'core.thread');
+    assert.equal(tree.children[3].follows, 'hedwig.thread');
   });
 
   it('imports a bare tree and rejects junk', () => {
@@ -312,17 +316,47 @@ describe('settings and JSON', () => {
 });
 
 describe('templates', () => {
-  it('triage matches the spec', () => {
+  it('triage is rail · People · reader · context following the reader', () => {
     const t = buildTemplate('triage');
-    assert.deepEqual(ids(t), ['core.nav', 'hedwig.needs', 'core.thread', 'hedwig.context']);
-    assert.deepEqual(t.sizes, [220, 420, null, 320]);
-    assert.equal(t.children[3].follows, 'core.thread');
+    assert.deepEqual(ids(t), ['hedwig.rail', 'hedwig.stream.people', 'hedwig.thread', 'hedwig.context']);
+    assert.deepEqual(t.sizes, [224, 340, null, 280]);
+    assert.equal(t.children[3].follows, 'hedwig.thread');
   });
 
-  it('research matches the spec', () => {
+  it('research is rail · Ask · reader', () => {
     const t = buildTemplate('research');
-    assert.deepEqual(ids(t), ['hedwig.ask', 'hedwig.timeline']);
-    assert.deepEqual(t.sizes, [640, null]);
+    assert.deepEqual(ids(t), ['hedwig.rail', 'hedwig.ask', 'hedwig.thread']);
+    assert.deepEqual(t.sizes, [224, 520, null]);
+  });
+
+  it('every Hedwig layout has the rail (the way back) and the reader, and no upstream pane', () => {
+    assert.deepEqual(HEDWIG_TEMPLATES.map((t) => t.id), ['streams', 'triage', 'research']);
+    for (const t of HEDWIG_TEMPLATES) {
+      const got = ids(buildTemplate(t.id));
+      assert.equal(got[0], 'hedwig.rail', `${t.id} starts with the rail`);
+      assert.ok(got.includes('hedwig.thread'), `${t.id} has the reader`);
+      assert.ok(!got.some((id) => id.startsWith('core.')), `${t.id} mixes in an upstream pane`);
+      assert.ok(t.description, `${t.id} has a description`);
+    }
+  });
+
+  it('leaves the reader at least 330px at 1280 and 480px at 1440 (8px gutter and gaps)', () => {
+    for (const t of HEDWIG_TEMPLATES) {
+      const tree = buildTemplate(t.id);
+      const fixed = tree.sizes.reduce((sum, px) => sum + (px || 0), 0);
+      const gaps = 8 * (tree.children.length - 1) + 16;
+      assert.ok(1280 - gaps - fixed >= 330, `${t.id} at 1280: ${1280 - gaps - fixed}px`);
+      assert.ok(1440 - gaps - fixed >= 480, `${t.id} at 1440: ${1440 - gaps - fixed}px`);
+    }
+  });
+
+  it('the list slot is the pane after the rail, never the reader', () => {
+    const research = buildTemplate('research');
+    assert.equal(listSlot(research), research.children[1].key, 'Ask takes the stream a rail click asks for');
+    const streams = buildTemplate('streams');
+    assert.equal(listSlot(streams), streams.children[1].key);
+    assert.equal(listSlot(normalise(split('row', [view('hedwig.rail'), view('hedwig.thread')]))), null);
+    assert.equal(listSlot(three()), null, 'no rail, no slot');
   });
 
   it('reproduces upstream presets', () => {
@@ -366,7 +400,7 @@ describe('layout selection', () => {
   });
 
   it('lets a tablet borrow the desktop layout, then falls back to the default template', () => {
-    const rows = [{ name: 'Triage', device: 'desktop', tree: { ...buildTemplate('triage'), version: 2 }, is_active: true }];
+    const rows = [{ name: 'Triage', device: 'desktop', tree: { ...v1Triage(), version: 2 }, is_active: true }];
     assert.equal(pickLayout(rows, 'tablet', 'research').name, 'Triage');
     assert.equal(pickLayout(rows, 'tablet', 'research').templateId, 'triage');
     const fresh = pickLayout([], 'desktop', 'research');
@@ -377,7 +411,7 @@ describe('layout selection', () => {
 
   it('moves a layout saved before v2 to the streams template once, keeping it as Classic', () => {
     // What an account created before v2 has: the v1 Triage layout, the upstream folder sidebar in a pane.
-    const v1 = JSON.parse(JSON.stringify(buildTemplate('triage')));
+    const v1 = JSON.parse(JSON.stringify(v1Triage()));
     const rows = [{ id: 7, name: 'Triage', device: 'desktop', tree: v1, is_active: true }];
     const got = pickLayout(rows, 'desktop', 'triage');
     assert.equal(got.source, 'migrate');
@@ -416,6 +450,21 @@ describe('layout selection', () => {
   it('skips a saved layout that no longer validates', () => {
     const rows = [{ name: 'Broken', device: 'desktop', tree: { type: 'split', dir: 'row', children: [] }, is_active: true }];
     assert.equal(pickLayout(rows, 'desktop', 'compact').templateId, 'compact');
+  });
+
+  it('offers only the layouts the user made under Saved; Classic and template rows are not layouts', () => {
+    const rows = [
+      { id: 1, name: 'Streams', device: 'desktop', tree: buildTemplate('streams'), is_active: true, updated_at: '2026-09-24T10:00:00Z' },
+      { id: 2, name: CLASSIC_NAME, device: 'desktop', tree: { ...v1Triage(), version: 2 }, updated_at: '2026-09-24T09:00:00Z' },
+      { id: 3, name: 'Focused', device: 'desktop', tree: { ...buildTemplate('focused'), version: 2 }, updated_at: '2026-09-24T08:00:00Z' },
+      { id: 4, name: 'Mine', device: 'desktop', tree: buildTemplate('research'), updated_at: '2026-09-24T07:00:00Z' },
+      { id: 5, name: 'Old panes', device: 'desktop', tree: three(), updated_at: '2026-09-24T06:00:00Z' },
+      { id: 6, name: 'Phone one', device: 'phone', tree: buildTemplate('streams'), updated_at: '2026-09-24T05:00:00Z' },
+    ];
+    assert.equal(isClassicRow(rows[1]), true);
+    assert.equal(isClassicRow(rows[4]), true, 'folders, list and reader with no Hedwig view is the classic shell');
+    assert.equal(isClassicRow(rows[3]), false);
+    assert.deepEqual(customLayoutsFor(rows, 'desktop').map((r) => r.name), ['Mine']);
   });
 
   it('maps saved names back to templates', () => {

@@ -1,15 +1,15 @@
 // The desktop rail (DESIGN-AUDIT-2026-09-24 §a): the owl and "Hedwig" with New message, then only
 // places: the streams with glyphs and counts (the Records ledgers under Records), "Later" (Reply
-// Later, Set Aside, Snoozed, Waiting on) and "Hedwig" (Daily Brief, Today, Settings). The footer
-// is the account line and one quiet status line: sync, or the tier note while a model tier is
-// degraded. Search lives in the list header, what Hedwig did today at the top of Today, and Power
-// in Settings and the palette. It is a pane view like any other, so the pane tree can move or drop it.
+// Later, Set Aside, Snoozed, Waiting on when the work routes are there; Drafts always, with its
+// count) and "Hedwig" (Daily Brief, Today, Settings). The footer is the account line and one
+// quiet status line: sync, or the tier note while a model tier is degraded. Search lives in the
+// list header, what Hedwig did today at the top of Today, and Power in Settings and the palette.
+// It is a pane view like any other, so the pane tree can move or drop it.
 import { useEffect, useState } from 'react';
 import { useStore } from '../../store/index.js';
 import { useHedwig } from '../store.js';
 import { useShell } from '../shell/state.js';
-import { layoutMenuItems } from '../shell/TopBar.jsx';
-import { MenuButton } from '../shell/Menu.jsx';
+import { ViewMenuButton } from '../shell/TopBar.jsx';
 import { Icon, OwlMark } from '../icons.jsx';
 import { useV2, countText } from './state.js';
 import { useWork } from './hooks.js';
@@ -154,10 +154,6 @@ export default function Rail() {
   const more = useV2((s) => s.countsMore);
   const work = useWork();
   const power = useV2((s) => s.prefs.powerMode);
-  // No explicit choice yet: show (and cycle from) what the saved theme is.
-  const schemeChoice = useV2((s) => s.scheme);
-  const theme = useStore((s) => s.theme);
-  const scheme = schemeChoice || (theme === 'hedwig-night' ? 'dark' : 'light');
   const tree = useShell((s) => s.tree);
   const current = currentMainView(tree);
   const on = (id, list) => current?.id === id && (!list || current.props?.list === list);
@@ -166,28 +162,12 @@ export default function Rail() {
   const compose = () => { const st = useStore.getState(); st.openCompose?.({ accountId: st.selectedAccountId || undefined }); };
   const openSettings = () => useHedwig.getState().openView('hedwig.settings.personal');
 
-  const moreItems = () => [
-    ...layoutMenuItems(),
-    { type: 'separator' },
-    { id: 'scheme', label: tv('hedwig.v2.scheme.menu', 'Light or dark: {{scheme}}', { scheme: schemeLabel(scheme) }), hint: schemeLabel(nextScheme(scheme)), onSelect: () => useV2.getState().setScheme(nextScheme(scheme)) },
-    { id: 'hedwig-settings', label: tv('hedwig.v2.rail.hedwigSettings', 'Hedwig settings'), icon: 'settings', onSelect: openSettings },
-    { id: 'mail-settings', label: tv('hedwig.v2.rail.mailSettings', 'Mail settings'), icon: 'settings', onSelect: () => useStore.getState().setShowAdmin?.(true) },
-  ];
-
   return (
     <nav aria-label={tv('hedwig.v2.rail.label', 'Streams')} className="hw-v2" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', color: V.ink, fontFamily: V.sans, fontSize: 13 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, height: 40, padding: '10px 8px 0 16px', flexShrink: 0 }}>
         <span aria-hidden="true" style={{ display: 'inline-flex', color: V.ink }}><OwlMark size={18} /></span>
         <span style={{ fontSize: 13, fontWeight: 600, flexGrow: 1, minWidth: 0 }}>{tv('hedwig.v2.brand', 'Hedwig')}</span>
-        <MenuButton
-          label={tv('hedwig.v2.rail.more', 'Layout and settings')}
-          items={moreItems}
-          width={260}
-          buttonClassName="hw-icon-btn"
-          buttonStyle={{ width: 28, height: 28, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', borderRadius: 6, border: 0, background: 'transparent', color: V.muted, cursor: 'pointer', padding: 0 }}
-        >
-          <Icon name="ellipsis" size={16} />
-        </MenuButton>
+        <ViewMenuButton variant="rail" />
         <IconButton icon="compose" label={tv('hedwig.v2.rail.compose', 'New message')} kbd="C" onClick={compose} />
       </div>
       <div className="hw-scroll" style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 1, padding: '8px 8px 12px' }}>
@@ -198,15 +178,16 @@ export default function Rail() {
         {ledgers.map((kind) => (
           <NavItem key={kind} sub icon={LEDGER_ICONS[kind] || 'receipt'} label={ledgerTitle(kind)} on={onLedger(kind)} onClick={() => showView(VIEW.ledger, { kind })} />
         ))}
+        <SectionLabel as="h2">{tv('hedwig.v2.rail.later', 'Later')}</SectionLabel>
         {work && (
           <>
-            <SectionLabel as="h2">{tv('hedwig.v2.rail.later', 'Later')}</SectionLabel>
             <NavItem icon="reply" label={tv('hedwig.v2.rail.replyLater', 'Reply Later')} count={countText(counts, more, 'replyLater')} on={on(VIEW.list, 'replyLater')} onClick={() => showView(VIEW.list, { list: 'replyLater' })} />
             <NavItem icon="bookmark" label={tv('hedwig.v2.rail.setAside', 'Set Aside')} count={countText(counts, more, 'setAside')} on={on(VIEW.list, 'setAside')} onClick={() => showView(VIEW.list, { list: 'setAside' })} />
             <NavItem icon="alarm-clock" label={tv('hedwig.v2.rail.snoozed', 'Snoozed')} count={countText(counts, more, 'snoozed')} on={on(VIEW.list, 'snoozed')} onClick={() => showView(VIEW.list, { list: 'snoozed' })} />
             <NavItem icon="hourglass" label={tv('hedwig.v2.waiting.title', 'Waiting on')} on={on(VIEW.waiting)} onClick={() => showView(VIEW.waiting)} />
           </>
         )}
+        <NavItem icon="file" label={tv('hedwig.v2.drafts.title', 'Drafts')} count={countText(counts, more, 'drafts')} on={on(VIEW.drafts)} onClick={() => showView(VIEW.drafts)} />
         <SectionLabel as="h2">{tv('hedwig.v2.brand', 'Hedwig')}</SectionLabel>
         <NavItem icon="newspaper" label={tv('hedwig.v2.rail.brief', 'Daily Brief')} on={on(VIEW.brief)} onClick={() => showView(VIEW.brief)} />
         <NavItem icon="history" label={tv('hedwig.v2.rail.today', 'Today')} on={on(VIEW.today)} onClick={() => showView(VIEW.today)} />

@@ -6,7 +6,7 @@ import { createElement } from 'react';
 import { registerCommand, registerView, getView } from '../registry.js';
 import { useHedwig } from '../store.js';
 import { useStore } from '../../store/index.js';
-import { useV2, watchSystemScheme, unwatchSystemScheme } from './state.js';
+import { useV2, watchSystemScheme, unwatchSystemScheme, watchDrafts } from './state.js';
 import { showView, VIEW } from './nav.js';
 import { SORT_EVENTS, REFRESH_DEBOUNCE_MS, isMockMode } from './client.js';
 import StreamView from './StreamView.jsx';
@@ -18,6 +18,9 @@ import Rail from './Rail.jsx';
 import ListView from './ListView.jsx';
 import Ledger, { LEDGER_KINDS, ledgerTitle } from './Ledger.jsx';
 import Waiting from './Waiting.jsx';
+import Drafts from './Drafts.jsx';
+import { mountUndoToasts, unmountUndoToasts } from './UndoToasts.jsx';
+import { flushPending, resetActions } from './actions.js';
 import { tv } from './i18n.js';
 
 const stream = (name) => function StreamPane(p) {
@@ -49,6 +52,8 @@ export function v2Views() {
       description: tv('hedwig.v2.view.ledgerDesc', 'Purchases, subscriptions, travel and deliveries from your Records, with totals.') },
     { id: VIEW.waiting, title: tv('hedwig.v2.waiting.title', 'Waiting on'), icon: 'timeline', group: 'mail', chrome: true, component: Waiting,
       description: tv('hedwig.v2.view.waitingDesc', 'What you asked and have not heard back about, with Nudge.') },
+    { id: VIEW.drafts, title: tv('hedwig.v2.drafts.title', 'Drafts'), icon: 'file', group: 'mail', chrome: true, component: Drafts,
+      description: tv('hedwig.v2.view.draftsDesc', 'Saved drafts from every account; open one to keep writing.') },
   ];
 }
 
@@ -62,6 +67,7 @@ function v2Commands() {
     { id: 'hedwig.v2.brief', title: tv('hedwig.v2.cmd.brief', 'Open the Daily Brief'), keys: 'g b', run: go(VIEW.brief) },
     { id: 'hedwig.v2.today', title: tv('hedwig.v2.cmd.today', 'Review what Hedwig did today'), keys: 'g h', run: go(VIEW.today) },
     { id: 'hedwig.v2.replyLater', title: tv('hedwig.v2.cmd.replyLater', 'Open Reply Later'), when: () => useV2.getState().caps.work === true, run: go(VIEW.list, { list: 'replyLater' }) },
+    { id: 'hedwig.v2.drafts', title: tv('hedwig.v2.cmd.drafts', 'Drafts'), keys: 'g d', run: go(VIEW.drafts) },
     { id: 'hedwig.v2.waiting', title: tv('hedwig.v2.cmd.waiting', 'Open Waiting on'), when: () => useV2.getState().caps.work === true, run: go(VIEW.waiting) },
     ...LEDGER_KINDS.map((kind) => ({ id: `hedwig.v2.ledger.${kind}`, title: tv('hedwig.v2.cmd.ledger', 'Ledger: {{name}}', { name: ledgerTitle(kind) }), run: go(VIEW.ledger, { kind }) })),
     { id: 'hedwig.v2.power', title: tv('hedwig.v2.cmd.power', 'Power mode: on or off'), run: () => useV2.getState().togglePower() },
@@ -89,6 +95,7 @@ let countsTimer = null;
 let countsListener = null;
 let countsDebounce = null;
 let themeUnsub = null;
+let draftsUnwatch = null;
 let running = false;
 
 /**
@@ -108,6 +115,8 @@ export function startV2Session() {
   if (running) return;
   running = true;
   const v2 = useV2.getState();
+  // The undo toasts for Done, Delete, Junk and the rest (actions.js), shared by every pane.
+  mountUndoToasts();
   v2.loadPrefs();
   v2.probeWork().finally(() => { if (running) useV2.getState().refreshCounts(); });
   clearInterval(countsTimer);
@@ -120,6 +129,10 @@ export function startV2Session() {
   // The one place a sort change refreshes the counts; views only announce the change.
   countsListener = () => { clearTimeout(countsDebounce); countsDebounce = setTimeout(() => useV2.getState().refreshCounts(), REFRESH_DEBOUNCE_MS); };
   for (const n of SORT_EVENTS) window.addEventListener(n, countsListener);
+  // Drafts: the rail's count now, then again on mail events and whenever the composer closes.
+  draftsUnwatch?.();
+  draftsUnwatch = watchDrafts();
+  v2.refreshDrafts();
   watchSystemScheme();
   // Picking Hedwig or Hedwig Night in upstream's Appearance settings is a manual choice too:
   // the scheme follows it instead of flipping it back.
@@ -140,8 +153,13 @@ export function stopV2Session() {
   clearTimeout(countsDebounce);
   if (countsListener) for (const n of SORT_EVENTS) window.removeEventListener(n, countsListener);
   countsListener = null;
+  draftsUnwatch?.();
+  draftsUnwatch = null;
   unwatchSystemScheme();
   themeUnsub?.();
   themeUnsub = null;
+  // Actions still inside their undo window go now: the owner asked for them.
+  flushPending().catch(() => {}).finally(() => resetActions());
+  unmountUndoToasts();
   useV2.getState().reset();
 }

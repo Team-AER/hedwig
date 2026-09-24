@@ -1,9 +1,10 @@
-// Shell commands for the palette and the keymap: layout templates, opening each registered
-// view, pane focus and splitting, export, and the classic-shell toggle.
+// Shell commands for the palette and the keymap: the Hedwig layouts (the upstream presets live in
+// the classic shell), opening each registered view, pane focus and splitting, export, and the
+// classic-shell toggle.
 import { registerCommand, listViews, subscribe } from '../registry.js';
 import { useHedwig } from '../store.js';
 import { useShell } from './state.js';
-import { TEMPLATES } from './templates.js';
+import { HEDWIG_TEMPLATES } from './templates.js';
 import { exportCurrentLayout } from './layoutFile.js';
 
 // Default key sequences for "Open …" commands. The views register their own commands for the
@@ -21,13 +22,13 @@ const hedwigShell = () => useHedwig.getState().shellMode === 'hedwig';
 const paneShell = () => hedwigShell() && !isPhone();
 
 function registerShellCommands() {
-  for (const t of TEMPLATES) {
+  for (const t of HEDWIG_TEMPLATES) {
     registerCommand({
       id: `shell.layout.${t.id}`,
       title: `Layout: ${t.label}`,
       group: 'Layout',
       icon: 'layout',
-      hint: t.note,
+      hint: t.description,
       when: paneShell,
       run: () => useShell.getState().applyTemplate(t.id),
     });
@@ -54,7 +55,7 @@ function registerShellCommands() {
     when: () => paneShell() && Boolean(useShell.getState().focused),
     run: () => { const k = useShell.getState().focused; if (k) useShell.getState().popOut(k); },
   });
-  registerCommand({ id: 'shell.classic', title: 'Switch to the classic MailFlow layout', group: 'Layout', icon: 'classic', when: hedwigShell, run: () => useHedwig.getState().setShellMode('classic') });
+  registerCommand({ id: 'shell.classic', title: 'Switch to the classic MailFlow shell', group: 'Layout', icon: 'classic', when: hedwigShell, run: () => useHedwig.getState().setShellMode('classic') });
   registerCommand({ id: 'shell.hedwig', title: 'Switch to the Hedwig layout', group: 'Layout', icon: 'owl', when: () => !hedwigShell(), run: () => useHedwig.getState().setShellMode('hedwig') });
 }
 

@@ -1796,10 +1796,8 @@
         "accounts": "{{n}} contas",
         "accountsFailing": "{{n}} de {{total}} precisam de atenção",
         "brief": "Resumo do dia",
-        "hedwigSettings": "Configurações do Hedwig",
         "label": "Fluxos",
         "mailSettings": "Configurações de e-mail",
-        "more": "Layout e configurações",
         "palette": "Abrir a paleta de comandos",
         "replyLater": "Responder depois",
         "screener": "Triagem",
@@ -1827,8 +1825,7 @@
       "scheme": {
         "auto": "Seguir o sistema",
         "dark": "Escuro",
-        "light": "Claro (tema)",
-        "menu": "Claro ou escuro: {{scheme}}"
+        "light": "Claro (tema)"
       },
       "screener": {
         "accept": "Aceitar: {{stream}}",

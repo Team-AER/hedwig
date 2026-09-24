@@ -1,4 +1,5 @@
 import { pickReplyAlias } from './replyAlias.js';
+import { splitDraftSignature } from './draftSignature.js';
 
 function parseAddressField(raw) {
   try {
@@ -115,4 +116,67 @@ export async function openForwardFromMessage(message, { openCompose, getMessageB
       size: att.size || 0,
     })),
   });
+}
+
+// ── Drafts ────────────────────────────────────────────────────────────────────
+// One implementation of "reopen a saved draft in the composer", shared by the classic list
+// (MessageList, when the Drafts folder is open) and Hedwig's Drafts view and thread reader.
+
+/** The account's Drafts folder path: the folder mapping first, else the \\Drafts special-use folder. */
+export function draftsFolderFor(account, folderList) {
+  if (account?.folder_mappings?.drafts) return account.folder_mappings.drafts;
+  const hit = (Array.isArray(folderList) ? folderList : []).find(f => f?.special_use === '\\Drafts');
+  return hit?.path || null;
+}
+
+/** True when `folder` is the Drafts folder of `accountId` (the classic list's isDraftsFolder). */
+export function isDraftsFolder(accountId, folder, { accounts = [], folders = {} } = {}) {
+  if (!accountId || !folder) return false;
+  const account = (accounts || []).find(a => a.id === accountId);
+  if (!account) return false;
+  if (account.folder_mappings?.drafts && account.folder_mappings.drafts === folder) return true;
+  const folderInfo = (folders?.[accountId] || []).find(f => f.path === folder);
+  return folderInfo?.special_use === '\\Drafts';
+}
+
+/** An address list (array or its JSON text) as the composer's "Name <addr>" strings. */
+export function formatAddressArray(raw) {
+  let arr = raw;
+  if (typeof arr === 'string') { try { arr = JSON.parse(arr || '[]'); } catch { arr = []; } }
+  if (!Array.isArray(arr)) return [];
+  return arr.map(a => {
+    if (typeof a === 'string') return a;
+    const addr = a?.address || a?.email || '';
+    return (a?.name && addr) ? `${a.name} <${addr}>` : (addr || a?.name || '');
+  }).filter(Boolean);
+}
+
+/**
+ * Open a saved draft (an upstream message row: id, uid, folder, account_id, to/cc, subject) in
+ * the composer for editing. The composer replaces the stored copy on save (draftUid/draftFolder)
+ * and deletes it on send. Throws when the body cannot be loaded; the caller decides what then.
+ */
+export async function openDraftInComposer(message, { openCompose, getMessageBody }) {
+  const bodyData = await getMessageBody(message.id);
+  // A saved draft is one document: body, signature, then any quoted text. Handing all of
+  // it over as the body left the signature inline AND had compose render a fresh one, so
+  // every save/reopen cycle added another copy (#432). Lift the signature back out, or
+  // suppress compose's own when it is present but cannot be lifted safely.
+  const raw = bodyData?.html || bodyData?.text || '';
+  const { body, signature, inline } = bodyData?.html
+    ? splitDraftSignature(raw)
+    : { body: raw, signature: null, inline: false };
+  const payload = {
+    accountId: message.account_id ?? message.accountId,
+    draftUid: message.uid,
+    draftFolder: message.folder,
+    to: formatAddressArray(message.to_addresses),
+    cc: formatAddressArray(message.cc_addresses),
+    subject: message.subject || '',
+    body,
+    bodyIsHtml: !!bodyData?.html,
+    ...(signature !== null ? { signature } : inline ? { signature: '' } : {}),
+  };
+  openCompose(payload);
+  return payload;
 }

@@ -1796,10 +1796,8 @@
         "accounts": "{{n}} comptes",
         "accountsFailing": "{{n}} sur {{total}} demandent votre attention",
         "brief": "Point du jour",
-        "hedwigSettings": "Réglages de Hedwig",
         "label": "Flux",
         "mailSettings": "Réglages de la messagerie",
-        "more": "Disposition et réglages",
         "palette": "Ouvrir la palette de commandes",
         "replyLater": "Répondre plus tard",
         "screener": "Tri des expéditeurs",
@@ -1827,8 +1825,7 @@
       "scheme": {
         "auto": "Automatique",
         "dark": "Sombre",
-        "light": "Clair",
-        "menu": "Clair ou sombre : {{scheme}}"
+        "light": "Clair"
       },
       "screener": {
         "accept": "Accepter : {{stream}}",

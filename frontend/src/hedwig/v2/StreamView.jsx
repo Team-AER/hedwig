@@ -5,14 +5,14 @@
 // then the rest under sticky date headers, a page at a time with "Show more"; Records collapses each
 // bundle to one row with a summary. People has the Reply Later footer on desktop; on a phone it
 // carries the day's first question (on desktop the question lives in the Daily Brief).
-import { useMemo, useRef, useState } from 'react';
-import { useStore } from '../../store/index.js';
-import { useV2, streamPath, countText } from './state.js';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useV2, streamPath, countText, liveRows } from './state.js';
 import { useV2Resource, useV2Pages, useWork, isMissing } from './hooks.js';
 import { useTldrs, withTldrs } from './tldrs.js';
-import { listOf, SORT_EVENTS, COUNTS_EVENT, announceSortChange } from './client.js';
+import { listOf, SORT_EVENTS, COUNTS_EVENT } from './client.js';
 import { openThread, showView, VIEW } from './nav.js';
-import { markRead, LIST_KIND } from './mail.js';
+import { LIST_KIND } from './mail.js';
+import { performAction } from './actions.js';
 import { useWhyDoor } from './WhyDoor.jsx';
 import { Question } from './Question.jsx';
 import { RowList, GroupLabel, ListSearch, onListKeyDown, rowDate, rowMeta, useFirstRowKeys } from './rows.jsx';
@@ -181,8 +181,12 @@ export default function StreamView({ props }) {
   // Reading and Records rows get their TL;DRs in one call (People rows carry their own).
   const tldrIds = useMemo(() => (stream === 'people' ? [] : [...needsRes.items, ...res.items].filter((i) => !i.tldr && i.messageId).map((i) => i.messageId)), [stream, needsRes.items, res.items]);
   const tldrs = useTldrs(tldrIds, work);
-  const needsItems = useMemo(() => withTldrs(needsRes.items, tldrs), [needsRes.items, tldrs]);
-  const restItems = useMemo(() => withTldrs(res.items, tldrs), [res.items, tldrs]);
+  // What an action took away (Done, Delete, Junk, Snooze, Move) is left out at once, and flag and
+  // read changes show before the lists reload (actions.js).
+  const hidden = useV2((s) => s.hidden);
+  const patches = useV2((s) => s.patches);
+  const needsItems = useMemo(() => liveRows(withTldrs(needsRes.items, tldrs), hidden, patches), [needsRes.items, tldrs, hidden, patches]);
+  const restItems = useMemo(() => liveRows(withTldrs(res.items, tldrs), hidden, patches), [res.items, tldrs, hidden, patches]);
   const cardIds = useMemo(() => (stream === 'records' ? res.items.map((i) => i.messageId).filter(Boolean).slice(0, 200).sort().join(',') : ''), [stream, res.items]);
   const byMessage = useRowCards(stream === 'records', cardIds);
   const power = useV2((s) => s.prefs.powerMode);
@@ -192,7 +196,6 @@ export default function StreamView({ props }) {
   const door = useWhyDoor();
   const [tab, setTab] = useState('needs');
   const [openBundles, setOpenBundles] = useState({});
-  const [sweeping, setSweeping] = useState(false);
   const [filter, setFilter] = useState(NO_FILTER);
 
   const allNeeds = useMemo(() => needsItems.filter((i) => i.needsYou), [needsItems]);
@@ -209,6 +212,14 @@ export default function StreamView({ props }) {
     return oldest ? g.map((x) => ({ ...x, items: [...x.items].reverse() })).reverse() : g;
   }, [rest, oldest]);
   const bundleGroups = useMemo(() => (stream === 'records' ? groupBundles(rest, listOf(bundles.data, 'bundles')) : []), [stream, rest, bundles.data]);
+  // The rows in the order they show, so an action on the open thread can go on to the next one.
+  const orderId = useId();
+  const ordered = useMemo(
+    () => [...needs, ...(stream === 'records' ? bundleGroups : groups).flatMap((g) => g.items)],
+    [needs, groups, bundleGroups, stream],
+  );
+  useEffect(() => { useV2.getState().setOrder(orderId, ordered); }, [orderId, ordered]);
+  useEffect(() => () => useV2.getState().clearOrder(orderId), [orderId]);
   const everything = allNeeds.length + allRest.length;
   const unread = [...allNeeds, ...allRest].filter((i) => i.unread).length;
   const title = streamTitle(stream);
@@ -217,19 +228,11 @@ export default function StreamView({ props }) {
   // The server-side Needs you count when there is one (the rail's), else what the list holds.
   const needsLabel = stream === 'people' && needsCount ? needsCount : (allNeeds.length || null);
 
-  const sweep = async () => {
-    const ids = allRest.filter((i) => i.unread && i.messageId).map((i) => i.messageId);
-    if (!ids.length) return;
-    setSweeping(true);
-    try {
-      await markRead(ids);
-      res.setItems((list) => list.map((i) => (ids.includes(i.messageId) ? { ...i, unread: false } : i)));
-      announceSortChange({ read: ids.length });
-    } catch (e) {
-      useStore.getState().addNotification?.({ type: 'error', title: tv('hedwig.v2.stream.sweepFailed', 'Could not mark them read'), body: e.message });
-    } finally {
-      setSweeping(false);
-    }
+  // "Mark the rest read" is one undoable action over every unread row below Needs you.
+  const sweep = () => {
+    const unreadRest = allRest.filter((i) => i.unread && i.messageId);
+    if (!unreadRest.length) return;
+    performAction({ kind: 'read', read: true, items: unreadRest, stream, failTitle: tv('hedwig.v2.stream.sweepFailed', 'Could not mark them read') });
   };
 
   const filterMenu = (
@@ -238,7 +241,7 @@ export default function StreamView({ props }) {
       onChange={setFilter}
       attachable={attachable}
       phone={phone}
-      extra={[{ id: 'sweep', icon: 'mail-open', label: tv('hedwig.v2.stream.sweepMenu', 'Mark the rest read'), disabled: sweeping || !allRest.some((i) => i.unread), onSelect: sweep }]}
+      extra={[{ id: 'sweep', icon: 'mail-open', label: tv('hedwig.v2.stream.sweepMenu', 'Mark the rest read'), disabled: !allRest.some((i) => i.unread), onSelect: sweep }]}
     />
   );
 
@@ -374,9 +377,14 @@ export const listPath = (list) => `/work/lists/${LIST_KIND[list] || list}`;
 export function ListItems({ list, phone }) {
   const res = useV2Resource(listPath(list));
   const door = useWhyDoor();
-  const items = listOf(res.data, 'items');
+  const hidden = useV2((s) => s.hidden);
+  const patches = useV2((s) => s.patches);
+  const items = useMemo(() => liveRows(listOf(res.data, 'items'), hidden, patches), [res.data, hidden, patches]);
   const listRef = useRef(null);
   useFirstRowKeys(listRef);
+  const orderId = useId();
+  useEffect(() => { useV2.getState().setOrder(orderId, items); }, [orderId, items]);
+  useEffect(() => () => useV2.getState().clearOrder(orderId), [orderId]);
   if (res.error?.status === 404) return <Quiet><Why>{tv('hedwig.v2.list.unavailable', 'This list is not available yet.')}</Why></Quiet>;
   return (
     <div ref={listRef} onKeyDown={onListKeyDown}>

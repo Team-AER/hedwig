@@ -1796,10 +1796,8 @@
         "accounts": "{{n}} Konten",
         "accountsFailing": "{{n}} von {{total}} brauchen Aufmerksamkeit",
         "brief": "Tägliches Briefing",
-        "hedwigSettings": "Hedwig-Einstellungen",
         "label": "Ströme",
         "mailSettings": "Mail-Einstellungen",
-        "more": "Layout und Einstellungen",
         "palette": "Befehlspalette öffnen",
         "replyLater": "Später antworten",
         "screener": "Absenderprüfung",
@@ -1827,8 +1825,7 @@
       "scheme": {
         "auto": "Automatisch",
         "dark": "Dunkel",
-        "light": "Hell",
-        "menu": "Hell oder dunkel: {{scheme}}"
+        "light": "Hell"
       },
       "screener": {
         "accept": "Annehmen: {{stream}}",

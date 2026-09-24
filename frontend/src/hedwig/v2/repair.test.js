@@ -248,7 +248,7 @@ describe('the way back from the classic shell', () => {
     }
   });
 
-  test('the classic shell is in the layout menu, not a one-click button in the top bar', async () => {
+  test('the classic shell is in the View menu, not a one-click button in the top bar', async () => {
     const src = readFileSync(new URL('../shell/TopBar.jsx', import.meta.url), 'utf8');
     assert.doesNotMatch(src, /onClick=\{\(\) => setShellMode\('classic'\)\}/);
     assert.ok(layoutMenuItems().some((i) => i.id === 'classic'));
@@ -311,8 +311,11 @@ describe('layout migration for a layout saved before v2', () => {
     assert.equal(puts[1].body.active, true);
     assert.deepEqual(db.map((r) => [r.name, r.device, r.is_active]).sort(), [['Classic', 'desktop', false], ['Streams', 'desktop', true]]);
     assert.ok(shell.savedLayouts().some((r) => r.name === 'Classic'));
-    const saved = layoutMenuItems().filter((i) => i.id?.startsWith('s:')).map((i) => i.label);
-    assert.deepEqual(saved, ['Classic'], 'Classic is in the layout menu');
+    // Classic is the upstream shell in panes: the View menu offers the classic shell itself, not
+    // this row as a layout; the row stays in Customize layout (savedLayouts) to use or delete.
+    const saved = layoutMenuItems({ phone: false }).filter((i) => i.id?.startsWith('s:')).map((i) => i.label);
+    assert.deepEqual(saved, [], 'Classic is not offered as a layout');
+    assert.equal(layoutMenuItems({ phone: false }).at(-1).id, 'classic', 'the classic shell is');
     assert.match(notifications.at(-1).body, /“Classic”/);
 
     // The next load keeps Streams and does not migrate again.

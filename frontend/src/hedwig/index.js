@@ -22,7 +22,7 @@ registerCoreViews();
 if (!getView('hedwig.layouts')) {
   registerView({
     id: 'hedwig.layouts',
-    title: 'Layouts',
+    title: 'Customize layout',
     icon: 'layout',
     group: 'settings',
     component: LayoutEditor,

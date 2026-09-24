@@ -79,7 +79,7 @@ Hedwig becomes a calm, familiar mail reader built the way Apple Mail is: glass f
   2. Reply Later (`reply`+clock, L), Snooze (`alarm-clock`, H), Set Aside (`bookmark`, S).
   3. Reply (`reply`, R), Reply all (`reply-all`, A), Forward (`forward`, F).
   4. Move (`folder-input`, V), which opens a stream and bundle picker and asks "Just this one / Always". Flag (`flag`, `--attention` when on), More (`ellipsis`: Print, View source, Unsubscribe, Block sender, Report spam, Open in new pane).
-  - No delete: Hedwig never deletes (PRD principle 4). Below 900px of reader width, groups 2 and 4 collapse into More.
+  - Amended 2026-09-24 (owner request): Done, Delete (`trash`, ⌫ / #), Junk (`alert-octagon`, !) and Flag (⇧S, filled accent when on) form the first group and always show. Hedwig never deletes on its own; the owner can delete (to Trash) and undo (PRD principle 4). Below 900px of reader width, group 2 and Move collapse into More; below 640px Reply all and Forward too. Every inbox action is optimistic with an Undo toast (`v2/actions.js`).
 - Subject block, padding 20px 24px 0: subject in 20px/26 600 ink, wrapping. Under it, 12px muted: "3 messages" followed by the reason as a why button with glyph ("In People because you replied to Maria last week"), then a "Change" link in `--accent`.
 - Summary block:
   - Margin 14px 24px 0. Radius 10, fill `--field`, 1px `--line`, padding 12px 14px.

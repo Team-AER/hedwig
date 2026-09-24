@@ -305,6 +305,7 @@ function MessageBodyView({ body, messageId, emailScaleRef, hasNativeContextTarge
       srcDoc={`<!DOCTYPE html><html><head><meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       <meta name="color-scheme" content="only light">
+      <meta name="referrer" content="no-referrer">
       <meta http-equiv="Content-Security-Policy" content="script-src 'none'; object-src 'none'; frame-src 'none'; form-action 'none'; style-src 'unsafe-inline';">
       <base target="_blank">
     </head><body><div id="mf-scale-wrapper">${
@@ -340,6 +341,7 @@ function MessageBodyView({ body, messageId, emailScaleRef, hasNativeContextTarge
       </style></body></html>`}
       scrolling="no"
       style={{ width: '1px', minWidth: '100%', border: 'none', display: 'block', height: '300px' }}
+      referrerPolicy="no-referrer"
       sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
       title={t('message.emailFrameTitle')}
     />

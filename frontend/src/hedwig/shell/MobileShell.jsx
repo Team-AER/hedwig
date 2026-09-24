@@ -17,6 +17,7 @@ import { useRegistryVersion } from './useRegistry.js';
 import { useViewRequests } from './useViewRequests.js';
 import { TAB_BAR_HEIGHT, useHedwigTabBar } from './tabBar.js';
 import { tr } from './tr.js';
+import { ViewMenuButton } from './TopBar.jsx';
 import { useV2, countText } from '../v2/state.js';
 import { PhoneContext, Sheet } from '../v2/primitives.jsx';
 import { tv } from '../v2/i18n.js';
@@ -117,6 +118,7 @@ function PlainHeader({ title, depth, onBack, onOpenPalette }) {
       <button type="button" className="hw-btn-quiet" aria-label={tr('mobile.search', 'Search and commands')} onClick={onOpenPalette} style={{ ...ui.iconButton, width: 44, height: 44, borderRadius: 8 }}>
         <Icon name="search" size={20} />
       </button>
+      {depth === 0 && <ViewMenuButton variant="phone" />}
     </Sheet>
   );
 }
@@ -125,7 +127,7 @@ function StackScreen({ entry, depth, onBack, onOpenPalette }) {
   useRegistryVersion();
   const view = getView(entry.id);
   const title = view?.title || entry.id;
-  const v2 = entry.id.startsWith('hedwig.stream.') || ['hedwig.screener', 'hedwig.thread', 'hedwig.brief', 'hedwig.today', 'hedwig.list', 'hedwig.ledger', 'hedwig.waiting', 'hedwig.ask'].includes(entry.id);
+  const v2 = entry.id.startsWith('hedwig.stream.') || ['hedwig.screener', 'hedwig.thread', 'hedwig.brief', 'hedwig.today', 'hedwig.list', 'hedwig.ledger', 'hedwig.waiting', 'hedwig.drafts', 'hedwig.ask'].includes(entry.id);
   const nav = useMemo(() => ({ phone: true, depth, back: onBack, openPalette: onOpenPalette }), [depth, onBack, onOpenPalette]);
   return (
     <PhoneContext.Provider value={nav}>

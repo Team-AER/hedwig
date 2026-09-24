@@ -1,5 +1,5 @@
-// The reader (DESIGN-AUDIT-2026-09-24 §c, §d, §g). A 48px glass toolbar (Done; Reply Later,
-// Snooze, Set Aside; Reply, Reply all, Forward; Move, Flag, More), the subject with its reason and
+// The reader (DESIGN-AUDIT-2026-09-24 §c, §d, §g). A 48px glass toolbar (Done, Delete, Junk, Flag;
+// Reply Later, Snooze, Set Aside; Reply, Reply all, Forward; Move, More), the subject with its reason and
 // Change, the summary or story so far with superscript citations, the deadline and the cards in
 // the same box, then the messages: the newest and every unread one open, older read ones as 44px
 // rows, more than four of those folded into one. HTML bodies render in upstream's sandboxed frame
@@ -22,11 +22,12 @@ import { useV2 } from './state.js';
 import { v2Api, isMockMode, SORT_EVENTS } from './client.js';
 import { isMissing, useWork } from './hooks.js';
 import { loadThread, loadFullBody } from './threadData.js';
+import { isDraftMessage, openDraft, getReplyDraft, setReplyDraft, clearReplyDraft } from './drafts.js';
 import {
-  archiveThread, addToList, snooze, snoozeTimes, prepareReply, guardReply, sendPrepared, watchForReply, settingValue,
-  openReplyComposer, openReplyAllComposer, openForwardComposer, folderList, moveMessages, flagMessage, markUnread,
-  reportSpam, unsubscribe, blockSender,
+  snooze, snoozeTimes, prepareReply, guardReply, sendPrepared, watchForReply, settingValue,
+  openReplyComposer, openReplyAllComposer, openForwardComposer, folderList, unsubscribe, blockSender,
 } from './mail.js';
+import { performAction } from './actions.js';
 import { MessageCards } from './Cards.jsx';
 import { Question } from './Question.jsx';
 import { useWhyDoor } from './WhyDoor.jsx';
@@ -42,8 +43,12 @@ import { isLighter, tierNotice } from './tiers.js';
 const NATIVE = () => true;
 const NOOP = () => {};
 
-// Below this reader width the toolbar folds Reply Later / Snooze / Set Aside and Move / Flag into More.
+// Below this reader width the toolbar folds Reply Later / Snooze / Set Aside and Move into More;
+// below the tight width Reply all and Forward go too. Done, Delete, Junk and Flag always show.
 const NARROW_READER = 900;
+const TIGHT_READER = 640;
+// Actions that take the conversation out of the list: the reader moves on (a phone goes back).
+const TAKES_AWAY = new Set(['done', 'delete', 'junk', 'snooze', 'move']);
 // More than this many collapsed messages fold into one "N earlier messages" row.
 const FOLD_OVER = 4;
 const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform || '');
@@ -495,6 +500,36 @@ function MessageItem({ m, n, you, open, onToggle, phone, tldr = null, cards = fa
 }
 
 /**
+ * A saved draft in the thread, as `article#hw-msg-N`: the "Draft" label, who it is to, the
+ * snippet and Edit draft, which reopens it in the composer (saving replaces it, sending deletes
+ * it). Never a read-only body and never a reply to yourself.
+ */
+function DraftItem({ m, n, phone, busy, onEdit }) {
+  const snippet = snippetOf(m);
+  const to = m.to && m.to !== 'you' ? m.to : '';
+  return (
+    <article id={`hw-msg-${n}`} data-draft="" style={{ display: 'flex', flexDirection: 'column', gap: 8, borderTop: `1px solid ${V.line}`, padding: phone ? '14px 16px 16px' : '14px 24px 16px' }}>
+      <header style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
+        <span data-draft-label="" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, alignSelf: 'center', flexShrink: 0, fontSize: 12, fontWeight: 600, lineHeight: '16px', color: V.attentionInk }}>
+          <Icon name="file" size={14} />
+          {tv('hedwig.v2.drafts.label', 'Draft')}
+        </span>
+        {to && <span style={{ flex: '1 1 auto', minWidth: 0, fontSize: 12, color: V.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{tv('hedwig.v2.drafts.to', 'To {{names}}', { names: to })}</span>}
+        {!to && <span style={{ flexGrow: 1 }} />}
+        <span title={fullTime(m.date)} style={{ flexShrink: 0, fontSize: 12, color: V.muted, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{listTime(m.date)}</span>
+      </header>
+      {snippet && <p data-draft-snippet="" style={{ margin: 0, fontSize: 13, lineHeight: '19px', color: V.muted, maxWidth: '68ch', overflowWrap: 'anywhere', display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 3, overflow: 'hidden' }}>{snippet}</p>}
+      <div>
+        <Btn accent size={phone ? 'phone' : 'md'} disabled={busy} onClick={onEdit}>
+          <Icon name="file" size={14} />
+          {busy ? tv('hedwig.v2.drafts.opening', 'Opening…') : tv('hedwig.v2.drafts.edit', 'Edit draft')}
+        </Btn>
+      </div>
+    </article>
+  );
+}
+
+/**
  * Which messages fold away: each unbroken run of more than `over` collapsed messages becomes one
  * "N earlier messages" row where the run starts. An unread (open) message between two runs keeps
  * its place, so nothing is shown out of order. `collapsed[i]` says message i would be a 44px row.
@@ -589,6 +624,8 @@ export default function Thread({ props }) {
   const selected = useV2((s) => s.selected);
   const helpMeWrite = useV2((s) => s.prefs.helpMeWrite);
   const accounts = useStore((s) => s.accounts);
+  const storeFolders = useStore((s) => s.folders);
+  const draftFolders = useV2((s) => s.draftFolders);
   const work = useWork();
   const status = useHedwig((s) => s.status);
   const item = props?.item || selected;
@@ -600,13 +637,13 @@ export default function Thread({ props }) {
   const [toggled, setToggled] = useState({});         // messageId → open / closed, over the default
   const [unfolded, setUnfolded] = useState(false);
   const [draft, setDraft] = useState('');
+  const [savedText, setSavedText] = useState(null);  // the reply text last kept for this thread
   const [busy, setBusy] = useState(null);
   const [actionError, setActionError] = useState(null);
   const [warnings, setWarnings] = useState(null);     // { body, list } from the send guard
   const [watchOn, setWatchOn] = useState(false);      // "remind me if no reply in N days"
   const [remindDays, setRemindDays] = useState(() => defaultWaitDays());
   const [focused, setFocused] = useState(false);      // the reply bar has focus (it grows)
-  const [flagged, setFlagged] = useState(false);
   const [headersFor, setHeadersFor] = useState(null);
   const [folders, setFolders] = useState({ account: null, list: null, loading: false });
   const inputRef = useRef(null);
@@ -615,19 +652,41 @@ export default function Thread({ props }) {
   const moveRef = useRef(null);
   const moreRef = useRef(null);
 
+  // The reply field's text is kept per thread: leaving a thread keeps what was typed (memory and
+  // localStorage), coming back restores it. Server-side drafts stay with the composer.
+  const threadKey = item ? (item.threadId || item.messageId) : null;
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
   useEffect(() => {
-    setToggled({}); setUnfolded(false); setDraft(''); setActionError(null); setWarnings(null); setWatchOn(false);
+    const restored = getReplyDraft(threadKey);
+    setToggled({}); setUnfolded(false); setDraft(restored); setSavedText(restored || null); setActionError(null); setWarnings(null); setWatchOn(false);
     setRemindDays(defaultWaitDays()); setFocused(false); setHeadersFor(null);
-  }, [item?.messageId]);
+    return () => { setReplyDraft(threadKey, draftRef.current); };
+  }, [item?.messageId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!threadKey) return undefined;
+    const timer = setTimeout(() => setSavedText(setReplyDraft(threadKey, draft) ? draft : null), 800);
+    return () => clearTimeout(timer);
+  }, [draft, threadKey]);
+  // The Drafts folders tell a saved draft apart from a message (loaded once per session).
+  useEffect(() => { useV2.getState().ensureDrafts(); }, []);
 
   const data = t.data;
   const messages = useMemo(() => data?.messages || [], [data]);
-  const latest = messages[messages.length - 1];
+  const isDraft = (m) => isDraftMessage(m, { accounts, folders: storeFolders, draftFolders });
+  const newest = messages[messages.length - 1];
+  // A draft is never what you reply to: `latest` is the newest real message; a draft at the end
+  // turns the reply bar into Continue draft.
+  const trailingDraft = newest && isDraft(newest) ? newest : null;
+  const latest = trailingDraft ? ([...messages].reverse().find((m) => !isDraft(m)) || newest) : newest;
+  const latestIdx = latest ? messages.indexOf(latest) : -1;
   const reason = useWhy(latest?.id && item ? item.messageId : null, item?.reason);
   const [question, setQuestion] = useInlineQuestion(latest?.id || null);
   const myEmails = new Set((accounts || []).flatMap((a) => [a.email_address, ...(a.aliases || []).map((x) => x.email)]).filter(Boolean).map((e) => e.toLowerCase()));
   const isMine = (m) => myEmails.has(String(m?.from?.email || '').toLowerCase());
-  useEffect(() => { setFlagged(Boolean(latest?.starred)); }, [latest?.id, latest?.starred]);
+  // Flag follows the optimistic overlay (actions.js) over what the server said.
+  const latestPatch = useV2((s) => (latest?.id ? s.patches[latest.id] : null));
+  const flagged = latestPatch?.flagged ?? Boolean(latest?.starred);
 
   const run = async (key, fn) => {
     setBusy(key);
@@ -642,14 +701,19 @@ export default function Thread({ props }) {
   const latestId = latest?.id || item?.messageId;
   const whyItem = item ? { ...item, messageId: item.messageId, reason } : null;
 
-  const done = () => run('done', async () => {
-    await archiveThread(messages.map((m) => ({ id: m.id, folder: m.folder })));
-    useV2.getState().select(null);
-    if (phone) phoneCtx?.back?.();
-  });
-  const later = () => run('later', () => addToList('replyLater', threadId));
-  const aside = () => run('aside', () => addToList('setAside', threadId));
-  const snoozeItems = () => snoozeTimes().map((s) => ({ id: s.id, label: s.label, icon: 'alarm-clock', onSelect: () => run('snooze', () => snooze(item.messageId, s.until, threadId)) }));
+  // Inbox actions go through the optimistic layer: the screen changes at once, a toast offers
+  // Undo, the call runs behind it. Drafts are never part of Done, Delete, Junk or Move.
+  const act = (kind, extra = {}) => {
+    if (!item) return;
+    performAction({ kind, items: [item], messages: messages.filter((m) => m.id && !isDraft(m)), advance: !phone, ...extra });
+    if (phone && TAKES_AWAY.has(kind)) phoneCtx?.back?.();
+  };
+  const done = () => act('done');
+  const del = () => act('delete');
+  const junk = () => act('junk');
+  const later = () => act('replyLater');
+  const aside = () => act('setAside');
+  const snoozeItems = () => snoozeTimes().map((s) => ({ id: s.id, label: s.label, icon: 'alarm-clock', onSelect: () => act('snooze', { until: s.until }) }));
   const showOriginal = async () => {
     const row = await openMessage(latestId);
     if (row && !phone) useHedwig.getState().openView('core.thread');
@@ -661,19 +725,15 @@ export default function Thread({ props }) {
   };
   const replyAll = () => run('reply', () => openReplyAllComposer(latestId, draft.trim()));
   const forward = () => run('forward', () => openForwardComposer(latestId));
-  const popOut = () => run('reply', async () => { await openReplyComposer(latestId, draft); setDraft(''); setWarnings(null); });
-  const toggleFlag = () => run('flag', async () => {
-    const next = !flagged;
-    setFlagged(next);
-    try { await flagMessage(latestId, next); } catch (e) { setFlagged(!next); throw e; }
-  });
-  const unread = () => run('unread', async () => { await markUnread([latestId]); });
-  const spam = () => run('spam', async () => { await reportSpam(latestId); useV2.getState().select(null); if (phone) phoneCtx?.back?.(); });
+  const popOut = () => run('reply', async () => { await openReplyComposer(latestId, draft); setDraft(''); clearReplyDraft(threadKey); setSavedText(null); setWarnings(null); });
+  const editDraft = (m) => run('editDraft', () => openDraft(m.raw || m));
+  const toggleFlag = () => act('flag', { on: !flagged, messageIds: [latestId] });
+  const unread = () => act('read', { read: false, messageIds: [latestId] });
   const unsub = () => run('unsubscribe', () => unsubscribe(latestId));
   const block = () => run('block', () => blockSender(latest?.from?.email));
   const openDoor = (anchor) => { if (whyItem) door.open(whyItem, anchor); };
 
-  const moveIds = () => messages.filter((m) => m.id && m.folder === latest?.folder && m.accountId === latest?.accountId).map((m) => m.id);
+  const moveSet = () => messages.filter((m) => m.id && !isDraft(m) && m.folder === latest?.folder && m.accountId === latest?.accountId);
   const loadFolders = () => {
     const account = latest?.accountId || null;
     if (folders.loading || (folders.list && folders.account === account)) return;
@@ -690,7 +750,7 @@ export default function Thread({ props }) {
       ...(folders.loading || !folders.list
         ? [{ id: 'loading', label: tv('hedwig.v2.loading', 'Loading…'), icon: 'refresh', disabled: true }]
         : list.length
-          ? list.map((f) => ({ id: `f:${f.path}`, label: f.name || f.path, icon: 'folder-input', onSelect: () => run('move', async () => { await moveMessages(moveIds(), f.path, f.name || f.path); useV2.getState().select(null); if (phone) phoneCtx?.back?.(); }) }))
+          ? list.map((f) => ({ id: `f:${f.path}`, label: f.name || f.path, icon: 'folder-input', onSelect: () => act('move', { folder: f.path, label: f.name || f.path, messages: moveSet() }) }))
           : [{ id: 'none', label: tv('hedwig.v2.thread.noFolders', 'No other folders'), icon: 'folder-input', disabled: true }]),
     ];
   };
@@ -738,6 +798,8 @@ export default function Thread({ props }) {
     }
     await sendPrepared(payload);
     setDraft('');
+    clearReplyDraft(threadKey);
+    setSavedText(null);
     setWarnings(null);
     if (watchOn) { setWatchOn(false); await watchForReply(threadId, remindDays); }
   });
@@ -748,7 +810,10 @@ export default function Thread({ props }) {
   // as the second key of a "g" sequence (g r, g h are Hedwig's go-to keys).
   const keyActions = useRef(null);
   keyActions.current = {
-    e: done, r: focusReply, a: replyAll, f: forward,
+    e: done, r: focusReply, a: replyAll, f: forward, u: unread,
+    // Upstream's own letters where it has them: # delete, ! spam. S is Set Aside here, so Flag
+    // (upstream's star on S) is Shift+S.
+    '#': del, Delete: del, Backspace: del, '!': junk, S: toggleFlag,
     ...(work ? { l: later, s: aside } : {}),
     // Folded into More below 900px: H and V open More, which holds Snooze and Move then.
     h: () => (snoozeRef.current || moreRef.current)?.querySelector('button')?.click(),
@@ -759,7 +824,7 @@ export default function Thread({ props }) {
     if (!keysOn) return undefined;
     let lastG = 0;
     const onKey = (e) => {
-      if (e.isComposing || e.repeat || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+      if (e.isComposing || e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
       const st = useStore.getState();
       if (st.composing || st.showAdmin) return;
       const el = e.target;
@@ -770,7 +835,10 @@ export default function Thread({ props }) {
       if (!sectionRef.current || hiddenInPage(sectionRef.current)) return;
       // Upstream's keymap acts on its own selection with the same letters: it wins, once.
       if (upstreamOwnsKey(e.key, { shortcuts: st.shortcuts, selectedMessageId: st.selectedMessageId, hasListener: shortcutBus.has })) return;
-      const key = String(e.key || '').toLowerCase();
+      // Letters without Shift are lower case whatever Caps Lock says; with Shift only the
+      // symbols (#, !) and Shift+S mean something. Named keys (Delete, Backspace) stay as they are.
+      const raw = String(e.key || '');
+      const key = raw.length === 1 && !e.shiftKey ? raw.toLowerCase() : raw;
       const now = Date.now();
       if (key === 'g') { lastG = now; return; }
       if (now - lastG < 1000) { lastG = 0; return; }
@@ -808,6 +876,7 @@ export default function Thread({ props }) {
   const meta = [people, messages.length ? tvn(messages.length, ['hedwig.v2.thread.messagesOne', '1 message'], ['hedwig.v2.thread.messagesMany', '{{n}} messages']) : null, !phone ? data?.label : null].filter(Boolean).join(' · ');
   const replyTo = firstName(latest?.from || item.from);
   const narrow = !phone && width != null && width < NARROW_READER;
+  const tight = !phone && width != null && width < TIGHT_READER;
   const trackerNote = latest?.trackersBlocked
     ? tvn(latest.trackersBlocked, ['hedwig.v2.thread.trackerOne', '1 tracker blocked'], ['hedwig.v2.thread.trackerMany', 'Trackers blocked: {{n}}'])
     : null;
@@ -816,28 +885,32 @@ export default function Thread({ props }) {
   const iconMenuStyle = { width: 28, height: 28, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0, border: 0, borderRadius: 6, background: 'transparent', color: V.ink, cursor: 'pointer', flexShrink: 0 };
   const snoozeLabel = `${tv('hedwig.v2.thread.snooze', 'Snooze')} (H)`;
   const moreLabel = tv('hedwig.v2.thread.more', 'More');
-  const moreItems = ({ withGroup2 = false, withGroup4 = false, withReply = false } = {}) => [
+  const flagLabel = flagged ? tv('hedwig.v2.thread.unflag', 'Unflag') : tv('hedwig.v2.thread.flag', 'Flag');
+  const deleteLabel = tv('hedwig.v2.thread.delete', 'Delete');
+  const junkLabel = tv('hedwig.v2.thread.junk', 'Junk');
+  const moreItems = ({ withGroup2 = false, withMove = false, withReply = false } = {}) => [
     ...(withGroup2 && work ? [{ id: 'later', label: tv('hedwig.v2.rail.replyLater', 'Reply Later'), icon: 'clock', hint: 'L', onSelect: later }] : []),
     ...(withGroup2 ? snoozeItems().map((s) => ({ ...s, label: `${tv('hedwig.v2.thread.snooze', 'Snooze')}: ${s.label}` })) : []),
     ...(withGroup2 && work ? [{ id: 'aside', label: tv('hedwig.v2.thread.setAside', 'Set Aside'), icon: 'bookmark', hint: 'S', onSelect: aside }] : []),
     ...(withReply ? [
-      { id: 'replyAll', label: tv('hedwig.v2.thread.replyAll', 'Reply all'), icon: 'reply-all', onSelect: replyAll },
-      { id: 'forward', label: tv('hedwig.v2.thread.forward', 'Forward'), icon: 'forward', onSelect: forward },
+      { id: 'replyAll', label: tv('hedwig.v2.thread.replyAll', 'Reply all'), icon: 'reply-all', hint: 'A', onSelect: replyAll },
+      { id: 'forward', label: tv('hedwig.v2.thread.forward', 'Forward'), icon: 'forward', hint: 'F', onSelect: forward },
     ] : []),
-    ...(withGroup4 ? [
-      { id: 'flag', label: flagged ? tv('hedwig.v2.thread.unflag', 'Remove flag') : tv('hedwig.v2.thread.flag', 'Flag'), icon: 'flag', onSelect: toggleFlag },
+    ...(withMove ? [
       { type: 'header', label: `${tv('hedwig.v2.thread.move', 'Move')} (V)` },
       ...moveItems().filter((x) => x.type !== 'header'),
     ] : []),
-    ...(withGroup2 || withGroup4 || withReply ? [{ type: 'separator' }] : []),
-    { id: 'unread', label: tv('hedwig.v2.thread.markUnread', 'Mark as unread'), icon: 'mail', onSelect: unread },
+    ...(withGroup2 || withMove || withReply ? [{ type: 'separator' }] : []),
+    { id: 'unread', label: tv('hedwig.v2.thread.markUnread', 'Mark as unread'), icon: 'mail', hint: 'U', onSelect: unread },
     { id: 'source', label: tv('hedwig.v2.thread.viewSource', 'View source'), icon: 'file', onSelect: () => setHeadersFor(latestId) },
     { id: 'unsubscribe', label: tv('hedwig.v2.thread.unsubscribe', 'Unsubscribe'), icon: 'mail-open', onSelect: unsub },
     ...(latest?.from?.email && !isMine(latest) ? [{ id: 'block', label: tv('hedwig.v2.thread.blockSender', 'Block sender'), icon: 'ban', onSelect: block }] : []),
-    { id: 'spam', label: tv('hedwig.v2.thread.reportSpam', 'Report spam'), icon: 'circle-alert', onSelect: spam },
     { id: 'original', label: tv('hedwig.v2.thread.original', 'Open original'), icon: 'external', onSelect: showOriginal },
   ];
 
+  // Groups, left to right: Done, Delete, Junk, Flag (always); Reply Later, Snooze, Set Aside
+  // (into More below 900px); Reply, Reply all, Forward (the last two into More below 640px);
+  // then Move (into More below 900px) and More.
   const group = (children, key) => <div key={key} role="group" style={{ display: 'flex', alignItems: 'center', gap: 2 }}>{children}</div>;
   const toolbar = !phone && (
     <Sheet
@@ -848,20 +921,25 @@ export default function Thread({ props }) {
       radius={0}
       style={{ position: 'sticky', top: 0, zIndex: 3, flexShrink: 0, height: 48, boxSizing: 'border-box', display: 'flex', alignItems: 'center', gap: 12, padding: '0 12px', borderBottom: `1px solid ${V.line}` }}
     >
-      {group(<IconButton icon="circle-check" label={tv('hedwig.v2.thread.done', 'Done')} kbd="E" primary showLabel disabled={Boolean(busy)} onClick={done} />, 'g1')}
+      {group(<>
+        <IconButton icon="circle-check" label={tv('hedwig.v2.thread.done', 'Done')} kbd="E" primary showLabel onClick={done} />
+        <IconButton icon="trash" label={deleteLabel} kbd="⌫" data-action="delete" onClick={del} />
+        <IconButton icon="alert-octagon" label={junkLabel} kbd="!" data-action="junk" onClick={junk} />
+        <IconButton icon="flag" label={flagLabel} kbd="⇧S" data-action="flag" active={flagged} fill={flagged ? 'currentColor' : undefined} onClick={toggleFlag} style={flagged ? { color: V.accent } : undefined} />
+      </>, 'g1')}
       {!narrow && group(<>
-        {work && <IconButton icon="clock" label={tv('hedwig.v2.rail.replyLater', 'Reply Later')} kbd="L" disabled={Boolean(busy)} onClick={later} />}
+        {work && <IconButton icon="clock" label={tv('hedwig.v2.rail.replyLater', 'Reply Later')} kbd="L" onClick={later} />}
         <span ref={snoozeRef} style={{ display: 'inline-flex' }}>
           <MenuButton label={snoozeLabel} items={snoozeItems} align="left" width={220} buttonClassName="hw-icon-btn" buttonStyle={iconMenuStyle}>
             <Icon name="alarm-clock" size={16} />
           </MenuButton>
         </span>
-        {work && <IconButton icon="bookmark" label={tv('hedwig.v2.thread.setAside', 'Set Aside')} kbd="S" disabled={Boolean(busy)} onClick={aside} />}
+        {work && <IconButton icon="bookmark" label={tv('hedwig.v2.thread.setAside', 'Set Aside')} kbd="S" onClick={aside} />}
       </>, 'g2')}
       {group(<>
         <IconButton icon="reply" label={tv('hedwig.v2.thread.reply', 'Reply')} kbd="R" onClick={focusReply} />
-        <IconButton icon="reply-all" label={tv('hedwig.v2.thread.replyAll', 'Reply all')} kbd="A" disabled={Boolean(busy)} onClick={replyAll} />
-        <IconButton icon="forward" label={tv('hedwig.v2.thread.forward', 'Forward')} kbd="F" disabled={Boolean(busy)} onClick={forward} />
+        {!tight && <IconButton icon="reply-all" label={tv('hedwig.v2.thread.replyAll', 'Reply all')} kbd="A" disabled={Boolean(busy)} onClick={replyAll} />}
+        {!tight && <IconButton icon="forward" label={tv('hedwig.v2.thread.forward', 'Forward')} kbd="F" disabled={Boolean(busy)} onClick={forward} />}
       </>, 'g3')}
       <span style={{ flexGrow: 1 }} />
       {group(<>
@@ -872,9 +950,8 @@ export default function Thread({ props }) {
             </MenuButton>
           </span>
         )}
-        {!narrow && <IconButton icon="flag" label={flagged ? tv('hedwig.v2.thread.unflag', 'Remove flag') : tv('hedwig.v2.thread.flag', 'Flag')} active={flagged} disabled={busy === 'flag'} onClick={toggleFlag} style={flagged ? { color: V.attention } : undefined} />}
         <span ref={moreRef} style={{ display: 'inline-flex' }} onClickCapture={narrow ? loadFolders : undefined}>
-          <MenuButton label={moreLabel} items={() => moreItems({ withGroup2: narrow, withGroup4: narrow })} align="right" width={240} buttonClassName="hw-icon-btn" buttonStyle={iconMenuStyle}>
+          <MenuButton label={moreLabel} items={() => moreItems({ withGroup2: narrow, withMove: narrow, withReply: tight })} align="right" width={240} buttonClassName="hw-icon-btn" buttonStyle={iconMenuStyle}>
             <Icon name="ellipsis" size={16} />
           </MenuButton>
         </span>
@@ -939,8 +1016,7 @@ export default function Thread({ props }) {
   );
 
   // ── messages ──
-  const lastIdx = messages.length - 1;
-  const defaultOpen = (m, i) => i === lastIdx || m.unread;
+  const defaultOpen = (m, i) => i === latestIdx || m.unread || isDraft(m);
   const isOpen = (m, i) => toggled[m.id] ?? defaultOpen(m, i);
   const folds = unfolded ? new Map() : foldRuns(messages.map((m, i) => !defaultOpen(m, i) && toggled[m.id] !== true), FOLD_OVER);
   const messageList = (
@@ -950,7 +1026,10 @@ export default function Thread({ props }) {
         if (fold) {
           return fold.start === i ? <FoldRow key={`fold-${i}`} count={fold.count} phone={phone} onOpen={() => setUnfolded(true)} /> : null;
         }
-        const latestOne = i === lastIdx;
+        if (isDraft(m)) {
+          return <DraftItem key={m.id || i} m={m} n={i + 1} phone={phone} busy={busy === 'editDraft'} onEdit={() => editDraft(m)} />;
+        }
+        const latestOne = i === latestIdx;
         return (
           <MessageItem
             key={m.id || i}
@@ -986,7 +1065,29 @@ export default function Thread({ props }) {
   );
 
   const replyLabel = tv('hedwig.v2.thread.replyToLabel', 'Reply to {{name}}', { name: replyTo });
-  const replyBar = data && latest && (phone
+  const continueLabel = busy === 'editDraft' ? tv('hedwig.v2.drafts.opening', 'Opening…') : tv('hedwig.v2.drafts.continue', 'Continue draft');
+  const continueBar = data && trailingDraft && (phone
+    ? (
+      <div data-reply-bar="" style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '12px 16px 16px', flexShrink: 0 }}>
+        <Btn accent size="phone" disabled={busy === 'editDraft'} onClick={() => editDraft(trailingDraft)}>
+          <Icon name="file" size={16} />
+          {continueLabel}
+        </Btn>
+      </div>
+    )
+    : (
+      <div data-reply-bar="" style={{ position: 'sticky', bottom: 0, zIndex: 2, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 8, padding: '10px 24px 14px', background: V.content, borderTop: `1px solid ${V.line}` }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 40, boxSizing: 'border-box', padding: '0 6px 0 12px', borderRadius: 10, background: V.field }}>
+          <span aria-hidden="true" style={{ display: 'inline-flex', color: V.attentionInk }}><Icon name="file" size={14} /></span>
+          <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: V.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{tv('hedwig.v2.drafts.waiting', 'Your reply is saved as a draft.')}</span>
+          <Btn accent disabled={busy === 'editDraft'} onClick={() => editDraft(trailingDraft)}>{continueLabel}</Btn>
+        </div>
+      </div>
+    ));
+  const savedNote = !phone && draft.trim() && savedText === draft
+    ? <span data-draft-saved="" role="status" style={{ fontSize: 11, color: V.muted }}>{tv('hedwig.v2.drafts.saved', 'Draft saved')}</span>
+    : null;
+  const replyBar = continueBar || (data && latest && (phone
     ? (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '12px 16px 16px', flexShrink: 0 }}>
         <QuickReplies phone items={quick} disabled={Boolean(busy)} onPick={(q) => run('reply', () => openReplyComposer(latestId, q))} />
@@ -1044,6 +1145,7 @@ export default function Thread({ props }) {
               )}
               {work && <RemindIfNoReply on={watchOn} days={remindDays} onToggle={setWatchOn} onDays={setRemindDays} />}
               <span style={{ flexGrow: 1 }} />
+              {savedNote}
               <IconButton icon="popout" label={tv('hedwig.v2.thread.popOut', 'Open in the composer')} onClick={popOut} />
               <span aria-hidden="true" style={{ fontSize: 11, color: V.muted, fontVariantNumeric: 'tabular-nums' }}>{SEND_KEYS}</span>
               <Btn accent type="submit" title={`${tv('hedwig.v2.thread.send', 'Send')} (${SEND_KEYS})`} disabled={Boolean(busy) || !draft.trim()}>
@@ -1053,7 +1155,7 @@ export default function Thread({ props }) {
           )}
         </form>
       </div>
-    ));
+    )));
 
   const headersModal = headersFor && (
     <MessageHeaderModal messageId={headersFor} subject={title} onClose={() => setHeadersFor(null)} />
@@ -1084,7 +1186,7 @@ export default function Thread({ props }) {
         <Sheet as="header" phone material="bar" radius={0} style={{ position: 'relative', zIndex: 3, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4, padding: 'calc(var(--sat, env(safe-area-inset-top, 0px)) + 4px) 4px 4px', borderBottom: `0.5px solid ${V.line2}` }}>
           <IconButton icon="chevron-left" size={44} label={tv('hedwig.v2.thread.back', 'Back')} onClick={() => phoneCtx?.back?.()} />
           <span style={{ flexGrow: 1 }} />
-          <IconButton icon="flag" size={44} label={flagged ? tv('hedwig.v2.thread.unflag', 'Remove flag') : tv('hedwig.v2.thread.flag', 'Flag')} active={flagged} onClick={toggleFlag} style={flagged ? { color: V.attention } : undefined} />
+          <IconButton icon="flag" size={44} label={flagLabel} active={flagged} fill={flagged ? 'currentColor' : undefined} onClick={toggleFlag} style={flagged ? { color: V.accent } : undefined} />
         </Sheet>
         <div className="hw-scroll" style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', display: 'flex', flexDirection: 'column' }}>
           {content}
@@ -1092,17 +1194,19 @@ export default function Thread({ props }) {
           {replyBar}
         </div>
         <Sheet as="footer" phone material="bar" radius={0} role="toolbar" aria-label={tv('hedwig.v2.thread.toolbar', 'Message actions')} style={{ position: 'relative', zIndex: 3, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-around', padding: '2px 8px calc(2px + env(safe-area-inset-bottom, 0px))', borderTop: `0.5px solid ${V.line2}` }}>
-          <IconButton icon="circle-check" size={44} label={tv('hedwig.v2.thread.done', 'Done')} disabled={Boolean(busy)} onClick={done} style={{ color: V.accent }} />
-          {work
-            ? <IconButton icon="clock" size={44} label={tv('hedwig.v2.rail.replyLater', 'Reply Later')} disabled={Boolean(busy)} onClick={later} />
-            : <IconButton icon="mail" size={44} label={tv('hedwig.v2.thread.markUnread', 'Mark as unread')} disabled={Boolean(busy)} onClick={unread} />}
+          <IconButton icon="circle-check" size={44} label={tv('hedwig.v2.thread.done', 'Done')} onClick={done} style={{ color: V.accent }} />
+          <IconButton icon="trash" size={44} label={deleteLabel} onClick={del} />
           <MenuButton label={tv('hedwig.v2.thread.snooze', 'Snooze')} items={snoozeItems} align="left" width={220} buttonClassName="hw-icon-btn" buttonStyle={barBtn}>
             <Icon name="alarm-clock" size={22} />
           </MenuButton>
           <IconButton icon="reply" size={44} label={tv('hedwig.v2.thread.reply', 'Reply')} onClick={focusReply} />
           <MenuButton label={moreLabel} items={() => [
-            ...(work ? [{ id: 'aside', label: tv('hedwig.v2.thread.setAside', 'Set Aside'), icon: 'bookmark', onSelect: aside }] : []),
-            ...moreItems({ withReply: true }).filter((x) => x.id !== 'unread' || work),
+            ...(work ? [
+              { id: 'later', label: tv('hedwig.v2.rail.replyLater', 'Reply Later'), icon: 'clock', onSelect: later },
+              { id: 'aside', label: tv('hedwig.v2.thread.setAside', 'Set Aside'), icon: 'bookmark', onSelect: aside },
+            ] : []),
+            { id: 'junk', label: junkLabel, icon: 'alert-octagon', onSelect: junk },
+            ...moreItems({ withReply: true }),
             { id: 'stream', label: tv('hedwig.v2.thread.changeStream', 'Change stream…'), icon: 'folder-input', onSelect: () => openDoor(null) },
           ]} align="right" width={240} buttonClassName="hw-icon-btn" buttonStyle={barBtn}>
             <Icon name="ellipsis" size={22} />

@@ -5,7 +5,8 @@ import { create } from 'zustand';
 import { hedwigApi } from '../api.js';
 import { useStore } from '../../store/index.js';
 import { userVarsCss, DEFAULT_ACCENT, DEFAULT_BLUR, clampBlur, normaliseHex } from '../theme/tokens.js';
-import { v2Api, listOf, isMockMode, lastLocalSortChange, COUNTS_EVENT } from './client.js';
+import { v2Api, listOf, isMockMode, lastLocalSortChange, COUNTS_EVENT, SORT_EVENTS, REFRESH_DEBOUNCE_MS } from './client.js';
+import { loadDrafts, resetDraftFolderCache } from './drafts.js';
 import { tvn } from './i18n.js';
 
 export const UI_DEFAULTS = {
@@ -85,7 +86,37 @@ export function countText(counts, more, key) {
   return more?.[key] ? `${n}+` : String(n);
 }
 
-const EMPTY_COUNTS = { screener: null, people: null, reading: null, records: null, replyLater: null, setAside: null, snoozed: null };
+const EMPTY_COUNTS = { screener: null, people: null, reading: null, records: null, replyLater: null, setAside: null, snoozed: null, drafts: null };
+const EMPTY_DRAFTS = { items: null, error: null, loading: false };
+let draftsSeq = 0;
+
+// ── Optimistic rows (actions.js) ───────────────────────────────────────────────
+/** The keys a row answers to: its message and its thread. */
+export function rowKeys(item) {
+  return [item?.messageId, item?.threadId].filter(Boolean).map(String);
+}
+
+/** Whether two stream items are the same conversation. */
+export function sameRow(a, b) {
+  if (!a || !b) return false;
+  if (a.messageId && a.messageId === b.messageId) return true;
+  return Boolean(a.threadId) && a.threadId === b.threadId;
+}
+
+/**
+ * A list as it should show right now: rows an action took away (Done, Delete, Junk, Move,
+ * Snooze) left out, and the local flag / read changes laid over the rest. Pure.
+ */
+export function liveRows(items, hidden, patches) {
+  const out = [];
+  for (const it of items || []) {
+    if (!it) continue;
+    if (hidden && rowKeys(it).some((k) => hidden[k])) continue;
+    const p = patches && it.messageId ? patches[it.messageId] : null;
+    out.push(p ? { ...it, ...p } : it);
+  }
+  return out;
+}
 
 export const useV2 = create((set, get) => ({
   prefs: { ...UI_DEFAULTS },
@@ -98,13 +129,66 @@ export const useV2 = create((set, get) => ({
   today: null,              // { screened, bundled, rescued, blocked }
   selected: null,           // stream item whose thread the thread pane shows
   caps: { work: null },     // work routes: null = not asked yet, true / false once answered
+  drafts: { ...EMPTY_DRAFTS }, // every account's saved drafts, newest first (the Drafts view and its rail count)
+  draftFolders: null,       // { [accountId]: drafts folder path } once resolved, for the thread's draft blocks
+  hidden: {},               // row key → true while an action has taken the row away (actions.js)
+  patches: {},              // messageId → { flagged, unread } laid over the rows until the lists reload
+  order: null,              // { owner, items }: the list on screen in display order, for "the next row"
 
   /** Back to signed-out state (the session stopped or another user signed in). */
   reset() {
     countsSeq++;
+    draftsSeq++;
     probe = null;
-    set({ counts: { ...EMPTY_COUNTS }, countsMore: {}, today: null, selected: null, caps: { work: null }, prefs: { ...UI_DEFAULTS }, prefsLoaded: false, settingsFields: null });
+    resetDraftFolderCache();
+    set({ counts: { ...EMPTY_COUNTS }, countsMore: {}, today: null, selected: null, caps: { work: null }, prefs: { ...UI_DEFAULTS }, prefsLoaded: false, settingsFields: null, drafts: { ...EMPTY_DRAFTS }, draftFolders: null, hidden: {}, patches: {}, order: null });
   },
+
+  /** Take rows away (by rowKeys) or bring them back. Counted, so two actions on one row nest. */
+  hideRows(keys) {
+    const hidden = { ...get().hidden };
+    for (const k of keys || []) hidden[k] = (hidden[k] || 0) + 1;
+    set({ hidden });
+  },
+  showRows(keys) {
+    const hidden = { ...get().hidden };
+    for (const k of keys || []) {
+      if (hidden[k] > 1) hidden[k] -= 1;
+      else delete hidden[k];
+    }
+    set({ hidden });
+  },
+
+  /** Lay a change over rows by message id; returns what was there before, for restorePatches. */
+  patchRows(ids, patch) {
+    const patches = { ...get().patches };
+    const before = {};
+    for (const id of ids || []) {
+      before[id] = patches[id] || null;
+      patches[id] = { ...(patches[id] || {}), ...patch };
+    }
+    set({ patches });
+    return before;
+  },
+  restorePatches(before) {
+    const patches = { ...get().patches };
+    for (const [id, p] of Object.entries(before || {})) {
+      if (p) patches[id] = p;
+      else delete patches[id];
+    }
+    set({ patches });
+  },
+
+  /** A count moved by a local action (never below zero; unknown counts stay unknown). */
+  bumpCount(key, delta) {
+    const n = get().counts[key];
+    if (typeof n !== 'number') return;
+    set({ counts: { ...get().counts, [key]: Math.max(0, n + delta) } });
+  },
+
+  /** The list on screen publishes its rows in display order; the owner clears only its own. */
+  setOrder(owner, items) { set({ order: { owner, items: items || [] } }); },
+  clearOrder(owner) { if (get().order?.owner === owner) set({ order: null }); },
 
   /** Ask once whether the work routes exist (GET /work/lists); a 404 hides their controls. */
   probeWork() {
@@ -184,6 +268,36 @@ export const useV2 = create((set, get) => ({
   select(item) { set({ selected: item || null }); },
 
   /**
+   * Reload every account's drafts (upstream's message list for each Drafts folder). The Drafts
+   * view shows them and the rail counts them; the thread learns each account's Drafts folder.
+   * One failing account never hides the others; the error shows only when nothing loaded.
+   */
+  async refreshDrafts() {
+    const my = ++draftsSeq;
+    set({ drafts: { ...get().drafts, loading: true } });
+    const st = useStore.getState();
+    try {
+      const { items, folders, errors } = await loadDrafts({ accounts: st.accounts || [], folders: st.folders || {} });
+      if (my !== draftsSeq) return;
+      const error = !items.length && errors.length ? errors[0] : null;
+      set({
+        drafts: { items: error && get().drafts.items ? get().drafts.items : items, error, loading: false },
+        draftFolders: { ...(get().draftFolders || {}), ...folders },
+        counts: { ...get().counts, drafts: error ? get().counts.drafts : items.length },
+      });
+    } catch (error) {
+      if (my === draftsSeq) set({ drafts: { ...get().drafts, error, loading: false } });
+    }
+  },
+
+  /** Load the drafts once if nothing asked yet (the thread needs the Drafts folders). */
+  ensureDrafts() {
+    const d = get().drafts;
+    if (d.items === null && !d.loading && !d.error) return get().refreshDrafts();
+    return Promise.resolve();
+  },
+
+  /**
    * Refresh the rail and tab-bar counts. There is no counts route: Needs you walks the short
    * needsYou=1 list, Reading and Records count unread on their first page (a "+" when there is
    * more), the Screener counts senders, the lists come from GET /work/lists. `poll` is the
@@ -219,6 +333,7 @@ export const useV2 = create((set, get) => ({
       replyLater: val(lists, listN('replyLater', 'reply_later'), prev.replyLater),
       setAside: val(lists, listN('setAside', 'set_aside'), prev.setAside),
       snoozed: val(lists, listN('snoozed', 'snoozed'), prev.snoozed),
+      drafts: get().counts.drafts,
     };
     const countsMore = {
       people: val(people, (d) => d.more, prevMore.people),
@@ -244,6 +359,50 @@ export const useV2 = create((set, get) => ({
     }
   },
 }));
+
+// ── Drafts: when to reload them ────────────────────────────────────────────────
+// Upstream's mail WebSocket events (new mail, a sync finished, a folder changed), a sorting
+// change, and the composer closing (a draft saved, replaced or sent). Several watchers (the
+// session, a mounted Drafts view) share one set of listeners.
+export const DRAFT_EVENTS = ['mailflow:refresh', 'mailflow:sync_done', ...SORT_EVENTS];
+// After the composer closes: at once for a save (its row is written before the close), and
+// again a little later for a send, whose delete of the old copy runs after the close.
+const AFTER_COMPOSE_MS = [REFRESH_DEBOUNCE_MS, 2000];
+
+let draftWatchers = 0;
+let draftWatch = null;
+
+export function watchDrafts() {
+  draftWatchers += 1;
+  if (!draftWatch && typeof window !== 'undefined') {
+    let t = null;
+    const timers = new Set();
+    const onEvent = () => { clearTimeout(t); t = setTimeout(() => useV2.getState().refreshDrafts(), REFRESH_DEBOUNCE_MS); };
+    for (const n of DRAFT_EVENTS) window.addEventListener(n, onEvent);
+    const unsub = useStore.subscribe((s, prev) => {
+      // Accounts arrive after sign-in (or one is added): their Drafts folders are new.
+      if (s.accounts !== prev.accounts) onEvent();
+      if (!prev.composing || s.composing) return;
+      for (const ms of AFTER_COMPOSE_MS) {
+        const id = setTimeout(() => { timers.delete(id); useV2.getState().refreshDrafts(); }, ms);
+        timers.add(id);
+      }
+    });
+    draftWatch = () => {
+      clearTimeout(t);
+      for (const id of timers) clearTimeout(id);
+      for (const n of DRAFT_EVENTS) window.removeEventListener(n, onEvent);
+      unsub();
+    };
+  }
+  let done = false;
+  return () => {
+    if (done) return;
+    done = true;
+    draftWatchers -= 1;
+    if (draftWatchers <= 0 && draftWatch) { draftWatch(); draftWatch = null; draftWatchers = 0; }
+  };
+}
 
 // ── Colour scheme: follow the system, or a manual light / dark choice ─────────
 

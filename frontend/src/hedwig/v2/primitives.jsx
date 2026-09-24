@@ -7,6 +7,7 @@ import { createContext, forwardRef, useContext, useEffect, useState } from 'reac
 import { tv } from './i18n.js';
 import { Icon } from '../icons.jsx';
 import { AVATAR_HUES } from '../theme/tokens.js';
+import { ViewMenuButton } from '../shell/TopBar.jsx';
 
 const SYSTEM = "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI', InterVariable, Inter, Roboto, 'Helvetica Neue', Arial, sans-serif";
 
@@ -367,7 +368,7 @@ export function IconBtn({ label, children, solid = false, accent = false, style,
  * toggle (aria-pressed; selected fill, glyph in the accent); `showLabel` adds a 13px/500 label
  * after the glyph (the reader's Done).
  */
-export const IconButton = forwardRef(function IconButton({ icon, label, kbd, onClick, active, primary = false, disabled = false, size = 28, showLabel = false, style, children, ...rest }, ref) {
+export const IconButton = forwardRef(function IconButton({ icon, label, kbd, onClick, active, primary = false, disabled = false, size = 28, showLabel = false, fill, style, children, ...rest }, ref) {
   const name = kbd ? `${label} (${kbd})` : label;
   const glyph = Math.round(size * 16 / 28);
   return (
@@ -391,7 +392,7 @@ export const IconButton = forwardRef(function IconButton({ icon, label, kbd, onC
         ...style,
       }}
     >
-      <Icon name={icon} size={glyph} />
+      <Icon name={icon} size={glyph} fill={fill} />
       {showLabel && <span>{label}</span>}
       {children}
     </button>
@@ -485,12 +486,15 @@ export function Glyph({ name, size = 22, stroke = 1.6 }) {
 /**
  * A view's header. On desktop it sits at the top of the pane's sheet: title 17px/600, the count or
  * subtitle 12px muted on the same baseline. On a phone it is the top bar: full width, `bar`
- * material with a hairline under it, a 28px/700 large title (spec §g), no rounded corners.
+ * material with a hairline under it, a 28px/700 large title (spec §g), no rounded corners; a tab's
+ * root screen ends its title row with the View button (the phone View sheet).
  */
 export function ViewHead({ title, sub, actions, children, phone, before, compact = false }) {
   // A view pushed onto a phone tab's stack gets a way back in its own header.
   const nav = useContext(PhoneContext);
   const back = phone && nav?.depth > 0 && nav.back ? nav.back : null;
+  // A tab's root screen carries the View sheet (layout, light or dark, settings).
+  const root = phone && !(nav?.depth > 0);
   const titleEl = compact
     ? null
     : (
@@ -500,6 +504,7 @@ export function ViewHead({ title, sub, actions, children, phone, before, compact
         {sub && <span style={{ fontSize: 12, color: V.muted, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{sub}</span>}
         <span style={{ flexGrow: 1 }} />
         {actions}
+        {root && <span style={{ alignSelf: 'center', display: 'inline-flex', marginRight: -12 }}><ViewMenuButton variant="phone" /></span>}
       </div>
     );
   if (phone) {

@@ -1,8 +1,11 @@
-// Layout templates. 'streams' (the v2 default: rail · People · thread), 'triage' and 'research'
-// are Hedwig's; the rest reproduce upstream's
-// presets from frontend/src/layouts.js as pane trees (nav · list · thread), so a MailFlow user
-// finds the arrangement they know. Each preset template names its upstream preset so applying
-// it also sets upstream's `layout` (row padding, list density, the list's own layout menu).
+// Layout templates. The three Hedwig layouts ('streams', the v2 default: rail · list · reader;
+// 'triage': the People stream beside the reader and the person's context; 'research': Ask beside
+// the reader) are what the View menu offers. Every one keeps the rail, so the way to the other
+// places, the View menu and settings is always on screen.
+// The upstream presets (focused, compact, comfortable, wide, vertical) are upstream's classic list
+// densities as pane trees (nav · list · thread). They are not offered in the Hedwig shell any more
+// (the classic shell keeps them in its own list menu), but they still build, so a layout row saved
+// under one of their names, or upstream's own layout menu while such a row is on screen, loads.
 import { LAYOUTS } from '../../layouts.js';
 import { view, split, normalise } from './model.js';
 
@@ -22,11 +25,16 @@ function preset(key) {
     : split('row', [view('core.nav'), list, thread], [NAV_WIDTH, p.listWidth, null]);
 }
 
+export const CONTEXT_WIDTH = 280;
+export const TRIAGE_LIST_WIDTH = 340;
+export const ASK_WIDTH = 520;
+
 export const TEMPLATES = [
   {
     id: 'streams',
     label: 'Streams',
-    note: 'rail · people · thread',
+    description: 'Rail · list · reader. The default.',
+    note: 'rail · list · reader',
     build: () => split('row', [
       view('hedwig.rail'),
       view('hedwig.stream.people'),
@@ -36,19 +44,25 @@ export const TEMPLATES = [
   {
     id: 'triage',
     label: 'Triage',
-    note: 'needs you · thread · context',
+    description: 'Needs you first, with the person’s context beside the reader.',
+    note: 'rail · people · reader · context',
     build: () => split('row', [
-      view('core.nav'),
-      view('hedwig.needs'),
-      view('core.thread'),
-      view('hedwig.context', { follows: 'core.thread' }),
-    ], [NAV_WIDTH, 420, null, 320]),
+      view('hedwig.rail'),
+      view('hedwig.stream.people'),
+      view('hedwig.thread'),
+      view('hedwig.context', { follows: 'hedwig.thread' }),
+    ], [RAIL_WIDTH, TRIAGE_LIST_WIDTH, null, CONTEXT_WIDTH]),
   },
   {
     id: 'research',
     label: 'Research',
-    note: 'ask · timeline',
-    build: () => split('row', [view('hedwig.ask'), view('hedwig.timeline')], [640, null]),
+    description: 'Ask across all mail beside the reader.',
+    note: 'rail · ask · reader',
+    build: () => split('row', [
+      view('hedwig.rail'),
+      view('hedwig.ask'),
+      view('hedwig.thread'),
+    ], [RAIL_WIDTH, ASK_WIDTH, null]),
   },
   ...['focused', 'compact', 'comfortable', 'wide', 'vertical'].map((key) => ({
     id: key,
@@ -58,6 +72,9 @@ export const TEMPLATES = [
     build: () => preset(key),
   })),
 ];
+
+/** The layouts the View menu, the palette and the layout editor offer (no upstream presets). */
+export const HEDWIG_TEMPLATES = TEMPLATES.filter((t) => !t.upstreamLayout);
 
 export const TEMPLATE_IDS = TEMPLATES.map((t) => t.id);
 export const DEFAULT_TEMPLATE = 'streams';

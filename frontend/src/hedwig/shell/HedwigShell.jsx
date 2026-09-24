@@ -156,6 +156,31 @@ function OverlayDrawer() {
   );
 }
 
+// While panes are being arranged (from Customize layout), a quiet bar says so and ends it.
+function ArrangeBar() {
+  const arrange = useShell((s) => s.arrange);
+  if (!arrange) return null;
+  return (
+    <div
+      role="status"
+      className="hw-sheet"
+      data-material="content"
+      data-popover=""
+      style={{
+        position: 'absolute', left: '50%', bottom: 20, transform: 'translateX(-50%)', zIndex: 45,
+        display: 'flex', alignItems: 'center', gap: 10, padding: '6px 6px 6px 14px', borderRadius: 12,
+        fontSize: 13, color: 'var(--hw-ink)', whiteSpace: 'nowrap',
+      }}
+    >
+      <Icon name="arrange" size={14} />
+      <span>{tr('arrange.status', 'Arranging panes: use each pane’s header to change, split or close it.')}</span>
+      <button type="button" className="hw-btn-solid" onClick={() => useShell.getState().toggleArrange()} style={{ ...ui.primaryButton }}>
+        {tr('arrange.done', 'Done')}
+      </button>
+    </div>
+  );
+}
+
 function Popouts() {
   useRegistryVersion();
   const popouts = useShell((s) => s.popouts);
@@ -233,6 +258,7 @@ export default function HedwigShell({ onOpenPalette }) {
       <main aria-label={tr('panes', 'Panes')} style={{ flex: 1, minHeight: 0, display: 'flex', position: 'relative', overflow: 'hidden', padding: hasRail ? pad : `0 ${pad}px ${pad}px`, zIndex: 1 }}>
         {ready && tree ? <PaneNode node={tree} /> : <div aria-busy="true" style={{ flex: 1 }} />}
         <OverlayDrawer />
+        <ArrangeBar />
       </main>
       <Popouts />
     </div>

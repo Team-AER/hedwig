@@ -7,7 +7,7 @@ import { useHedwig } from '../store.js';
 import { useStore } from '../../store/index.js';
 import * as M from './model.js';
 import { buildTemplate, getTemplate } from './templates.js';
-import { pickLayout, savedLayoutsFor, isPreV2Layout } from './layouts.js';
+import { pickLayout, savedLayoutsFor, isPreV2Layout, listSlot } from './layouts.js';
 import { tr } from './tr.js';
 
 const SAVE_DELAY_MS = 800;
@@ -38,6 +38,10 @@ function writeCache(device, { name, templateId, tree }) {
 function withTimeout(promise, ms) {
   return Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ms))]);
 }
+
+// The v2 views the rail swaps in the list pane (v2/nav.js MAIN_VIEWS; kept here as a pattern so
+// the shell does not import the views).
+const MAIN_VIEW = /^hedwig\.(stream\.|screener$|brief$|today$|list$|ledger$|waiting$)/;
 
 let saveTimer = null;
 let initSeq = 0;
@@ -125,8 +129,8 @@ export const useShell = create((set, get) => ({
       type: 'info',
       title: tr('migrated.title', 'Hedwig has a new layout'),
       body: old
-        ? tr('migrated.body', 'Your previous layout is kept as “{{name}}” in the layout menu.', { name: old })
-        : tr('migrated.bodyPlain', 'Your previous layout is in the layout menu.'),
+        ? tr('migrated.body2', 'Your previous layout is kept as “{{name}}” under View › Customize layout. The classic MailFlow shell is at the bottom of the View menu.', { name: old })
+        : tr('migrated.bodyPlain2', 'Your previous layout is under View › Customize layout.'),
     });
   },
 
@@ -386,6 +390,14 @@ export const useShell = create((set, get) => ({
       set((s) => ({ transient: { ...s.transient, [key]: { ...(s.transient[key] || {}), ...props, _request: req.nonce } } }));
       get().focus(key, { flash: true });
       return;
+    }
+    if (MAIN_VIEW.test(req.id) && !M.listPanes(tree).some((p) => MAIN_VIEW.test(p.node.id))) {
+      const slot = listSlot(tree);
+      if (slot) {
+        get().replaceView(slot, req.id, Object.keys(props).length ? props : undefined);
+        get().focus(slot);
+        return;
+      }
     }
     const pop = popouts.find((p) => p.id === req.id);
     if (pop) {
