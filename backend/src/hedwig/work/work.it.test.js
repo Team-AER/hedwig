@@ -112,7 +112,8 @@ describe.skipIf(!process.env.HEDWIG_IT)('working the seeded demo mailbox', () =>
 
     const app = express();
     app.use(express.json());
-    app.use((req, _res, next) => { req.session = { userId }; next(); });
+    // X-Test-User stands in for another signed-in user (the ownership checks).
+    app.use((req, _res, next) => { req.session = { userId: req.get('x-test-user') || userId }; next(); });
     const router = express.Router();
     workModule.routes(router);
     app.use('/api/hedwig', router);
@@ -354,5 +355,63 @@ describe.skipIf(!process.env.HEDWIG_IT)('working the seeded demo mailbox', () =>
     expect((await get('/work/message/nope/tldr')).status).toBe(400);
     expect((await get('/work/summaries/status')).body).toMatchObject({ eager: true, stories: { stories: expect.any(Number) }, tldrs: { tldrs: expect.any(Number) } });
     expect(Array.isArray((await get('/work/needs')).body.items)).toBe(true);
+  });
+
+  it('regenerates a story and a TL;DR on request: new text and provenance, 404 for someone else, 429 past six a minute', async () => {
+    const { _resetRegenerate } = await import('./regenerate.js');
+    _resetRegenerate();
+    const post = async (p, headers = {}) => {
+      const r = await fetch(`${base}${p}`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: '{}' });
+      return { status: r.status, body: await r.json() };
+    };
+    const before = await thread.threadStory(userId, THREAD);
+    expect(before.story.text).toBe('Jo wants you to confirm Thursday [1].');
+    expect(before.storyMeta).toMatchObject({ tier: 'reflex', model: GEMMA });
+    const { rows: [{ n: aiBefore }] } = await query("SELECT COUNT(*)::int AS n FROM hedwig_ai_calls WHERE user_id = $1 AND feature = 'work' AND prompt_id = 'work.summarise'", [userId]);
+
+    gw.on('work.summarise', (req) => {
+      const parts = req.messages[1].content.split('=== Item ').slice(1);
+      return { items: parts.map((part) => {
+        const [, id, kind] = /^(\w+) · kind: (\w+)/.exec(part);
+        const n = [...part.matchAll(/^\[(\d+)\] From/gm)].map((m) => Number(m[1]));
+        return kind === 'thread'
+          ? { id, tldr: 'Jo still needs an answer', sentences: [{ text: 'Jo is still waiting for you to confirm Thursday at 7.', cites: [n[n.length - 1]] }], timeline: [] }
+          : { id, tldr: 'Jo wants the charger brought along', sentences: [], timeline: [] };
+      }) };
+    });
+    const res = await post(`/work/thread/${encodeURIComponent(THREAD)}/story/regenerate`);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      threadId: THREAD, regenerated: true,
+      story: { text: 'Jo is still waiting for you to confirm Thursday at 7 [1].', citations: [{ n: 1, messageId: before.upToMessageId }] },
+      storyMeta: { source: 'regenerate', tier: 'reasoning', model: QWEN, lighter: false, promptId: 'work.summarise' },
+    });
+    const { rows: [row] } = await query('SELECT story, model, tier, lighter, source, prompt_version, ai_call_id FROM hedwig_work_stories WHERE user_id = $1 AND thread_key = $2', [userId, THREAD]);
+    expect(row).toMatchObject({ model: QWEN, tier: 'reasoning', lighter: false, source: 'regenerate', prompt_version: expect.any(String), ai_call_id: expect.anything() });
+    expect(row.story.story.text).toBe('Jo is still waiting for you to confirm Thursday at 7 [1].');
+    expect(row.story.quickReplies).toEqual(before.quickReplies); // same latest message: quick replies kept
+    // GET /work/thread now serves the rewritten story from the cache.
+    const after = await thread.threadStory(userId, THREAD);
+    expect(after).toMatchObject({ cached: true, story: { text: 'Jo is still waiting for you to confirm Thursday at 7 [1].' }, storyMeta: { source: 'regenerate', model: QWEN } });
+    const { rows: [{ n: aiAfter }] } = await query("SELECT COUNT(*)::int AS n FROM hedwig_ai_calls WHERE user_id = $1 AND feature = 'work' AND prompt_id = 'work.summarise'", [userId]);
+    expect(aiAfter).toBe(aiBefore + 1);
+
+    const t = await post(`/work/message/${before.upToMessageId}/tldr/regenerate`);
+    expect(t.status).toBe(200);
+    expect(t.body).toMatchObject({ messageId: before.upToMessageId, regenerated: true, tldr: { text: 'Jo wants the charger brought along', model: GEMMA, tier: 'reflex', lighter: false, promptId: 'work.summarise' } });
+
+    // Someone else: the thread and the message are not theirs.
+    const stranger = { 'x-test-user': randomUUID() };
+    expect((await post(`/work/thread/${encodeURIComponent(THREAD)}/story/regenerate`, stranger)).status).toBe(404);
+    expect((await post(`/work/message/${before.upToMessageId}/tldr/regenerate`, stranger)).status).toBe(404);
+    expect((await post('/work/message/nope/tldr/regenerate')).status).toBe(400);
+    const { rows: [still] } = await query('SELECT story FROM hedwig_work_stories WHERE user_id = $1 AND thread_key = $2', [userId, THREAD]);
+    expect(still.story.story.text).toBe('Jo is still waiting for you to confirm Thursday at 7 [1].');
+
+    // Two used above; four more (these find nothing), then the seventh in the minute is refused.
+    for (let i = 0; i < 4; i++) expect((await post('/work/thread/nope/story/regenerate')).status).toBe(404);
+    const slow = await post(`/work/thread/${encodeURIComponent(THREAD)}/story/regenerate`);
+    expect(slow).toEqual({ status: 429, body: { error: 'Slow down: six rewrites a minute' } });
+    _resetRegenerate();
   });
 });

@@ -203,3 +203,38 @@ export async function loadThread(item, { refresh = false } = {}) {
     extrasMissing,
   };
 }
+
+// ── Regenerate summary ────────────────────────────────────────────────────────
+// POST /work/thread/:threadId/story/regenerate and POST /work/message/:id/tldr/regenerate. One
+// rewrite in flight per thread (and per message) for the whole page: a second call while the first
+// runs gets the same promise, even from a reader that was closed and opened again meanwhile.
+const rewriting = new Map();
+
+function rewriteOnce(key, fn) {
+  if (!rewriting.has(key)) rewriting.set(key, Promise.resolve().then(fn).finally(() => rewriting.delete(key)));
+  return rewriting.get(key);
+}
+
+/** Is a rewrite of this story ('story:<threadId>') or TL;DR ('tldr:<messageId>') running? */
+export function isRewriting(key) { return rewriting.has(key); }
+
+/** The story written again → { story, storyProvenance, tldr }, shaped as loadThread has them. Rejects when there is none. */
+export function regenerateStory(threadId) {
+  return rewriteOnce(`story:${threadId}`, async () => {
+    const d = await v2Api.post(`/work/thread/${encodeURIComponent(threadId)}/story/regenerate`, {});
+    const ex = extrasOf(d && typeof d === 'object' ? d : {});
+    if (!ex.story) throw new Error('no story in the answer');
+    return { story: ex.story, storyProvenance: ex.storyProvenance, tldr: ex.tldr };
+  });
+}
+
+/** One message's TL;DR written again → { text, provenance } (provenance: { model, tier, lighter, … } or null). */
+export function regenerateTldr(messageId) {
+  return rewriteOnce(`tldr:${messageId}`, async () => {
+    const d = await v2Api.post(`/work/message/${encodeURIComponent(messageId)}/tldr/regenerate`, {});
+    const t = d?.tldr;
+    const text = typeof t === 'string' ? t : (t && typeof t.text === 'string' ? t.text : '');
+    if (!text.trim()) throw new Error('no TL;DR in the answer');
+    return { text: text.trim(), provenance: t && typeof t === 'object' ? t : null };
+  });
+}

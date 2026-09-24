@@ -8,6 +8,7 @@ import { listWaiting, addWatch, resolveWaiting, nudge } from './waiting.js';
 import { sendGuard } from './sendguard.js';
 import { tldrFor, messageTldr, summaryStatus, SUMMARISE_JOB } from './summaries.js';
 import { needsFor } from './needs.js';
+import { regenerateStory, regenerateTldr, takeRegenerate } from './regenerate.js';
 import { latestOfThreads, streamRow, isUuid, httpError } from './util.js';
 import { enqueue } from '../jobs.js';
 
@@ -41,6 +42,16 @@ export function mountWorkRoutes(r) {
 
   r.get('/work/thread/:threadId', handle((req, userId) => threadStory(userId, req.params.threadId, { refresh: truthy(req.query.refresh) })));
   r.post('/work/draft', handle((req, userId) => draft(userId, req.body || {})));
+  // "Regenerate summary" (the sparkles in the summary): six a minute per user, 429 past that.
+  r.post('/work/thread/:threadId/story/regenerate', handle((req, userId) => {
+    takeRegenerate(userId);
+    return regenerateStory(userId, req.params.threadId);
+  }));
+  r.post('/work/message/:id/tldr/regenerate', handle((req, userId) => {
+    if (!isUuid(req.params.id)) throw httpError(400, 'invalid message id');
+    takeRegenerate(userId);
+    return regenerateTldr(userId, req.params.id);
+  }));
 
   r.get('/work/waiting', handle((req, userId) => listWaiting(userId)));
   r.post('/work/waiting', handle((req, userId) => addWatch(userId, req.body || {})));

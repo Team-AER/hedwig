@@ -670,3 +670,81 @@ describe('send guard', () => {
     expect(gw.calls).toHaveLength(0); // no model call
   });
 });
+
+describe('regenerate summary', () => {
+  let regen;
+  beforeEach(async () => {
+    regen = await import('./regenerate.js');
+    regen._resetRegenerate();
+  });
+  const threadOf = (key, n) => Array.from({ length: n }, (_, i) => message({
+    id: `${key}-${i + 1}`, thread_key: key, body_text: `Message ${i + 1} of ${key}: can you confirm?`, date: at(`2026-09-2${Math.min(i, 2)}T1${i % 10}:00:00Z`),
+  }));
+  let wording = 'first';
+  const answer = (req) => {
+    const items = [...req.messages[1].content.matchAll(/=== Item (\w+) · kind: (\w+)/g)].map((m) => ({ id: m[1], kind: m[2] }));
+    const n = [...req.messages[1].content.matchAll(/^\[(\d+)\] From/gm)].length;
+    return { items: items.map((it) => (it.kind === 'thread'
+      ? { id: it.id, tldr: `Where it stands (${wording})`, sentences: [{ text: `Anna asked you to confirm (${wording}).`, cites: [n] }], timeline: [] }
+      : { id: it.id, tldr: `One line (${wording})`, sentences: [], timeline: [] })) };
+  };
+
+  it('allows six rewrites a minute per user, then refuses until the window moves on', () => {
+    let now = 0;
+    const lim = regen.createRateLimiter({ limit: 6, windowMs: 60_000, now: () => now });
+    for (let i = 0; i < 6; i++) expect(lim.take('u1')).toBe(true);
+    expect(lim.take('u1')).toBe(false);
+    expect(lim.take('u2')).toBe(true); // per user
+    now = 59_999;
+    expect(lim.take('u1')).toBe(false);
+    now = 60_000;
+    expect(lim.take('u1')).toBe(true);
+    expect(() => { for (let i = 0; i < 7; i++) regen.takeRegenerate(USER); }).toThrow(expect.objectContaining({ status: 429, message: 'Slow down: six rewrites a minute' }));
+  });
+
+  it('plans Tier 2 unless pinned to Tier 1 or Tier 2 is degraded', () => {
+    expect(regen.regeneratePlanFrom({ long: false })).toEqual({ long: false, escalate: true, lighter: false, degraded: false });
+    expect(regen.regeneratePlanFrom({ long: true, reasoningDegraded: true })).toEqual({ long: true, escalate: false, lighter: true, degraded: true });
+    expect(regen.regeneratePlanFrom({ long: false, reasoningDegraded: true })).toEqual({ long: false, escalate: false, lighter: false, degraded: true });
+    expect(regen.regeneratePlanFrom({ long: true, pinnedReflex: true })).toEqual({ long: true, escalate: false, lighter: true, degraded: false });
+  });
+
+  it('rewrites the story on Tier 2 while it is up, keeps the quick replies, and goes straight to Tier 1 when it is not', async () => {
+    resetConfig({ 'llm.fallbackModel': GEMMA, 'llm.fallbackCooldownSec': 600 });
+    db.thread = threadOf('t-r', 3);
+    gw.on('work.summarise', answer);
+    const quick = { story: { text: 'Old [1].', citations: [] }, tldr: 'old', timeline: [], quickReplies: ['Yes.', 'No.'], storyMeta: { source: 'eager' } };
+    db.stories.set(`${USER}|t-r`, { user_id: USER, thread_key: 't-r', up_to_message_id: 't-r-3', message_count: 3, story: quick, provenance: { quickReplies: { model: GEMMA } }, source: 'eager', error: null });
+    const out = await regen.regenerateStory(USER, 't-r');
+    expect(out).toMatchObject({ story: { text: 'Anna asked you to confirm (first) [1].' }, storyMeta: { source: 'regenerate', tier: 'reasoning', model: QWEN, lighter: false }, regenerated: true });
+    expect(gw.callsFor('work.summarise').map((c) => c.model)).toEqual([QWEN]);
+    expect(db.stories.get(`${USER}|t-r`)).toMatchObject({ source: 'regenerate', model: QWEN, tier: 'reasoning', story: { quickReplies: ['Yes.', 'No.'] }, provenance: { quickReplies: { model: GEMMA } } });
+
+    // Qwen goes down: the call falls back to Gemma once and Qwen is marked degraded; the next rewrite skips it.
+    gw.on('work.summarise', (req) => (req.model === QWEN ? gw.error(503, 'overloaded') : answer(req)));
+    await regen.regenerateStory(USER, 't-r');
+    const before = gw.callsFor('work.summarise').length;
+    wording = 'second';
+    const light = await regen.regenerateStory(USER, 't-r');
+    expect(light.storyMeta).toMatchObject({ tier: 'reflex', model: GEMMA, lighter: false }); // a short thread on Tier 1 is not "lighter"
+    expect(gw.callsFor('work.summarise').slice(before).map((c) => c.model)).toEqual([GEMMA]);
+    wording = 'first';
+  });
+
+  it('keeps the old story when the rewrite fails, and shares one rewrite between two clicks', async () => {
+    db.thread = threadOf('t-f', 2);
+    const old = { story: { text: 'Old story [1].', citations: [{ n: 1, messageId: 't-f-2' }] }, timeline: [], storyMeta: { source: 'eager' } };
+    db.stories.set(`${USER}|t-f`, { user_id: USER, thread_key: 't-f', up_to_message_id: 't-f-2', message_count: 2, story: old, provenance: {}, source: 'eager', error: null });
+    gw.on('work.summarise', { items: 'not a list' });
+    await expect(regen.regenerateStory(USER, 't-f')).rejects.toMatchObject({ status: 502 });
+    expect(db.stories.get(`${USER}|t-f`).story.story.text).toBe('Old story [1].');
+    expect(db.failures).toEqual([]); // not marked failed: the next open serves the old story
+
+    gw.on('work.summarise', gw.delay(30, answer({ messages: [{}, { content: '=== Item t1 · kind: thread\n[1] From x\n[2] From y' }] })));
+    const calls = gw.callsFor('work.summarise').length;
+    const [a, b] = await Promise.all([regen.regenerateStory(USER, 't-f'), regen.regenerateStory(USER, 't-f')]);
+    expect(a).toBe(b);
+    expect(gw.callsFor('work.summarise').length - calls).toBe(1);
+    await expect(regen.regenerateStory(USER, 'nope')).rejects.toMatchObject({ status: 404 });
+  });
+});

@@ -168,8 +168,19 @@ const CSS = `
   from { transform: translateY(-4px); opacity: 0; }
   to { transform: translateY(0); opacity: 1; }
 }
+/* "Regenerate summary": the sparkles turn slowly while the rewrite runs; the new text fades in. */
+.hw-regen { transition: background var(--motion-fast, 120ms) ease; }
+.hw-regen:hover:not([aria-busy="true"]) { background: var(--hw-hover); }
+.hw-spin { display: inline-flex; animation: hw-spin 1.2s linear infinite; }
+.hw-regen-new { animation: hw-fade-in 240ms var(--ease-standard, ease) 1; }
+@keyframes hw-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
 @media (prefers-reduced-motion: reduce) {
   .hw-pane[data-flash="true"] { animation: none; box-shadow: inset 0 0 0 2px var(--hw-accent); }
+  .hw-spin { animation: none; opacity: 0.5; }
+  .hw-regen-new { animation: none; }
 }
 /* Reduce transparency: glass becomes opaque (#F5F5F7 / #262628), bars take the content fill. */
 @media (prefers-reduced-transparency: reduce) {

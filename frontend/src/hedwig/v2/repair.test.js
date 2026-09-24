@@ -511,6 +511,95 @@ describe('the story so far', () => {
   });
 });
 
+// ── regenerate summary ───────────────────────────────────────────────────────
+describe('regenerate summary (the sparkles in the summary)', () => {
+  const anna = async () => (await mock.mockRequest('GET', '/sort/stream/people?limit=100')).items.find((i) => i.messageId === 'm-anna');
+  const regenPosts = () => requests().filter((r) => r === 'POST /work/thread/t-anna/story/regenerate');
+  const storyText = () => byLabel('The story so far').textContent;
+
+  test('the sparkles are a labelled button; a click rewrites the story, fades it in and says so', async () => {
+    await render(h(Thread, { props: { item: await anna() } }));
+    await settle(60);
+    const btn = byLabel('The story so far').querySelector('button[aria-label="Regenerate summary"]');
+    assert.ok(btn, 'the sparkles glyph is the control');
+    assert.equal(btn.getAttribute('title'), 'Regenerate summary');
+    assert.equal(btn.type, 'button', 'a native button: focusable, Enter and Space press it');
+    assert.equal(byLabel('The story so far').querySelector('[data-lighter]'), null);
+    assert.match(storyText(), /Anna sent a draft/);
+
+    mock.mockSetDegraded(true); // the rewrite comes back from the lighter model
+    mock.mockRequests({ clear: true });
+    await click(btn);
+    await settle(60);
+    assert.deepEqual(regenPosts(), ['POST /work/thread/t-anna/story/regenerate']);
+    assert.match(storyText(), /Rewrite 1: Q3 report: can you send the final numbers\? is waiting on your reply/);
+    assert.doesNotMatch(storyText(), /Anna sent a draft/);
+    assert.ok(byLabel('The story so far').querySelector('.hw-regen-new'), 'the new text fades in');
+    assert.equal(byLabel('The story so far').querySelector('[data-regen-note="done"]').textContent, 'Rewritten just now');
+    assert.equal(byLabel('The story so far').querySelector('[data-lighter]').textContent, 'Written by the lighter model', 'the note follows the new provenance');
+    assert.equal(all('button[aria-label^="Message "]', byLabel('The story so far')).length, 1, 'the new citations');
+  });
+
+  test('a failed rewrite keeps the old text at full strength and offers a retry that works', async () => {
+    mock.mockRegenerate({ fail: true });
+    await render(h(Thread, { props: { item: await anna() } }));
+    await settle(60);
+    await click(byLabel('The story so far').querySelector('button[aria-label="Regenerate summary"]'));
+    await settle(60);
+    const note = byLabel('The story so far').querySelector('[data-regen-note="failed"]');
+    assert.equal(note.textContent, 'Could not rewrite. Try again');
+    assert.match(storyText(), /Anna sent a draft/);
+    assert.equal(byLabel('The story so far').querySelector('.hw-regen-new'), null);
+    assert.doesNotMatch(byLabel('The story so far').innerHTML, /opacity: 0\.6/);
+
+    mock.mockRegenerate({ fail: false });
+    mock.mockRequests({ clear: true });
+    await click(note);
+    await settle(60);
+    assert.equal(regenPosts().length, 1);
+    assert.match(storyText(), /Rewrite 2:/);
+    assert.equal(byLabel('The story so far').querySelector('[data-regen-note="failed"]'), null);
+  });
+
+  test('clicks while it spins send nothing more: one rewrite in flight per thread', async () => {
+    mock.mockRegenerate({ delayMs: 120 });
+    await render(h(Thread, { props: { item: await anna() } }));
+    await settle(60);
+    const btn = byLabel('The story so far').querySelector('button[aria-label="Regenerate summary"]');
+    mock.mockRequests({ clear: true });
+    await React.act(async () => {
+      btn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+      btn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    });
+    await settle(20);
+    assert.equal(btn.getAttribute('aria-busy'), 'true');
+    assert.ok(btn.querySelector('.hw-spin'), 'the glyph turns');
+    assert.match(byLabel('The story so far').innerHTML, /opacity: 0\.6/, 'the old text stays, dimmed');
+    assert.match(storyText(), /Anna sent a draft/);
+    await click(btn);
+    await settle(200);
+    assert.equal(regenPosts().length, 1);
+    assert.match(storyText(), /Rewrite 1:/);
+    assert.equal(btn.getAttribute('aria-busy'), null);
+  });
+
+  test('each TL;DR has its own Regenerate on the per-message route', async () => {
+    await render(h(Thread, { props: { item: await anna() } }));
+    await settle(60);
+    const line = document.querySelector('[data-tldr]');
+    const btn = line.querySelector('button[aria-label="Regenerate"]');
+    assert.ok(btn);
+    assert.equal(btn.getAttribute('title'), 'Regenerate');
+    mock.mockRequests({ clear: true });
+    await click(btn);
+    await settle(60);
+    assert.deepEqual(requests().filter((r) => r.startsWith('POST ')), ['POST /work/message/m-anna/tldr/regenerate']);
+    assert.equal(document.querySelector('[data-tldr] [data-tldr-text]').firstChild.textContent, 'Rewrite 1: one line about m-anna.');
+    assert.equal(document.querySelector('[data-tldr] [data-regen-note="done"]').textContent, 'Rewritten just now');
+    assert.ok(document.querySelector('article#hw-msg-5 [data-tldr]'), 'still inside its article');
+  });
+});
+
 describe('TL;DRs in the thread, Reading and Records, and the inline question', () => {
   const anna = async () => (await mock.mockRequest('GET', '/sort/stream/people?limit=100')).items.find((i) => i.messageId === 'm-anna');
 

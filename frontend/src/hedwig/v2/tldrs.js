@@ -22,6 +22,13 @@ function fresh(id, now = Date.now()) {
 /** Forget every cached TL;DR (sign-out, tests). */
 export function resetTldrCache() { cache.clear(); inflight.clear(); }
 
+/** A TL;DR just written again ({ text, model, tier, lighter, … }): rows showing it pick it up. */
+export function putTldr(id, value) {
+  if (!id || !value) return;
+  cache.set(id, { value, at: Date.now() });
+  for (const fn of listeners) fn();
+}
+
 async function fetchTldrs(ids) {
   for (let i = 0; i < ids.length; i += MAX_IDS) {
     const chunk = ids.slice(i, i + MAX_IDS);

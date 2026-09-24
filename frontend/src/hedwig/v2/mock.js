@@ -159,6 +159,9 @@ function seed() {
     asks: seedAsks(),
     // Per-thread overrides of the work route's answer (tests: a story from the lighter model, a failed story).
     threadExtras: {},
+    // "Regenerate summary" (POST …/story/regenerate, …/tldr/regenerate): how many so far, and
+    // what the next ones do (tests: mockRegenerate({ fail, delayMs })).
+    regen: { count: 0, fail: false, delayMs: 0 },
     admin: seedAdmin(),
     // GET /work/tldr: TL;DRs for rows that do not carry their own (Screener, Reading, Records).
     tldrs: {
@@ -893,6 +896,28 @@ function route(method, path, body) {
         ...clone(db.threadExtras[decodeURIComponent(seg[2])] || {}),
       };
     }
+    if (method === 'POST' && seg[1] === 'thread' && seg[2] && seg[3] === 'story' && seg[4] === 'regenerate') {
+      const id = decodeURIComponent(seg[2]);
+      const t = threadFor(id);
+      if (!t) throw notFound();
+      return regenAnswer(() => {
+        const n = db.regen.count;
+        const last = t.messages[t.messages.length - 1];
+        const story = { text: `Rewrite ${n}: ${t.subject} is waiting on your reply [1].`, citations: [{ n: 1, messageId: last?.id }] };
+        const storyMeta = { source: 'regenerate', tier: 'reasoning', model: 'Qwen/Qwen3.8-Flash-Next', lighter: Boolean(db.admin.degraded) };
+        db.threadExtras[id] = { ...(db.threadExtras[id] || {}), story, storyMeta, storyError: undefined };
+        return { threadId: id, upToMessageId: last?.id, story: clone(story), storyMeta: clone(storyMeta), tldr: t.tldr || null, timeline: [], regenerated: true };
+      });
+    }
+    if (method === 'POST' && seg[1] === 'message' && seg[2] && seg[3] === 'tldr' && seg[4] === 'regenerate') {
+      const id = decodeURIComponent(seg[2]);
+      if (!Object.values(THREADS).some((t) => t.messages.some((m) => m.id === id)) && !findItem(id)) throw notFound();
+      return regenAnswer(() => {
+        const tldr = { text: `Rewrite ${db.regen.count}: one line about ${id}.`, model: 'google/gemma-4-12B-it-qat-w4a16-ct', tier: 'reflex', lighter: Boolean(db.admin.degraded), promptId: 'work.summarise' };
+        db.tldrs[id] = tldr;
+        return { messageId: id, tldr: clone(tldr), computed: true, regenerated: true };
+      });
+    }
     if (method === 'POST' && seg[1] === 'draft') {
       if (!body?.threadId && !(body?.text && body?.tone)) throw bad('threadId is required (or text with a tone to rewrite)');
       if (body.tone && body.text) return { mode: 'rewrite', draft: body.text, before: body.text, after: body.text, tone: body.tone, provenance: {} };
@@ -1128,6 +1153,17 @@ function route(method, path, body) {
 
   throw notFound();
 }
+
+/** A regenerate answer after the configured delay, or the configured failure. */
+async function regenAnswer(make) {
+  db.regen.count += 1;
+  if (db.regen.delayMs) await new Promise((r) => setTimeout(r, db.regen.delayMs));
+  if (db.regen.fail) { const e = new Error('Could not rewrite the summary'); e.status = 502; throw e; }
+  return make();
+}
+
+/** What the next regenerate calls do: { fail, delayMs } (tests). */
+export function mockRegenerate(opts = {}) { Object.assign(db.regen, opts); }
 
 let requestLog = [];
 /** Every request the mock answered since the last reset ("GET /sort/screener"), for tests. */

@@ -20,8 +20,9 @@ import MessageHeaderModal from '../../components/MessageHeaderModal.jsx';
 import AttachmentChips from '../../components/AttachmentChips.jsx';
 import { useV2 } from './state.js';
 import { v2Api, isMockMode, SORT_EVENTS } from './client.js';
-import { isMissing, useWork } from './hooks.js';
-import { loadThread, loadFullBody } from './threadData.js';
+import { isMissing, useRegenerate, useWork } from './hooks.js';
+import { loadThread, loadFullBody, regenerateStory, regenerateTldr, isRewriting } from './threadData.js';
+import { putTldr } from './tldrs.js';
 import { isDraftMessage, openDraft, getReplyDraft, setReplyDraft, clearReplyDraft } from './drafts.js';
 import {
   snooze, snoozeTimes, prepareReply, guardReply, sendPrepared, watchForReply, settingValue,
@@ -91,7 +92,11 @@ function useThread(item) {
     }
   }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, [load]);
-  return { ...state, reload: load };
+  // Change the loaded thread in place (a rewritten story or TL;DR), only while it is still `forKey`'s.
+  const patch = useCallback((forKey, fn) => {
+    setState((s) => (s.data && s.key === forKey ? { ...s, data: fn(s.data) } : s));
+  }, []);
+  return { ...state, reload: load, patch };
 }
 
 function useWhy(messageId, fallback) {
@@ -163,17 +168,74 @@ function Story({ text, onCite, phone }) {
     : <span key={i}>{p.text}</span>));
 }
 
-/** The box the summary, the deadline and the cards share: radius 10, --field, hairline. */
-function SummaryBox({ label, ariaLabel, right, children, style, ...rest }) {
+/**
+ * The sparkles of a summary as its "Regenerate" control: a 20×20 (16×16 on a TL;DR) borderless
+ * icon button, the glyph in the accent, turning slowly while the rewrite runs. Clicks while it
+ * turns do nothing (it stays focusable, so the focus is not lost).
+ */
+function RegenButton({ phase, onRegenerate, label, size = 20, glyph = 14, style }) {
+  const busy = phase === 'busy';
+  return (
+    <button
+      type="button"
+      className="hw-regen"
+      data-regenerate=""
+      aria-label={label}
+      title={label}
+      aria-busy={busy || undefined}
+      onClick={() => { if (!busy) onRegenerate(); }}
+      style={{ width: size, height: size, flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0, margin: 0, border: 0, borderRadius: 6, background: 'transparent', color: V.accent, cursor: busy ? 'default' : 'pointer', ...style }}
+    >
+      <span className={busy ? 'hw-spin' : undefined} style={{ display: 'inline-flex' }}><Icon name="sparkles" size={glyph} /></span>
+    </button>
+  );
+}
+
+/** After a rewrite: "Rewritten just now" for a few seconds, or the retry note when it failed. 11px. */
+function RegenNote({ phase, onRetry }) {
+  if (phase === 'done') {
+    return <span role="status" data-regen-note="done" style={{ fontSize: 11, lineHeight: '14px', color: V.muted, whiteSpace: 'nowrap' }}>{tv('hedwig.v2.thread.rewritten', 'Rewritten just now')}</span>;
+  }
+  if (phase === 'failed') {
+    return (
+      <button type="button" role="alert" data-regen-note="failed" onClick={onRetry} style={{ padding: 0, margin: 0, border: 0, background: 'none', font: 'inherit', fontSize: 11, lineHeight: '14px', color: V.attentionInk, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+        {tv('hedwig.v2.thread.rewriteFailed', 'Could not rewrite. Try again')}
+      </button>
+    );
+  }
+  return null;
+}
+
+/** While a rewrite runs the old text stays at 60%; the new text fades in. */
+function RegenText({ phase, version, children }) {
+  return (
+    <div
+      key={version}
+      className={phase === 'done' ? 'hw-regen-new' : undefined}
+      style={{ display: 'flex', flexDirection: 'column', gap: 6, opacity: phase === 'busy' ? 0.6 : 1, transition: 'opacity 160ms ease' }}
+    >
+      {children}
+    </div>
+  );
+}
+
+/**
+ * The box the summary, the deadline and the cards share: radius 10, --field, hairline. With
+ * `regen` ({ phase, trigger, label }) its sparkles rewrite the summary.
+ */
+function SummaryBox({ label, ariaLabel, right, regen = null, children, style, ...rest }) {
   return (
     <Slip as="section" aria-label={ariaLabel || label} style={{ gap: 6, ...style }} {...rest}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, minHeight: 16 }}>
-        <span style={{ color: V.accent, display: 'inline-flex' }}><Icon name="sparkles" size={14} /></span>
+        {regen
+          ? <RegenButton phase={regen.phase} onRegenerate={regen.trigger} label={regen.label} style={{ margin: -3 }} />
+          : <span style={{ color: V.accent, display: 'inline-flex' }}><Icon name="sparkles" size={14} /></span>}
         <span style={{ fontSize: 12, fontWeight: 600, lineHeight: '16px' }}>{label}</span>
         <span style={{ flexGrow: 1 }} />
+        {regen && <RegenNote phase={regen.phase} onRetry={regen.trigger} />}
         {right}
       </div>
-      {children}
+      {regen ? <RegenText phase={regen.phase} version={regen.version}>{children}</RegenText> : children}
     </Slip>
   );
 }
@@ -408,7 +470,37 @@ function MessageMenu({ onReply, onForward, onSource, visible }) {
  * One message, as `article#hw-msg-N`. Open: the header (36px avatar, name, address on hover,
  * To/Cc, date, paperclip, the hover ellipsis), the TL;DR, the body. Collapsed: a 44px row.
  */
-function MessageItem({ m, n, you, open, onToggle, phone, tldr = null, cards = false, onReply, onForward, onSource, children }) {
+/**
+ * A message's TL;DR ("In short"), its sparkles the Regenerate control when `onRegenerate` is given.
+ * `lighter`: the lighter model wrote it (known after a rewrite, whose answer carries provenance).
+ */
+function TldrLine({ messageId, text, lighter = false, onRegenerate = null }) {
+  const regen = useRegenerate(() => onRegenerate(messageId), { resetKey: messageId, running: (id) => isRewriting(`tldr:${id}`) });
+  const glyph = onRegenerate
+    ? <RegenButton phase={regen.phase} onRegenerate={regen.trigger} label={tv('hedwig.v2.thread.regenerateTldr', 'Regenerate')} size={16} glyph={12} style={{ marginTop: 0 }} />
+    : <span aria-hidden="true" style={{ color: V.accent, display: 'inline-flex', paddingTop: 2, flexShrink: 0 }}><Icon name="sparkles" size={12} /></span>;
+  return (
+    <p data-tldr="" aria-label={tv('hedwig.v2.thread.tldrLabel', 'In short: {{text}}', { text })} style={{ margin: 0, fontSize: 12, lineHeight: '17px', color: V.muted, maxWidth: '68ch', textWrap: 'pretty', display: 'flex', gap: 4, alignItems: 'flex-start' }}>
+      {glyph}
+      <span
+        key={text}
+        data-tldr-text=""
+        className={regen.phase === 'done' ? 'hw-regen-new' : undefined}
+        style={{ opacity: regen.phase === 'busy' ? 0.6 : 1, transition: 'opacity 160ms ease' }}
+      >
+        {text}
+        {(lighter || regen.phase === 'done' || regen.phase === 'failed') && (
+          <span style={{ display: 'inline-flex', gap: 6, marginLeft: 6, verticalAlign: 'baseline' }}>
+            {lighter && <LighterLabel what="story" />}
+            <RegenNote phase={regen.phase} onRetry={regen.trigger} />
+          </span>
+        )}
+      </span>
+    </p>
+  );
+}
+
+function MessageItem({ m, n, you, open, onToggle, phone, tldr = null, tldrLighter = false, onRegenerateTldr = null, cards = false, onReply, onForward, onSource, children }) {
   const state = useBody(m, open);
   const [hover, setHover] = useState(false);
   const [recipientsOpen, setRecipientsOpen] = useState(false);
@@ -487,12 +579,7 @@ function MessageItem({ m, n, you, open, onToggle, phone, tldr = null, cards = fa
         </div>
       </header>
       {cards && m.id && <MessageCards messageId={m.id} phone={phone} />}
-      {tldr && (
-        <p data-tldr="" aria-label={tv('hedwig.v2.thread.tldrLabel', 'In short: {{text}}', { text: tldr })} style={{ margin: 0, fontSize: 12, lineHeight: '17px', color: V.muted, maxWidth: '68ch', textWrap: 'pretty', display: 'flex', gap: 4 }}>
-          <span aria-hidden="true" style={{ color: V.accent, display: 'inline-flex', paddingTop: 2, flexShrink: 0 }}><Icon name="sparkles" size={12} /></span>
-          {tldr}
-        </p>
-      )}
+      {tldr && <TldrLine messageId={m.id} text={tldr} lighter={tldrLighter} onRegenerate={m.id ? onRegenerateTldr : null} />}
       <MessageBody m={m} state={state} phone={phone} />
       {children}
     </article>
@@ -698,6 +785,26 @@ export default function Thread({ props }) {
   };
 
   const threadId = item ? (item.threadId || item.messageId) : null;
+
+  // "Regenerate summary": the sparkles in the summary and in each TL;DR write them again.
+  const patchThread = t.patch;
+  const storyRegen = useRegenerate(async () => {
+    const key = threadKey;
+    const r = await regenerateStory(key);
+    patchThread(key, (d) => ({ ...d, story: r.story, storyProvenance: r.storyProvenance, storyProblem: null, tldr: r.tldr || d.tldr }));
+    return r;
+  }, { resetKey: threadKey, running: (k) => isRewriting(`story:${k}`) });
+  const rewriteTldr = useCallback(async (messageId) => {
+    const key = threadKey;
+    const r = await regenerateTldr(messageId);
+    patchThread(key, (d) => ({
+      ...d,
+      messageTldrs: { ...(d.messageTldrs || {}), [messageId]: r.text },
+      messageTldrMeta: { ...(d.messageTldrMeta || {}), [messageId]: r.provenance },
+    }));
+    if (r.provenance) putTldr(messageId, r.provenance);
+    return r;
+  }, [threadKey, patchThread]);
   const latestId = latest?.id || item?.messageId;
   const whyItem = item ? { ...item, messageId: item.messageId, reason } : null;
 
@@ -984,6 +1091,7 @@ export default function Thread({ props }) {
         <SummaryBox
           label={short ? tv('hedwig.v2.thread.summary', 'Summary') : tv('hedwig.v2.thread.storyShort', 'Story so far')}
           ariaLabel={short ? tv('hedwig.v2.thread.summary', 'Summary') : tv('hedwig.v2.thread.story', 'The story so far')}
+          regen={work ? { ...storyRegen, label: tv('hedwig.v2.thread.regenerate', 'Regenerate summary'), version: data.story.text } : null}
           right={lighter && (
             <span title={notice?.detail || notice?.text || undefined} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: V.muted }}>
               <Icon name="info" size={12} />
@@ -995,7 +1103,11 @@ export default function Thread({ props }) {
         </SummaryBox>
       )}
       {!data.story && data.tldr && messages.length > 1 && (
-        <SummaryBox label={tv('hedwig.v2.thread.summary', 'Summary')} ariaLabel={tv('hedwig.v2.thread.inShort', 'In short')}>
+        <SummaryBox
+          label={tv('hedwig.v2.thread.summary', 'Summary')}
+          ariaLabel={tv('hedwig.v2.thread.inShort', 'In short')}
+          regen={work ? { ...storyRegen, label: tv('hedwig.v2.thread.regenerate', 'Regenerate summary'), version: data.tldr } : null}
+        >
           <p data-thread-tldr="" style={{ margin: 0, fontSize: 13, lineHeight: '19px', textWrap: 'pretty' }}>{data.tldr}</p>
         </SummaryBox>
       )}
@@ -1040,6 +1152,8 @@ export default function Thread({ props }) {
             onToggle={() => setToggled((x) => ({ ...x, [m.id]: !isOpen(m, i) }))}
             phone={phone}
             tldr={data.messageTldrs?.[m.id] || null}
+            tldrLighter={Boolean(data.messageTldrMeta?.[m.id]?.lighter)}
+            onRegenerateTldr={work ? rewriteTldr : null}
             cards={!latestOne}
             onReply={() => run('reply', () => openReplyComposer(m.id))}
             onForward={() => run('forward', () => openForwardComposer(m.id))}

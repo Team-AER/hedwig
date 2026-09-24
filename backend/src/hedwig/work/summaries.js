@@ -93,12 +93,14 @@ const isOutputError = (err) => err?.name === 'PromptOutputError';
  * Write the story of some threads.
  * @param {string} userId
  * @param {{ threadKey: string, messages: object[] }[]} threads   messages oldest first (loadThreadMessages)
- * @param {{ cfg?, owner?, lane?: 'background'|'interactive', source?: 'eager'|'open', save?: boolean }} [opts]
+ * @param {{ cfg?, owner?, lane?: 'background'|'interactive', source?: 'eager'|'open'|'regenerate', save?: boolean, planFor?: Function }} [opts]
  *   save: store each story as soon as its call returns (the job); otherwise the caller stores it.
+ *   planFor: (userId, cfg, messageCount) → plan, tierPlan by default (a regenerate plans its own).
+ *   A 'regenerate' that fails records nothing: the story already stored stays as it was.
  * @returns {Promise<{ threadKey, ok: boolean, entry?, provenance?, lighter?, error? }[]>}
  *   Throws only on budget / gateway / disabled errors (after saving what was done).
  */
-export async function summariseThreads(userId, threads, { cfg = null, owner = null, lane = 'background', source = 'eager', save = false } = {}) {
+export async function summariseThreads(userId, threads, { cfg = null, owner = null, lane = 'background', source = 'eager', save = false, planFor = tierPlan } = {}) {
   const config = cfg || await getConfig(userId);
   const who = owner || await ownerOf(userId);
   const perCall = clampInt(config['work.summariseThreadsPerCall'], 4, 1, 8);
@@ -106,11 +108,11 @@ export async function summariseThreads(userId, threads, { cfg = null, owner = nu
   const chars = clampInt(config['work.storyMessageChars'], 1500, 200, 10000);
   const today = todayLine(config);
   const planned = [];
-  for (const t of threads.filter((x) => x.messages?.length)) planned.push({ ...t, plan: await tierPlan(userId, config, t.messages.length) });
+  for (const t of threads.filter((x) => x.messages?.length)) planned.push({ ...t, plan: await planFor(userId, config, t.messages.length) });
   // Escalated threads go in their own calls; long ones two per call so Tier 1 stays under 4k output.
   const groups = [
-    ...chunks(planned.filter((t) => !t.plan.long), perCall),
-    ...chunks(planned.filter((t) => t.plan.long && t.plan.escalate), Math.max(1, Math.ceil(perCall / 2))),
+    ...chunks(planned.filter((t) => !t.plan.long && !t.plan.escalate), perCall),
+    ...chunks(planned.filter((t) => t.plan.escalate), Math.max(1, Math.ceil(perCall / 2))),
     ...chunks(planned.filter((t) => t.plan.long && !t.plan.escalate), Math.max(1, Math.ceil(perCall / 2))),
   ];
   const results = [];
@@ -126,7 +128,7 @@ export async function summariseThreads(userId, threads, { cfg = null, owner = nu
     } catch (err) {
       if (!isOutputError(err)) throw err;
       for (const v of views) {
-        await saveStoryFailure(userId, v.t, err.message, source);
+        if (source !== 'regenerate') await saveStoryFailure(userId, v.t, err.message, source);
         results.push({ threadKey: v.t.threadKey, ok: false, error: err.message });
       }
       continue;
@@ -135,7 +137,7 @@ export async function summariseThreads(userId, threads, { cfg = null, owner = nu
     for (const v of views) {
       const it = byId.get(v.item.id);
       if (!it) {
-        await saveStoryFailure(userId, v.t, 'the model returned no summary for this thread', source);
+        if (source !== 'regenerate') await saveStoryFailure(userId, v.t, 'the model returned no summary for this thread', source);
         results.push({ threadKey: v.t.threadKey, ok: false, error: 'no summary returned' });
         continue;
       }

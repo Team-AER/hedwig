@@ -159,3 +159,48 @@ export function useRun() {
 export function isMissing(err) {
   return Boolean(err) && (err.status === 404 || err.status === 501);
 }
+
+/**
+ * "Regenerate summary": run `fn` (a rewrite) at most once at a time per `resetKey` (the thread or
+ * message it rewrites), ignoring calls while one runs. `phase` is 'idle' | 'busy' | 'done' (for
+ * `doneMs`, "Rewritten just now") | 'failed' (until the next try). A rewrite that finishes after the
+ * reader moved to another thread or message changes nothing on screen.
+ * `running(key)` (optional) says whether a rewrite of that key is already in flight elsewhere.
+ */
+export function useRegenerate(fn, { resetKey = null, doneMs = 4000, running = null } = {}) {
+  const [state, setState] = useState({ phase: 'idle', key: resetKey });
+  const fnRef = useRef(fn);
+  fnRef.current = fn;
+  const live = useRef({ key: resetKey, mounted: true, busy: new Set() });
+  live.current.key = resetKey;
+  const timer = useRef(null);
+  useEffect(() => {
+    const l = live.current;
+    l.mounted = true;
+    return () => { l.mounted = false; clearTimeout(timer.current); };
+  }, []);
+
+  const trigger = useCallback(async () => {
+    const key = live.current.key;
+    if (live.current.busy.has(key)) return undefined;
+    live.current.busy.add(key);
+    clearTimeout(timer.current);
+    const set = (phase) => { if (live.current.mounted && live.current.key === key) setState({ phase, key }); };
+    set('busy');
+    try {
+      const out = await fnRef.current();
+      set('done');
+      if (live.current.mounted && live.current.key === key) timer.current = setTimeout(() => set('idle'), doneMs);
+      return out;
+    } catch {
+      set('failed');
+      return undefined;
+    } finally {
+      live.current.busy.delete(key);
+    }
+  }, [doneMs]);
+
+  const busyElsewhere = typeof running === 'function' && running(resetKey);
+  const phase = state.key === resetKey ? state.phase : (busyElsewhere ? 'busy' : 'idle');
+  return { phase, trigger };
+}
