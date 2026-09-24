@@ -294,3 +294,35 @@ describe('header rows', () => {
     assert.equal(chips[1].classList.contains('is-invalid'), false);
   });
 });
+
+describe('the footer Discard button', () => {
+  const discardBtn = () => document.querySelector('[data-compose-discard]');
+  const confirmBox = () => document.querySelector('[data-compose-discard-confirm]');
+  const click = async (el) => { await React.act(async () => { el.dispatchEvent(new w.MouseEvent('click', { bubbles: true, cancelable: true })); }); await wait(); };
+
+  test('a fresh, empty message closes at once with nothing to confirm', async () => {
+    await mount({ accountId: 'acct' });
+    assert.ok(discardBtn(), 'the footer has a Discard button');
+    await click(discardBtn());
+    assert.equal(confirmBox(), null, 'nothing typed: no confirmation');
+    assert.equal(useStore.getState().composing, false, 'the composer closed');
+  });
+
+  test('a stored draft asks first, then deletes the draft and closes', async () => {
+    const calls = [];
+    const prevFetch = globalThis.fetch;
+    globalThis.fetch = async (url, opts = {}) => { calls.push([String(url), opts.method || 'GET']); return new w.Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } }); };
+    try {
+      await mount({ accountId: 'acct', draftUid: 42, draftFolder: 'Drafts', to: ['a@b.example'], subject: 'Kept', body: 'hello' });
+      await click(discardBtn());
+      assert.ok(confirmBox(), 'a stored draft is confirmed before it goes');
+      const confirmDiscard = confirmBox().querySelector('button');
+      await click(confirmDiscard);
+      assert.equal(confirmBox(), null);
+      assert.equal(useStore.getState().composing, false, 'the composer closed');
+      assert.ok(calls.some(([u, m]) => m === 'DELETE' && /\/mail\/draft\/42\b/.test(u)), `the stored draft is deleted: ${JSON.stringify(calls)}`);
+    } finally {
+      globalThis.fetch = prevFetch;
+    }
+  });
+});

@@ -232,6 +232,7 @@ export default function ComposeModal() {
   const [showEmptySubjectWarn, setShowEmptySubjectWarn] = useState(false);
   const [showForgottenAttachWarn, setShowForgottenAttachWarn] = useState(false);
   const [showCloseDialog, setShowCloseDialog] = useState(false);
+  const [showDiscardConfirm, setShowDiscardConfirm] = useState(false); // the footer's Discard button
   const [showAttachWarnForDraft, setShowAttachWarnForDraft] = useState(false);
   const [attachWarnDraftCloseAfter, setAttachWarnDraftCloseAfter] = useState(false);
   const [showPrioritySheet, setShowPrioritySheet] = useState(false);
@@ -1072,7 +1073,7 @@ export default function ComposeModal() {
   // leave a stale snapshot behind for the timer to act on.
   useEffect(() => {
     autosaveRef.current = { isDirty, doSaveDraft, sending, savingDraft, fromValue, resolveFrom,
-      dialogOpen: showCloseDialog || showDiscardSheet || showAttachWarnForDraft };
+      dialogOpen: showCloseDialog || showDiscardSheet || showDiscardConfirm || showAttachWarnForDraft };
   });
 
   // Every edit outside the rich-text editor (subject, recipients, attachments, the plaintext
@@ -1164,6 +1165,20 @@ export default function ComposeModal() {
     }
     setShowAttachWarnForDraft(false);
     doSaveDraft({ closeAfter });
+  };
+
+  // Discard: drop the stored draft (if this composer opened one, or autosave made one) and
+  // close without saving. Nothing typed and nothing stored closes at once; otherwise ask.
+  const discardDraftNow = () => {
+    if (draftUid != null && draftFolder != null && draftAccountId) {
+      api.deleteDraft(draftAccountId, draftUid, draftFolder).catch(() => {});
+    }
+    closeCompose();
+  };
+  const handleDiscardClick = () => {
+    if (sending) return;
+    if (isDirty() || draftUid != null) setShowDiscardConfirm(true);
+    else discardDraftNow();
   };
 
   const handleClose = () => {
@@ -2316,6 +2331,17 @@ export default function ComposeModal() {
         </select>
 
         <button
+          type="button"
+          data-compose-discard=""
+          onClick={handleDiscardClick}
+          disabled={sending}
+          title={t('compose.discardDraft.title')}
+          style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: sending ? 'default' : 'pointer', fontSize: 12, padding: '4px 8px', display: 'inline-flex', alignItems: 'center', gap: 5 }}
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M19 6l-1 14H6L5 6" /><path d="M10 11v6M14 11v6" /></svg>
+          {t('compose.discard')}
+        </button>
+        <button
           onClick={() => handleSaveDraft()}
           disabled={savingDraft}
           style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: savingDraft ? 'default' : 'pointer', fontSize: 12, padding: '4px 8px' }}
@@ -2323,6 +2349,40 @@ export default function ComposeModal() {
           {savingDraft ? t('compose.savingDraft') : t('compose.saveDraft')}
         </button>
       </div>
+
+      {/* Discard confirmation (the footer's Discard button). A draft with nothing typed and no
+          stored copy closes at once; anything else asks first. */}
+      {showDiscardConfirm && (
+        <>
+          <div onClick={() => setShowDiscardConfirm(false)} style={{ position: 'fixed', inset: 0, zIndex: 2100, background: 'rgba(0,0,0,0.3)' }} />
+          <div role="dialog" aria-modal="true" aria-label={t('compose.discardDraft.title')} data-compose-discard-confirm="" style={{
+            position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)',
+            zIndex: 2101, background: 'var(--bg-elevated)',
+            borderRadius: 12, boxShadow: 'var(--shadow-modal)',
+            minWidth: 280, maxWidth: 380, padding: '20px 24px 16px',
+          }}>
+            <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 16 }}>
+              {t('compose.discardDraft.title')}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <button
+                type="button"
+                onClick={() => { setShowDiscardConfirm(false); discardDraftNow(); }}
+                style={{ padding: '8px 16px', background: 'none', border: '1px solid var(--border)', borderRadius: 7, color: 'var(--red)', fontSize: 13, cursor: 'pointer', textAlign: 'center' }}
+              >
+                {t('compose.discardDraft.discard')}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowDiscardConfirm(false)}
+                style={{ padding: '8px 16px', background: 'none', border: 'none', color: 'var(--text-secondary)', fontSize: 13, cursor: 'pointer', textAlign: 'center' }}
+              >
+                {t('compose.discardDraft.keepEditing')}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
 
       {!maximized && (
         <div
