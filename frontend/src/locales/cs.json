@@ -447,7 +447,8 @@
       "aiApply": "Použít",
       "aiDismiss": "Zavřít",
       "aiGenerating": "Generování…",
-      "aiError": "Chyba AI: {{message}}"
+      "aiError": "Chyba AI: {{message}}",
+      "formatting": "Formátování"
     },
     "priority": "Priorita",
     "priorityHigh": "Vysoká priorita",

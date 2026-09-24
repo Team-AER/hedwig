@@ -173,7 +173,8 @@
       "aiApply": "Übernehmen",
       "aiDismiss": "Verwerfen",
       "aiGenerating": "Wird erstellt…",
-      "aiError": "KI-Fehler: {{message}}"
+      "aiError": "KI-Fehler: {{message}}",
+      "formatting": "Formatierung"
     },
     "priority": "Priorität",
     "priorityHigh": "Hohe Priorität",

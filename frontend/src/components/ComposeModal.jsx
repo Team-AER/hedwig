@@ -3053,7 +3053,7 @@ function RichToolbar({ editor, onAttach, onInsertImage, htmlMode, onToggleHtml, 
       <div
         ref={desktopBarRef}
         role="toolbar"
-        aria-label="Formatting"
+        aria-label={t('compose.toolbar.formatting')}
         data-compose-toolbar=""
         data-collapsed={collapsed ? '' : undefined}
         style={{ borderBottom: '1px solid var(--border-subtle)', display: 'flex', gap: 2, padding: '4px 10px', flexWrap: 'nowrap', overflow: 'hidden', alignItems: 'center' }}

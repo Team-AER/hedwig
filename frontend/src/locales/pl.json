@@ -173,7 +173,8 @@
       "aiApply": "Zastosuj",
       "aiDismiss": "Odrzuć",
       "aiGenerating": "Generowanie…",
-      "aiError": "Błąd AI: {{message}}"
+      "aiError": "Błąd AI: {{message}}",
+      "formatting": "Formatowanie"
     },
     "priority": "Priorytet",
     "priorityHigh": "Wysoki priorytet",

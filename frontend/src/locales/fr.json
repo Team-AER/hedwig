@@ -173,7 +173,8 @@
       "aiApply": "Appliquer",
       "aiDismiss": "Ignorer",
       "aiGenerating": "Génération en cours…",
-      "aiError": "Erreur IA : {{message}}"
+      "aiError": "Erreur IA : {{message}}",
+      "formatting": "Mise en forme"
     },
     "priority": "Priorité",
     "priorityHigh": "Haute priorité",

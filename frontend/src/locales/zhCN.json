@@ -173,7 +173,8 @@
       "aiApply": "应用",
       "aiDismiss": "关闭",
       "aiGenerating": "生成中…",
-      "aiError": "AI 错误：{{message}}"
+      "aiError": "AI 错误：{{message}}",
+      "formatting": "格式"
     },
     "priority": "优先级",
     "priorityHigh": "高优先级",
