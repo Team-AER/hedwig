@@ -7,6 +7,7 @@ import { mockGateway } from '../testing/mockGateway.js';
 
 describe.skipIf(!process.env.HEDWIG_IT)('Ask on the index (demo mailbox)', () => {
   let query; let pool; let userId; let ask; let history; let feedback; let config;
+  let builtEntities = false;
   const gw = mockGateway();
   const asked = [];
   const ENV = ['HEDWIG_LLM_BASE_URL', 'HEDWIG_LLM_CATALOG_URL', 'HEDWIG_LLM_FALLBACK_MODEL', 'HEDWIG_INDEX_FLOOR'];
@@ -31,6 +32,21 @@ describe.skipIf(!process.env.HEDWIG_IT)('Ask on the index (demo mailbox)', () =>
     );
     if (rows.length) await store.indexMessages(await pipeline.decorate(rows));
     await store.drain(() => store.embedPending({ maxChunks: 256 }), { budgetMs: 30_000, maxRounds: 50 });
+    // "from Thomas" resolves through the context engine's people (hedwig_entities). After a fresh
+    // seed they exist only if the context IT test happened to run first, so build them here when
+    // missing (and remove them again afterwards) instead of depending on the file order.
+    const { rows: [known] } = await query("SELECT COUNT(*)::int AS n FROM hedwig_entities WHERE user_id = $1 AND kind <> 'self'", [userId]);
+    if (!known.n) {
+      const { runEntitiesStep } = await import('../context/entities.js');
+      const { rows: all } = await query(
+        `SELECT ${pipeline.MESSAGE_COLUMNS} FROM messages m JOIN email_accounts a ON a.id = m.account_id
+           LEFT JOIN folders f ON f.account_id = m.account_id AND f.path = m.folder
+          WHERE a.user_id = $1 AND m.is_deleted = false ORDER BY m.date DESC`,
+        [userId],
+      );
+      await runEntitiesStep(await pipeline.decorate(all));
+      builtEntities = true;
+    }
 
     process.env.HEDWIG_LLM_BASE_URL = gw.baseUrl;
     process.env.HEDWIG_LLM_CATALOG_URL = gw.catalogUrl;
@@ -60,6 +76,7 @@ describe.skipIf(!process.env.HEDWIG_IT)('Ask on the index (demo mailbox)', () =>
       await query('DELETE FROM hedwig_ask_log WHERE id = ANY($1::uuid[])', [asked]);
     }
     await query("DELETE FROM hedwig_labels WHERE user_id = $1 AND suite = 'ask' AND evidence->>'rule' = 'ask2-it'", [userId]).catch(() => {});
+    if (builtEntities) await query('DELETE FROM hedwig_entities WHERE user_id = $1', [userId]);
     await pool?.end();
   });
 

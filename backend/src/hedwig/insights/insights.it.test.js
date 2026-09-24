@@ -7,15 +7,43 @@ describe.skipIf(!process.env.HEDWIG_IT)('insights and agent tools against the de
   let query;
   let pool;
   let userId;
+  let triagedHere = false;
+  const TRIAGE_TABLES = ['hedwig_triage', 'hedwig_triage_feedback', 'hedwig_triage_models', 'hedwig_sender_stats', 'hedwig_triage_sender_log', 'hedwig_triage_rules'];
 
   beforeAll(async () => {
     ({ query, pool } = await import('../../services/db.js'));
     const { rows } = await query("SELECT id FROM users WHERE username = 'demo'");
     if (!rows.length) throw new Error('demo user missing: run node scripts/hedwig-seed.mjs');
     userId = rows[0].id;
-  });
+    // The briefing's Needs you comes from sorting (hedwig_sort) or, before sorting has run, from
+    // triage. After a fresh seed neither has run unless the sort or triage IT test happened to go
+    // first, so triage the demo mailbox here when both are empty (no model), and undo it afterwards.
+    const { rows: [have] } = await query(
+      `SELECT EXISTS (SELECT 1 FROM hedwig_sort WHERE user_id = $1) AS sorted, EXISTS (SELECT 1 FROM hedwig_triage WHERE user_id = $1) AS triaged`,
+      [userId],
+    );
+    if (!have.sorted && !have.triaged) {
+      const pipeline = await import('../pipeline.js');
+      const { runSenderStats } = await import('../triage/senderStats.js');
+      const { runTriage } = await import('../triage/classify.js');
+      const { rows: mail } = await query(
+        `SELECT ${pipeline.MESSAGE_COLUMNS} FROM messages m JOIN email_accounts a ON a.id = m.account_id
+           LEFT JOIN folders f ON f.account_id = m.account_id AND f.path = m.folder
+          WHERE a.user_id = $1 AND NOT m.is_deleted ORDER BY m.date ASC`,
+        [userId],
+      );
+      const decorated = await pipeline.decorate(mail);
+      triagedHere = true;
+      await runSenderStats(decorated);
+      await runTriage(decorated);
+    }
+  }, 60_000);
 
   afterAll(async () => {
+    if (triagedHere) {
+      for (const t of TRIAGE_TABLES) await query(`DELETE FROM ${t} WHERE user_id = $1`, [userId]);
+      await query("DELETE FROM hedwig_jobs WHERE user_id = $1 AND kind LIKE 'triage.%'", [userId]);
+    }
     await pool.end();
   });
 

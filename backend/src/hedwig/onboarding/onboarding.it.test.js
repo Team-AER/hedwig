@@ -16,6 +16,8 @@ describe.skipIf(!process.env.HEDWIG_IT)('stream I on the seeded demo user', () =
   let query; let pool; let invalidateConfigCache; let getState; let refreshCoverage; let profileService; let profileLines;
   let userId; let accountIds; let server; let base;
   let savedSystem = null; let savedUser = null;
+  let sortedHere = false;
+  const SORT_TABLES = ['hedwig_sort', 'hedwig_senders', 'hedwig_sender_proposals', 'hedwig_sort_log'];
   const api = async (method, path, body) => {
     const res = await fetch(`${base}${path}`, { method, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
     return { status: res.status, body: await res.json() };
@@ -56,6 +58,25 @@ describe.skipIf(!process.env.HEDWIG_IT)('stream I on the seeded demo user', () =
     await query('DELETE FROM hedwig_profile WHERE user_id = $1', [userId]);
     invalidateConfigCache();
 
+    // Seeded sender decisions (C) are written by the sort engine the first time it sorts an
+    // account's mail. After a fresh seed that has only happened if the sort IT test ran first, so
+    // when an account is not seeded yet, sort the demo mailbox here the way a new account's first
+    // mail is sorted (the cheap layers, no Reflex), and put it back afterwards.
+    const seeded = await Promise.all(accountIds.map((id) => getState(`sort.seeded:${id}`, null)));
+    if (seeded.some((st) => !st?.at)) {
+      const pipeline = await import('../pipeline.js');
+      const { sortRows } = await import('../sort/engine.js');
+      const { rows: [before] } = await query('SELECT COUNT(*)::int AS n FROM hedwig_sort WHERE user_id = $1', [userId]);
+      const { rows } = await query(
+        `SELECT ${pipeline.MESSAGE_COLUMNS} FROM messages m JOIN email_accounts a ON a.id = m.account_id
+           LEFT JOIN folders f ON f.account_id = m.account_id AND f.path = m.folder
+          WHERE a.user_id = $1 AND NOT m.is_deleted ORDER BY m.date ASC`,
+        [userId],
+      );
+      await sortRows(await pipeline.decorate(rows), { allowReflex: false });
+      sortedHere = before.n === 0;
+    }
+
     const app = express();
     app.use(express.json());
     app.use((req, _res, next) => { req.session = { userId }; next(); });
@@ -71,6 +92,11 @@ describe.skipIf(!process.env.HEDWIG_IT)('stream I on the seeded demo user', () =
     await query('DELETE FROM hedwig_profile WHERE user_id = $1', [userId]);
     await query("DELETE FROM hedwig_jobs WHERE kind = 'profile.rebuild' AND user_id = $1", [userId]);
     await query('DELETE FROM hedwig_index_coverage WHERE account_id = ANY($1::uuid[])', [accountIds]);
+    if (sortedHere) {
+      for (const t of SORT_TABLES) await query(`DELETE FROM ${t} WHERE user_id = $1`, [userId]);
+      await query("DELETE FROM hedwig_jobs WHERE user_id = $1 AND kind LIKE 'sort.%'", [userId]);
+      await query('DELETE FROM hedwig_state WHERE key = ANY($1::text[])', [[...accountIds.map((id) => `sort.seeded:${id}`), `sort.contactsSeeded:${userId}`]]);
+    }
     if (savedSystem === null) await query("DELETE FROM system_settings WHERE key = 'hedwig_config'");
     else await query("UPDATE system_settings SET value = $1 WHERE key = 'hedwig_config'", [JSON.stringify(savedSystem)]);
     if (savedUser === null) await query('DELETE FROM hedwig_user_settings WHERE user_id = $1', [userId]);

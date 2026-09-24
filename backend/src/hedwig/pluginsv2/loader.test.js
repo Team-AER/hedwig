@@ -170,7 +170,7 @@ describe('plugin routes', () => {
     const r = express.Router();
     userRoutes(r, { get: (id) => runtime.get(id), list: () => runtime.list() });
     app.use('/api/hedwig', r);
-    await new Promise((resolve) => { server = app.listen(0, resolve); });
+    await new Promise((resolve) => { server = app.listen(0, '127.0.0.1', resolve); });
     base = `http://127.0.0.1:${server.address().port}/api/hedwig`;
   });
   afterAll(async () => { await new Promise((resolve) => server.close(resolve)); });

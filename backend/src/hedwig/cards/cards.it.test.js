@@ -7,6 +7,21 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mockGateway } from '../testing/mockGateway.js';
 import * as F from './fixtures.testutil.js';
 
+// One clock for the whole file: noon UTC today (the test runs Today in UTC). Messages are dated
+// against it and every "now" the code takes is given it, so "30 minutes ago" is today and "tomorrow"
+// is tomorrow whatever the wall clock says (a run just after midnight UTC used to put the DHL
+// update on yesterday), and fixture dates are moved relative to it instead of being fixed days.
+const NOW = (() => { const d = new Date(); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 12, 0); })();
+const DAY_MS = 86400_000;
+const isoDay = (t) => new Date(t).toISOString().slice(0, 10);
+const icsDay = (t) => isoDay(t).replace(/-/g, '');
+// F.ORDER_JSONLD says the Posten parcel arrives on 2026-09-24 (fixed, for the unit tests): here it
+// was ordered three days ago and arrives in three days, so it is never also "arriving today".
+const ORDER_JSONLD = F.ORDER_JSONLD
+  .replace(/"orderDate": "\d{4}-\d{2}-\d{2}T/, `"orderDate": "${isoDay(NOW - 3 * DAY_MS)}T`)
+  .replace(/"expectedArrivalUntil": "\d{4}-\d{2}-\d{2}T/, `"expectedArrivalUntil": "${isoDay(NOW + 3 * DAY_MS)}T`);
+if (!ORDER_JSONLD.includes(`"expectedArrivalUntil": "${isoDay(NOW + 3 * DAY_MS)}T`)) throw new Error('ORDER_JSONLD fixture changed shape');
+
 describe.skipIf(!process.env.HEDWIG_IT)('cards over the demo mailbox', () => {
   let query; let pool; let userId; let accountId; let config;
   let extract; let store; let ledgerMod; let todayMod; let briefing;
@@ -20,9 +35,9 @@ describe.skipIf(!process.env.HEDWIG_IT)('cards over the demo mailbox', () => {
     const { rows } = await query(
       `INSERT INTO messages (account_id, uid, folder, message_id, subject, from_name, from_email, sender_email, to_addresses, date, snippet, body_text, body_html)
        VALUES ($1, (SELECT COALESCE(MAX(uid), 0) + 1 FROM messages WHERE account_id = $1), 'INBOX', $2, $3, $4, $5, $5, '[]',
-               NOW() - make_interval(mins => $6), LEFT(COALESCE($7, $3), 100), $7, $8)
+               $9::timestamptz - make_interval(mins => $6), LEFT(COALESCE($7, $3), 100), $7, $8)
        RETURNING id, date`,
-      [accountId, `<cards-it-${key}-${Date.now()}@hedwig.test>`, subject, fromName, from, minutesAgo, body, html],
+      [accountId, `<cards-it-${key}-${Date.now()}@hedwig.test>`, subject, fromName, from, minutesAgo, body, html, new Date(NOW)],
     );
     const id = rows[0].id;
     added.push(id);
@@ -55,17 +70,17 @@ describe.skipIf(!process.env.HEDWIG_IT)('cards over the demo mailbox', () => {
     todayMod = await import('./today.js');
     briefing = await import('../insights/briefing.js');
 
-    await addMessage('order', { subject: 'Order confirmation NO-448120', from: 'orders@nordicoutdoor.example', fromName: 'Nordic Outdoor', html: F.ORDER_JSONLD, bundle: 'purchases', minutesAgo: 3 * 1440 });
+    await addMessage('order', { subject: 'Order confirmation NO-448120', from: 'orders@nordicoutdoor.example', fromName: 'Nordic Outdoor', html: ORDER_JSONLD, bundle: 'purchases', minutesAgo: 3 * 1440 });
     await addMessage('dhl1', { subject: 'Your DHL shipment has been dispatched', from: 'noreply@dhl.example', fromName: 'DHL Express', body: 'Your shipment with waybill number 5566778899 has been dispatched. Track your shipment online.', bundle: 'deliveries', minutesAgo: 2 * 1440 });
     await addMessage('dhl2', { subject: 'Your DHL shipment is out for delivery', from: 'noreply@dhl.example', fromName: 'DHL Express', body: 'Your shipment with waybill number 5566778899 is out for delivery today. Expected delivery: today by 16:00.', bundle: 'deliveries', minutesAgo: 30 });
     await addMessage('otp', { ...F.OTP_MAIL, from: F.OTP_MAIL.from_email, fromName: F.OTP_MAIL.from_name, body: F.OTP_MAIL.body_text, bundle: null, stream: 'people', minutesAgo: 2 });
-    await addMessage('ics', { subject: 'Invitation: team dinner', from: 'anna@example.test', fromName: 'Anna', body: F.ICS_ALLDAY.replace('20261012', new Date(Date.now() + 86400_000).toISOString().slice(0, 10).replace(/-/g, '')).replace('20261015', new Date(Date.now() + 2 * 86400_000).toISOString().slice(0, 10).replace(/-/g, '')), bundle: 'calendar', minutesAgo: 90 });
+    await addMessage('ics', { subject: 'Invitation: team dinner', from: 'anna@example.test', fromName: 'Anna', body: F.ICS_ALLDAY.replace('20261012', icsDay(NOW + DAY_MS)).replace('20261015', icsDay(NOW + 2 * DAY_MS)), bundle: 'calendar', minutesAgo: 90 });
     await addMessage('uber', { subject: 'Your Tuesday evening trip with Uber', from: 'receipts@uber.example', fromName: 'Uber Receipts', body: 'Thanks for riding, Prakhar.\nTotal £23.40\nPaid with Visa ••4242.', bundle: 'purchases', minutesAgo: 600 });
     await addMessage('promo', { subject: '20% off everything', from: 'deals@shop.example', fromName: 'Shop', body: 'Big sale this weekend only.', bundle: 'promotions', stream: 'reading', minutesAgo: 700 });
     for (const [i, daysAgo] of [95, 64, 34, 4].entries()) {
       await addMessage(`netflix${i}`, {
         subject: 'Your Netflix receipt', from: 'info@netflix.example', fromName: 'Netflix',
-        html: `<script type="application/ld+json">{"@context":"http://schema.org","@type":"Order","merchant":{"@type":"Organization","name":"Netflix"},"orderNumber":"NF-${i}","orderDate":"${new Date(Date.now() - daysAgo * 86400_000).toISOString().slice(0, 10)}","price":"139","priceCurrency":"NOK"}</script>`,
+        html: `<script type="application/ld+json">{"@context":"http://schema.org","@type":"Order","merchant":{"@type":"Organization","name":"Netflix"},"orderNumber":"NF-${i}","orderDate":"${isoDay(NOW - daysAgo * DAY_MS)}","price":"139","priceCurrency":"NOK"}</script>`,
         bundle: 'purchases', minutesAgo: daysAgo * 1440,
       });
     }
@@ -93,7 +108,7 @@ describe.skipIf(!process.env.HEDWIG_IT)('cards over the demo mailbox', () => {
   });
 
   it('makes cards deterministically first, and asks Reflex only about sorted Records mail with none', async () => {
-    const res = await extract.runCardsJob({ userId, messageIds: added });
+    const res = await extract.runCardsJob({ userId, messageIds: added }, { now: new Date(NOW) });
     expect(res.status).toBe('done');
     const calls = gw.callsFor('cards.extract');
     expect(calls).toHaveLength(1);
@@ -135,10 +150,10 @@ describe.skipIf(!process.env.HEDWIG_IT)('cards over the demo mailbox', () => {
   });
 
   it('shows Today figures and puts them on the Brief', async () => {
-    const figs = await todayMod.cardsToday(userId);
+    const figs = await todayMod.cardsToday(userId, { now: NOW });
     expect(figs.map((f) => f.kind)).toEqual(expect.arrayContaining(['code', 'delivery', 'event']));
     expect(figs.find((f) => f.kind === 'delivery')).toMatchObject({ figure: 'Today', caption: 'DHL, out for delivery', messageId: expect.any(String) });
-    const brief = await briefing.compileBrief(userId);
+    const brief = await briefing.compileBrief(userId, { now: NOW });
     expect(brief.cards.some((c) => c.kind === 'code' && c.figure === '482913')).toBe(true);
   });
 
@@ -150,7 +165,7 @@ describe.skipIf(!process.env.HEDWIG_IT)('cards over the demo mailbox', () => {
     expect(corr[0]).toMatchObject({ before: { kind: 'receipt', fields: { total: 23.4 } }, after: { kind: 'receipt', fields: { total: 24.4 } }, prompt_id: 'cards.extract' });
     // A rerun of the job does not undo the edit.
     await query('DELETE FROM hedwig_cards_scan WHERE message_id = $1', [ids.uber]);
-    await extract.runCardsJob({ userId, messageIds: [ids.uber] });
+    await extract.runCardsJob({ userId, messageIds: [ids.uber] }, { now: new Date(NOW) });
     expect((await store.getCard(userId, uber.id)).fields.total).toBe(24.4);
     await store.dismissCard(userId, uber.id);
     expect((await store.listCards(userId, { kinds: ['receipt'] })).some((c) => c.id === uber.id)).toBe(false);
@@ -163,7 +178,7 @@ describe.skipIf(!process.env.HEDWIG_IT)('cards over the demo mailbox', () => {
     await addMessage('indigo', { ...shape(F.INDIGO_TAX_INVOICE), bundle: null, stream: 'people', minutesAgo: 20 * 1440 });
     await addMessage('mmt', { ...shape(F.MMT_ETICKET), bundle: 'travel', minutesAgo: 60 * 1440 }); // older than the old 45-day Reflex window
     await addMessage('ken', { ...shape(F.NEWSLETTER_ORDER_WORDS), bundle: null, stream: 'reading', minutesAgo: 1440 });
-    const tomorrow = new Date(Date.now() + 86400_000);
+    const tomorrow = new Date(NOW + DAY_MS);
     const departAt = new Date(Date.UTC(tomorrow.getUTCFullYear(), tomorrow.getUTCMonth(), tomorrow.getUTCDate(), 4, 0)).toISOString();
     gw.reset().install();
     gw.on('cards.extract', (req) => {
@@ -181,7 +196,7 @@ describe.skipIf(!process.env.HEDWIG_IT)('cards over the demo mailbox', () => {
       return { items };
     });
     const mine = ['shopOrder', 'shopShip', 'indigo', 'mmt', 'ken'].map((k) => ids[k]);
-    const res = await extract.runCardsJob({ userId, messageIds: mine });
+    const res = await extract.runCardsJob({ userId, messageIds: mine }, { now: new Date(NOW) });
     expect(res.status).toBe('done');
     const asked = gw.callsFor('cards.extract').map((c) => c.text).join('\n');
     expect(asked).toContain(F.MMT_ETICKET.subject);          // a partial travel card: departure left to the model
@@ -216,7 +231,7 @@ describe.skipIf(!process.env.HEDWIG_IT)('cards over the demo mailbox', () => {
     expect(purchases.totals.find((t) => t.currency === 'INR')).toMatchObject({ total: 1240 });
     expect((await ledgerMod.ledger(userId, 'travel')).rows).toEqual(expect.arrayContaining([expect.objectContaining({ reference: 'HCYP2A', departAt, from: 'Kochi', to: 'Bagdogra' })]));
     expect((await ledgerMod.ledger(userId, 'deliveries')).rows).toEqual(expect.arrayContaining([expect.objectContaining({ carrier: 'Blue Dart', trackingNumber: '90667948000' })]));
-    const figs = await todayMod.cardsToday(userId);
+    const figs = await todayMod.cardsToday(userId, { now: NOW });
     expect(figs.find((f) => f.kind === 'travel')).toMatchObject({ caption: expect.stringMatching(/^Tomorrow · HCYP2A/), messageId: ids.mmt });
     // List and bundle rows fetch their cards in one call (GET /cards/messages?ids=…).
     const byMsg = await store.cardsForMessages(userId, [ids.shopShip, ids.ken, ids.mmt]);
