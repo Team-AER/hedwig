@@ -9,11 +9,14 @@ import { getView } from '../registry.js';
 import { v2Api, v2Stream, listOf } from '../v2/client.js';
 import { useV2Resource } from '../v2/hooks.js';
 import { openThread } from '../v2/nav.js';
-import { ASK2_INITIAL, askStarted, fromSaved, historyMark, reduceAsk2 } from '../v2/ask.js';
+import { ASK2_INITIAL, askStarted, fromSaved, historyMark, reduceAsk2, coverageGap } from '../v2/ask.js';
 import { Btn, ErrorLine, Hair, LinkBtn, Mono, Quiet, V, ViewBody, ViewHead, Why, usePhone } from '../v2/primitives.jsx';
 import { fullTime, listTime } from '../v2/format.js';
 import { tv, tvn } from '../v2/i18n.js';
 import { Markdown } from './ui.jsx';
+import { TierNote, LighterLabel } from '../v2/TierNote.jsx';
+import { CoverageNote } from '../v2/CoverageNote.jsx';
+import { isLighter } from '../v2/tiers.js';
 
 // The answer's [n] markers in the v2 look: mono, accent, no chip.
 const ASK_CSS = `.hw-ask2 .hw-md{font-size:16px;line-height:1.6}
@@ -160,6 +163,7 @@ export default function Ask({ props = {} }) {
   const main = (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 22, flex: '1 1 420px', minWidth: 0 }}>
       {form}
+      <TierNote />
       <ErrorLine error={error} />
       {chain.map((c) => <Earlier key={c.id} answer={c} />)}
       {state.status !== 'idle' && (
@@ -175,6 +179,7 @@ export default function Ask({ props = {} }) {
       {state.status === 'idle' && (
         <Why>{tv('hedwig.v2.ask.intro', 'Answers cite the messages they come from. Tap a number to open it.')}</Why>
       )}
+      {state.status === 'idle' && <CoverageNote what="ask" />}
     </div>
   );
 
@@ -257,6 +262,8 @@ function AnswerBlock({ state, phone, onFeedback, onAgain, onAgent }) {
   // the server sends says less than this line does.
   const nothing = done && state.notFound && !sources.length;
   const wrong = state.feedback?.wrong === true;
+  const status = useHedwig((st) => st.status);
+  const lighter = done && !nothing && Boolean(state.answer) && isLighter(state.provenance, status, { expected: 'reasoning' });
 
   const feedback = async (isWrong) => {
     if (!state.id) return;
@@ -292,6 +299,16 @@ function AnswerBlock({ state, phone, onFeedback, onAgain, onAgent }) {
       {!nothing && (state.answer
         ? <Markdown text={tidyCites(state.answer)} onCite={openSource} />
         : streaming && <Quiet style={{ padding: 0 }}>{sources.length ? tvn(sources.length, ['hedwig.v2.ask.readingOne', 'Reading 1 message…'], ['hedwig.v2.ask.readingMany', 'Reading {{n}} messages…']) : tv('hedwig.v2.ask.searching', 'Searching your mail…')}</Quiet>)}
+      {(lighter || (done && coverageGap(state.coverage) && !nothing)) && (
+        <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'baseline' }}>
+          {lighter && <LighterLabel />}
+          {done && !nothing && coverageGap(state.coverage) && (
+            <span data-coverage="" style={{ fontSize: 13, color: V.muted }}>
+              {tv('hedwig.v2.ask.coverage', 'Hedwig has read {{share}} of your mail so far; this answer comes from that part.', { share: coverageGap(state.coverage) })}
+            </span>
+          )}
+        </div>
+      )}
       {done && !nothing && state.notFound && <Why tone="ink">{tv('hedwig.v2.ask.notFound', 'Nothing in your mail answers this.')}</Why>}
       {done && state.unsupported && (
         <div style={{ display: 'flex', gap: 10, alignItems: 'baseline', flexWrap: 'wrap' }}>

@@ -5,6 +5,7 @@
 import { createElement } from 'react';
 import { registerCommand, registerView } from '../registry.js';
 import { useHedwig } from '../store.js';
+import { useStore } from '../../store/index.js';
 import { registerSlot } from '../../plugins/registry.js';
 import NeedsYou from './NeedsYou.jsx';
 import ContextCard from './ContextCard.jsx';
@@ -18,6 +19,7 @@ import TriageSettings from './settings/TriageSettings.jsx';
 import PluginSettings from './settings/PluginSettings.jsx';
 import ModelSettings from './settings/ModelSettings.jsx';
 import PersonalSettings from './settings/PersonalSettings.jsx';
+import RoutingSettings from './settings/RoutingSettings.jsx';
 import { registerV2 } from '../v2/index.js';
 
 export const HEDWIG_VIEWS = [
@@ -39,6 +41,8 @@ export const HEDWIG_VIEWS = [
     description: 'Triage accuracy, recent decisions, sender rules and thresholds.' },
   { id: 'hedwig.settings.plugins', title: 'Plugins', icon: 'plug', group: 'settings', component: PluginSettings,
     description: 'Enable plugins and choose what they may access.' },
+  { id: 'hedwig.settings.routing', title: 'Models and routing', icon: 'settings', group: 'settings', component: RoutingSettings,
+    description: 'Admin: the Tier 1 Reflex (fast) and Tier 2 Reasoning (long) models, effort, routing by feature, budgets and usage.' },
   { id: 'hedwig.settings.models', title: 'Models and pipeline', icon: 'settings', group: 'settings', component: ModelSettings,
     description: 'Admin: model gateway, embeddings, budgets, pipeline health.' },
   { id: 'hedwig.settings.personal', title: 'Hedwig settings', icon: 'settings', group: 'settings', component: PersonalSettings,
@@ -57,6 +61,7 @@ export const HEDWIG_COMMANDS = [
   { id: 'hedwig.people', title: 'Correspondents', when: on('context'), run: open('hedwig.people') },
   { id: 'hedwig.briefing', title: 'Daily briefing', when: on('insights'), run: open('hedwig.insights', { focus: 'briefing' }) },
   { id: 'hedwig.settings', title: 'Hedwig settings', run: open('hedwig.settings.personal') },
+  { id: 'hedwig.settings.routing', title: 'Models and routing (Tier 1 and Tier 2)', when: () => Boolean(useStore.getState().user?.isAdmin), run: open('hedwig.settings.routing') },
 ];
 
 let registered = false;

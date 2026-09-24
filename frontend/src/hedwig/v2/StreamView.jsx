@@ -6,7 +6,8 @@
 import { useMemo, useRef, useState } from 'react';
 import { useStore } from '../../store/index.js';
 import { useV2, streamPath, countText } from './state.js';
-import { useV2Resource, useV2Pages, useWork } from './hooks.js';
+import { useV2Resource, useV2Pages, useWork, isMissing } from './hooks.js';
+import { useTldrs, withTldrs } from './tldrs.js';
 import { listOf, SORT_EVENTS, COUNTS_EVENT, announceSortChange } from './client.js';
 import { openThread, showView, VIEW } from './nav.js';
 import { markRead, LIST_KIND } from './mail.js';
@@ -90,6 +91,20 @@ function BundleGroup({ group, phone, onWhy, open, onToggle, cards = [] }) {
 
 const LIST_EVENTS = [...SORT_EVENTS, COUNTS_EVENT];
 
+/**
+ * Cards for the Records rows on screen: GET /cards/messages?ids=… → { cards: { [messageId]: Card[] } }
+ * in one call; a server without that route answers GET /cards?limit=200 instead.
+ */
+function useRowCards(enabled, ids) {
+  const perRow = useV2Resource(enabled && ids ? `/cards/messages?ids=${ids}` : null);
+  const older = useV2Resource(enabled && isMissing(perRow.error) ? '/cards?limit=200' : null);
+  return useMemo(() => {
+    const map = perRow.data?.cards && typeof perRow.data.cards === 'object' && !Array.isArray(perRow.data.cards) ? perRow.data.cards : null;
+    if (map) return cardsByMessage(Object.values(map).flat().filter(Boolean));
+    return cardsByMessage(listOf(older.data, 'cards'));
+  }, [perRow.data, older.data]);
+}
+
 function MoreButton({ pages, phone }) {
   if (!pages.next) return null;
   return (
@@ -110,8 +125,13 @@ export default function StreamView({ props }) {
   const needsRes = useV2Pages(streamPath(stream, { needsYou: true }), { refreshOn: LIST_EVENTS });
   const res = useV2Pages(streamPath(stream), { refreshOn: LIST_EVENTS });
   const bundles = useV2Resource(stream === 'records' ? '/sort/bundles' : null);
-  const cardsRes = useV2Resource(stream === 'records' ? '/cards?limit=200' : null);
-  const byMessage = useMemo(() => cardsByMessage(listOf(cardsRes.data, 'cards')), [cardsRes.data]);
+  // Reading and Records rows get their TL;DRs in one call (People rows carry their own).
+  const tldrIds = useMemo(() => (stream === 'people' ? [] : [...needsRes.items, ...res.items].filter((i) => !i.tldr && i.messageId).map((i) => i.messageId)), [stream, needsRes.items, res.items]);
+  const tldrs = useTldrs(tldrIds, work);
+  const needsItems = useMemo(() => withTldrs(needsRes.items, tldrs), [needsRes.items, tldrs]);
+  const restItems = useMemo(() => withTldrs(res.items, tldrs), [res.items, tldrs]);
+  const cardIds = useMemo(() => (stream === 'records' ? res.items.map((i) => i.messageId).filter(Boolean).slice(0, 200).sort().join(',') : ''), [stream, res.items]);
+  const byMessage = useRowCards(stream === 'records', cardIds);
   const power = useV2((s) => s.prefs.powerMode);
   const replyLaterCount = useV2((s) => s.counts.replyLater);
   const needsCount = useV2((s) => countText(s.counts, s.countsMore, 'people'));
@@ -122,8 +142,8 @@ export default function StreamView({ props }) {
   const [sweeping, setSweeping] = useState(false);
   const openPalette = useShell((s) => s.openPalette);
 
-  const needs = useMemo(() => needsRes.items.filter((i) => i.needsYou), [needsRes.items]);
-  const rest = useMemo(() => res.items.filter((i) => !i.needsYou), [res.items]);
+  const needs = useMemo(() => needsItems.filter((i) => i.needsYou), [needsItems]);
+  const rest = useMemo(() => restItems.filter((i) => !i.needsYou), [restItems]);
   const items = useMemo(() => [...needs, ...rest], [needs, rest]);
   const { groups } = useMemo(() => splitStream(rest), [rest]);
   const bundleGroups = useMemo(() => (stream === 'records' ? groupBundles(rest, listOf(bundles.data, 'bundles')) : []), [stream, rest, bundles.data]);

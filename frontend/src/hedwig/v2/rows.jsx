@@ -1,13 +1,14 @@
-// A stream row, as in the People mockup: unread dot, sender, time; subject; and, for what needs
+// A stream row, as in the People mockup: unread dot, sender, time; subject; Hedwig's one-line
+// TL;DR when the row carries one (`tldr`); and, for what needs
 // you (or was rescued from spam, or waits in the Screener), the italic reason line that opens the
 // why door. Other rows keep the door behind a quiet "why" that shows on hover and keyboard focus
 // (on a phone, the thread's Change does it). The row's main area is one real button (Enter opens
 // the thread); the reason is a second button, not nested in the first. A reminder row (synthetic,
 // no message) has nothing to open or explain.
-import { useEffect } from 'react';
+import { useEffect, useId } from 'react';
 import { useV2 } from './state.js';
 import { Mono, V, Why } from './primitives.jsx';
-import { listTime, senderName } from './format.js';
+import { listTime, senderName, tldrOf, tldrLighter } from './format.js';
 import { tv } from './i18n.js';
 
 /** Rows that say why they are here in the list itself. */
@@ -24,6 +25,8 @@ export function StreamRow({ item, onOpen, onWhy, phone = false, stream }) {
   const openWhy = onWhy && !synthetic ? (el) => onWhy({ ...item, stream: item.stream || stream }, el) : undefined;
   const reasonLine = showsReason(item) || (synthetic && item.reason);
   const quietWhy = Boolean(openWhy) && !reasonLine && !phone;
+  const tldr = tldrOf(item);
+  const tldrId = useId();
   return (
     <article
       className="hw-row"
@@ -40,6 +43,7 @@ export function StreamRow({ item, onOpen, onWhy, phone = false, stream }) {
         onClick={synthetic ? undefined : () => onOpen(item)}
         aria-disabled={synthetic ? 'true' : undefined}
         aria-label={`${name}: ${subject}${item.unread ? `, ${tv('hedwig.v2.row.unread', 'unread')}` : ''}`}
+        aria-describedby={tldr ? tldrId : undefined}
         style={{
           display: 'grid', gridTemplateColumns: `${phone ? 12 : 14}px minmax(0, 1fr) auto`, columnGap: 10, alignItems: 'baseline',
           width: '100%', padding: 0, border: 0, background: 'none', color: 'inherit', font: 'inherit', textAlign: 'left', cursor: synthetic ? 'default' : 'pointer',
@@ -57,6 +61,25 @@ export function StreamRow({ item, onOpen, onWhy, phone = false, stream }) {
         >
           {subject}
         </span>
+        {tldr && (
+          <>
+            <span />
+            <span
+              data-tldr=""
+              id={tldrId}
+              title={tldrLighter(item) ? tv('hedwig.v2.tier.lighterStory', 'Written by the lighter model') : undefined}
+              style={{
+                gridColumn: '2 / 4', paddingTop: 2, fontSize: phone ? 14 : 13, lineHeight: 1.4, color: V.muted, overflow: 'hidden', paddingRight: quietWhy ? 40 : 0,
+                // One line on desktop; two on a phone, where one line holds only a few words.
+                ...(phone
+                  ? { display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }
+                  : { whiteSpace: 'nowrap', textOverflow: 'ellipsis' }),
+              }}
+            >
+              {tldr}
+            </span>
+          </>
+        )}
       </button>
       {reasonLine && (
         <div style={{ paddingLeft: phone ? 22 : 24, paddingTop: 4 }}>

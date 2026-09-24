@@ -14,6 +14,9 @@ import { nextScheme, schemeLabel } from './Rail.jsx';
 import { Btn, ErrorLine, Hair, LinkBtn, Mono, Quiet, V, Why } from './primitives.jsx';
 import { listTime, percent } from './format.js';
 import { tv } from './i18n.js';
+import { tierLabel } from './tiers.js';
+import { TierNote } from './TierNote.jsx';
+import { tierChoiceLabel } from '../views/settings/RoutingSettings.jsx';
 
 const ACCENTS = ['#E0561A', '#2F6F5E', '#3B5A8A', '#B8336A'];
 
@@ -275,18 +278,38 @@ export function routingLine(model) {
 
 function RoutingSection({ admin }) {
   const status = useHedwig((s) => s.status);
+  // GET /routing: the household's routing table, read-only, with this person's tokens today.
+  const table = useV2Resource('/routing', { refreshOn: [] });
+  const features = listOf(table.data, 'features');
+  // What serves each tier: /status `tiers` (reflex, reasoning, agent), else the older `models`.
+  const tiers = status?.tiers && typeof status.tiers === 'object' ? status.tiers : null;
   const models = status?.models || {};
-  const rows = Object.entries(models).filter(([, v]) => v);
-  const openModels = () => useHedwig.getState().openView('hedwig.settings.models');
+  const fromTier = (t) => (t && typeof t === 'object' ? { ...t, primary: t.model ?? t.primary } : null);
+  const rows = [['fast', 'reflex'], ['long', 'reasoning'], ['agent', 'agent']]
+    .map(([role, tier]) => [role, (tiers && fromTier(tiers[tier])) || models[role]])
+    .filter(([, m]) => m);
+  const openRouting = () => useHedwig.getState().openView('hedwig.settings.routing');
   return (
-    <Section title={tv('hedwig.v2.power.routing', 'Routing')} right={admin ? <LinkBtn onClick={openModels}>{tv('hedwig.v2.power.editRouting', 'Edit in Models and pipeline')}</LinkBtn> : <span style={{ fontSize: 12, color: V.muted }}>{tv('hedwig.v2.power.readOnly', 'read-only')}</span>}>
+    <Section title={tv('hedwig.v2.power.routing', 'Routing')} right={admin ? <LinkBtn onClick={openRouting}>{tv('hedwig.v2.power.editRoutingTiers', 'Change models and routing')}</LinkBtn> : <span style={{ fontSize: 12, color: V.muted }}>{tv('hedwig.v2.power.readOnly', 'read-only')}</span>}>
+      <TierNote />
       {!rows.length && <Quiet>{tv('hedwig.v2.power.noRouting', 'The model routing is not known yet.')}</Quiet>}
       {rows.map(([role, model]) => (
-        <div key={role} style={{ display: 'grid', gridTemplateColumns: '140px minmax(0, 1fr)', gap: 12, padding: '10px 0', borderTop: `1px solid ${V.line}`, alignItems: 'baseline' }}>
-          <span style={{ fontSize: 14 }}>{role}</span>
-          <Mono size={12} color={V.ink} style={{ whiteSpace: 'normal', overflowWrap: 'anywhere' }}>{routingLine(model)}</Mono>
+        <div key={role} style={{ display: 'grid', gridTemplateColumns: 'minmax(140px, 200px) minmax(0, 1fr)', gap: 12, padding: '10px 0', borderTop: `1px solid ${V.line}`, alignItems: 'baseline' }}>
+          <span style={{ fontSize: 14 }}>{tierLabel(role)}</span>
+          <Mono size={12} color={model?.degraded ? V.accentInk : V.ink} style={{ whiteSpace: 'normal', overflowWrap: 'anywhere' }}>{routingLine(model)}</Mono>
         </div>
       ))}
+      {features.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', paddingTop: 8 }}>
+          {features.map((f) => (
+            <div key={f.feature} style={{ display: 'grid', gridTemplateColumns: 'minmax(140px, 200px) minmax(0, 1fr) auto', gap: 12, padding: '8px 0', borderTop: `1px solid ${V.line}`, alignItems: 'baseline' }}>
+              <span style={{ fontSize: 14 }}>{f.feature}</span>
+              <span style={{ fontSize: 13, color: V.muted, minWidth: 0 }}>{[tierChoiceLabel(f.override, f.defaultTier), f.cadence].filter(Boolean).join(' · ')}</span>
+              <Mono size={11}>{f.usedToday ? tv('hedwig.v2.power.usedToday', '{{n}} tokens today', { n: Number(f.usedToday).toLocaleString() }) : ''}</Mono>
+            </div>
+          ))}
+        </div>
+      )}
     </Section>
   );
 }

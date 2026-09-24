@@ -6,13 +6,16 @@ import { useStore } from '../../store/index.js';
 import { useHedwig } from '../store.js';
 import { getView } from '../registry.js';
 import { useV2Resource, useWork } from './hooks.js';
-import { listOf } from './client.js';
+import { listOf, v2Api, announceSortChange } from './client.js';
 import { openThread, showView, VIEW } from './nav.js';
 import { nudgeThread } from './mail.js';
 import { Question } from './Question.jsx';
 import { ErrorLine, Figure, LinkBtn, Mono, Quiet, V, ViewBody, Why, usePhone, ViewHead } from './primitives.jsx';
 import { ageLabel, briefDateLine, listTime, senderName } from './format.js';
 import { tv } from './i18n.js';
+import { TierNote } from './TierNote.jsx';
+import { CoverageNote } from './CoverageNote.jsx';
+import { isLighter } from './tiers.js';
 
 function Item({ time, children, action }) {
   return (
@@ -30,6 +33,33 @@ function RowLink({ onClick, children, size = 16, weight = 500 }) {
       {children}
     </button>
   );
+}
+
+const PROSE_REASONS = {
+  tier2_degraded: () => tv('hedwig.v2.brief.reasonTier2', 'Tier 2 was not answering'),
+  model_error: () => tv('hedwig.v2.brief.reasonError', 'the model call failed'),
+  budget: () => tv('hedwig.v2.brief.reasonBudget', 'today’s budget was spent'),
+  budget_exceeded: () => tv('hedwig.v2.brief.reasonBudget', 'today’s budget was spent'),
+  models_off: () => tv('hedwig.v2.brief.reasonOff', 'model features are off'),
+  llm_disabled: () => tv('hedwig.v2.brief.reasonOff', 'model features are off'),
+  empty_reply: () => tv('hedwig.v2.brief.reasonEmpty', 'the model returned nothing'),
+};
+
+/**
+ * Where today's briefing prose came from (`prose: { source, fallback, reason, model, at }`): the
+ * template standing in, with the reason in words, or the lighter model. null when the model wrote
+ * it as planned, or there is no briefing today.
+ */
+export function proseNote(prose, status) {
+  if (!prose || typeof prose !== 'object') return null;
+  if (prose.fallback || prose.source === 'template') {
+    const why = PROSE_REASONS[prose.reason]?.();
+    return why
+      ? tv('hedwig.v2.brief.fromTemplateWhy', 'Written from a template: {{reason}}.', { reason: why })
+      : tv('hedwig.v2.brief.fromTemplate', 'Written from a template today.');
+  }
+  if (prose.model && isLighter({ model: prose.model, tier: 'reasoning' }, status)) return tv('hedwig.v2.tier.lighterStory', 'Written by the lighter model');
+  return null;
 }
 
 export function todayLine(t) {
@@ -61,6 +91,9 @@ export default function Brief() {
   const [answered, setAnswered] = useState([]);
   const [nudging, setNudging] = useState(null);
   const work = useWork();
+  const status = useHedwig((st) => st.status);
+  const [undone, setUndone] = useState([]);
+  const [undoing, setUndoing] = useState(null);
   const b = res.data || {};
   const needs = listOf(b.needsYou, 'items');
   const waiting = listOf(b.waitingOn, 'items');
@@ -200,12 +233,42 @@ export default function Brief() {
     </div>
   );
 
+  const entries = listOf(b.today?.entries, 'entries').filter((e) => e && e.id != null && !undone.includes(e.id));
+  const undo = async (e) => {
+    setUndoing(e.id);
+    try {
+      await v2Api.post('/sort/undo', { logId: e.id });
+      setUndone((u) => [...u, e.id]);
+      announceSortChange({ undo: e.id });
+    } catch (err) {
+      useStore.getState().addNotification?.({ type: 'error', title: tv('hedwig.v2.today.undoFailed', 'Could not undo that'), body: err?.message });
+    } finally {
+      setUndoing(null);
+    }
+  };
+  const proseLine = proseNote(b.prose, status);
   const footer = (
-    <div style={{ display: 'flex', alignItems: 'baseline', gap: 16, paddingTop: 14, borderTop: `1px solid ${V.line2}`, fontSize: 13, color: V.muted, flexWrap: 'wrap' }}>
-      {b.today && <span>{todayLine(b.today)}</span>}
-      <LinkBtn onClick={() => showView(VIEW.today)}>{tv('hedwig.v2.today.review', 'Review or undo')}</LinkBtn>
-      <span style={{ flexGrow: 1 }} />
-      {noModel && <Why size={15}>{tv('hedwig.v2.brief.noModel', 'Compiled from your mail, no model call.')}</Why>}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, paddingTop: 14, borderTop: `1px solid ${V.line2}` }}>
+      {entries.length > 0 && (
+        <section aria-label={tv('hedwig.v2.brief.undoAny', 'Undo any of it')} style={{ display: 'flex', flexDirection: 'column' }}>
+          {entries.map((e) => (
+            <div key={e.id} data-undo-entry="" style={{ display: 'flex', alignItems: 'baseline', gap: 12, padding: '6px 0', borderBottom: `1px solid ${V.line}`, fontSize: 13 }}>
+              <Mono size={11}>{listTime(e.createdAt)}</Mono>
+              <span style={{ flexGrow: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.text || e.subject || ''}</span>
+              <LinkBtn hit={phone} disabled={undoing === e.id} onClick={() => undo(e)}>{tv('hedwig.v2.today.undo', 'Undo')}</LinkBtn>
+            </div>
+          ))}
+        </section>
+      )}
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 16, fontSize: 13, color: V.muted, flexWrap: 'wrap' }}>
+        {b.today && <span>{todayLine(b.today)}</span>}
+        <LinkBtn onClick={() => showView(VIEW.today)}>{tv('hedwig.v2.today.review', 'Review or undo')}</LinkBtn>
+        <span style={{ flexGrow: 1 }} />
+        {proseLine
+          ? <Why size={15}>{proseLine}</Why>
+          : noModel && <Why size={15}>{tv('hedwig.v2.brief.noModel', 'Compiled from your mail, no model call.')}</Why>}
+      </div>
+      <CoverageNote what="brief" coverage={b.coverage ?? null} />
     </div>
   );
 
@@ -229,7 +292,7 @@ export default function Brief() {
         <ViewHead phone title={title} sub={briefDateLine(dayOf, compiledAt)} />
         <div style={{ padding: '4px 20px 0', display: 'flex', flexDirection: 'column', gap: 22 }}>
           {state}
-          {res.data && <>{headline}{askField}{left}{right}{footer}</>}
+          {res.data && <>{headline}<TierNote />{askField}{left}{right}{footer}</>}
         </div>
       </ViewBody>
     );
@@ -241,6 +304,7 @@ export default function Brief() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, flex: '1 1 320px', minWidth: 0 }}>
           {dateLine}
           {headline}
+          <TierNote />
         </div>
         {askField}
       </div>

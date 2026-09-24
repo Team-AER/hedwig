@@ -111,7 +111,12 @@ export function startV2Session() {
   v2.loadPrefs();
   v2.probeWork().finally(() => { if (running) useV2.getState().refreshCounts(); });
   clearInterval(countsTimer);
-  countsTimer = setInterval(() => { if (!document.hidden) useV2.getState().refreshCounts({ poll: true }); }, COUNTS_EVERY_MS);
+  countsTimer = setInterval(() => {
+    if (document.hidden) return;
+    useV2.getState().refreshCounts({ poll: true });
+    // The Tier 2 note follows the model runtime (a degraded primary recovers after its cooldown).
+    if (!isMockMode()) useHedwig.getState().refreshStatus?.();
+  }, COUNTS_EVERY_MS);
   // The one place a sort change refreshes the counts; views only announce the change.
   countsListener = () => { clearTimeout(countsDebounce); countsDebounce = setTimeout(() => useV2.getState().refreshCounts(), REFRESH_DEBOUNCE_MS); };
   for (const n of SORT_EVENTS) window.addEventListener(n, countsListener);

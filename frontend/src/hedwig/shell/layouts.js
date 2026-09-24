@@ -47,7 +47,8 @@ export function pickLayout(rows, device, defaultTemplate) {
     if (tree && validTree(tree)) {
       if (isPreV2Layout(tree)) {
         const streams = getTemplate(DEFAULT_TEMPLATE);
-        return { name: streams.label, tree: buildTemplate(DEFAULT_TEMPLATE), templateId: DEFAULT_TEMPLATE, source: 'migrate', classic: { name: CLASSIC_NAME, tree } };
+        // `classic` names the row it came from: on a tablet the old row may be the desktop's.
+        return { name: streams.label, tree: buildTemplate(DEFAULT_TEMPLATE), templateId: DEFAULT_TEMPLATE, source: 'migrate', classic: { name: CLASSIC_NAME, tree, device: d, fromId: active.id ?? null, fromName: active.name ?? null } };
       }
       return { name: active.name, tree, templateId: templateIdForName(active.name), source: 'saved' };
     }

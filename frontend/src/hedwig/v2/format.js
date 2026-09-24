@@ -211,3 +211,26 @@ export function percent(part, whole) {
   if (!whole) return 0;
   return Math.max(0, Math.min(100, Math.round((part / whole) * 100)));
 }
+
+const TLDR_MAX = 240;
+/**
+ * The one-line TL;DR Hedwig wrote for a row, or null. The field is `tldr` (a string, or
+ * { text }) on stream items and Screener senders; `summary` is read as an alias. Anything that
+ * is not plain text, or only repeats the subject, shows nothing rather than noise.
+ */
+export function tldrOf(item) {
+  if (!item || typeof item !== 'object') return null;
+  const raw = item.tldr ?? item.summary ?? null;
+  const text = typeof raw === 'string' ? raw : (raw && typeof raw === 'object' && typeof raw.text === 'string' ? raw.text : '');
+  const clean = text.replace(/\s+/g, ' ').trim();
+  if (!clean || clean === 'undefined' || clean === 'null' || /^[[{]/.test(clean)) return null;
+  const subject = String(item.subject || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  if (subject && clean.toLowerCase() === subject) return null;
+  return clean.length > TLDR_MAX ? `${clean.slice(0, TLDR_MAX - 1).trimEnd()}…` : clean;
+}
+
+/** Whether the row's TL;DR was written by the lighter model (`tldr.lighter`). */
+export function tldrLighter(item) {
+  const t = item?.tldr;
+  return Boolean(t && typeof t === 'object' && t.lighter === true);
+}

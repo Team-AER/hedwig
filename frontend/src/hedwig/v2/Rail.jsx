@@ -15,6 +15,7 @@ import { todayLine } from './Brief.jsx';
 import { currentMainView, showView, VIEW } from './nav.js';
 import { LEDGER_KINDS, SIMPLE_LEDGERS, ledgerTitle } from './Ledger.jsx';
 import { Glyph, Hair, LinkBtn, Mono, V, Why } from './primitives.jsx';
+import { TierNote } from './TierNote.jsx';
 import { tv } from './i18n.js';
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
@@ -118,6 +119,7 @@ export default function Rail() {
           </button>
         </label>
       </form>
+      <TierNote style={{ padding: '0 12px 12px', marginTop: -4 }} />
       <NavItem label={tv('hedwig.v2.rail.screener', 'Screener')} count={countText(counts, more, 'screener')} accentCount on={on(VIEW.screener)} onClick={() => showView(VIEW.screener)} />
       <NavItem label={tv('hedwig.v2.stream.people', 'People')} count={countText(counts, more, 'people')} on={on(VIEW.people)} onClick={() => showView(VIEW.people)} />
       <NavItem label={tv('hedwig.v2.stream.reading', 'Reading')} count={countText(counts, more, 'reading')} on={on(VIEW.reading)} onClick={() => showView(VIEW.reading)} />

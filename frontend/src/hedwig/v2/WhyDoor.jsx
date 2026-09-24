@@ -6,6 +6,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { createPortal } from 'react-dom';
 import { useStore } from '../../store/index.js';
 import { v2Api, announceSortChange } from './client.js';
+import { useV2 } from './state.js';
 import { Btn, Hair, LinkBtn, Mono, Pick, Sheet, V, Why, usePhone } from './primitives.jsx';
 import { tv } from './i18n.js';
 
@@ -28,6 +29,29 @@ export function whySignals(d, fallbackReason) {
     if (!text || seen.has(text.toLowerCase())) continue;
     seen.add(text.toLowerCase());
     out.push(text);
+  }
+  return out;
+}
+
+const SIGNAL_NAMES = {
+  alwaysIn: () => tv('hedwig.v2.why.signal.alwaysIn', 'Always in'),
+  listRule: () => tv('hedwig.v2.why.signal.listRule', 'List rule'),
+};
+
+/**
+ * The signals for Power: { name, label, text, weight } each, in the order the sorter gave them,
+ * with `alwaysIn` (you have written to them) and `listRule` (a List-Id sends it to Reading or
+ * Records) named in words.
+ */
+export function powerSignals(d) {
+  const out = [];
+  for (const s of Array.isArray(d?.signals) ? d.signals : []) {
+    if (!s) continue;
+    if (typeof s === 'string') { out.push({ name: null, label: null, text: s, weight: null }); continue; }
+    const name = typeof s.name === 'string' ? s.name : null;
+    const text = String(s.label || s.name || '').trim();
+    if (!text) continue;
+    out.push({ name, label: name ? (SIGNAL_NAMES[name]?.() || name) : null, text, weight: typeof s.weight === 'number' && Number.isFinite(s.weight) ? s.weight : null });
   }
   return out;
 }
@@ -162,6 +186,8 @@ export function WhyDoor({ item, anchor, onClose }) {
   const layer = d?.layer ? (LAYERS[d.layer]?.() || d.layer) : null;
   const conf = typeof d?.confidence === 'number' ? Math.round(d.confidence * 100) : null;
   const signals = whySignals(d, item.reason);
+  const power = useV2((st) => st.prefs.powerMode);
+  const detailed = power ? powerSignals(d) : [];
   const title = tv('hedwig.v2.why.title', 'Why Hedwig put it here');
 
   const body = (
@@ -202,10 +228,24 @@ export function WhyDoor({ item, anchor, onClose }) {
             {layer && <span>{tv('hedwig.v2.why.decidedBy', 'Decided by {{layer}}', { layer })}</span>}
             {conf != null && <Mono size={12}>{tv('hedwig.v2.why.confidence', '{{n}}% sure', { n: conf })}</Mono>}
           </div>
-          {signals.length > 0 && (
+          {d.pending === 'reflex' && (
+            <span data-pending="reflex"><Why size={15}>{tv('hedwig.v2.why.pendingReflex', 'Waiting for Reflex: this is a first guess until the Reflex model has read it.')}</Why></span>
+          )}
+          {!power && signals.length > 0 && (
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               {signals.map((s) => (
                 <div key={s} style={{ padding: '8px 0', borderTop: `1px solid ${V.line}`, fontSize: 14 }}>{s}</div>
+              ))}
+            </div>
+          )}
+          {power && detailed.length > 0 && (
+            <div data-power-signals="" style={{ display: 'flex', flexDirection: 'column' }}>
+              {detailed.map((s, i) => (
+                <div key={`${s.name}-${i}`} style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '8px 0', borderTop: `1px solid ${V.line}`, fontSize: 14 }}>
+                  <span style={{ flexGrow: 1, minWidth: 0 }}>{s.text}</span>
+                  {s.label && <Mono size={11}>{s.label}</Mono>}
+                  {s.weight != null && <Mono size={11} color={V.ink}>{s.weight.toFixed(2)}</Mono>}
+                </div>
               ))}
             </div>
           )}
@@ -215,9 +255,9 @@ export function WhyDoor({ item, anchor, onClose }) {
               {typeof d.rule === 'string' ? d.rule : (d.rule.name || d.rule.id)}
             </div>
           )}
-          {(d.promptId || d.model) && (
+          {(d.promptId || d.model || (power && d.engineVersion)) && (
             <Mono size={11} style={{ whiteSpace: 'normal', wordBreak: 'break-all' }}>
-              {[d.promptId && `${d.promptId}${d.promptVersion ? `@${d.promptVersion}` : ''}`, d.model].filter(Boolean).join(' · ')}
+              {[d.promptId && `${d.promptId}${d.promptVersion ? `@${d.promptVersion}` : ''}`, d.model, power && d.engineVersion ? tv('hedwig.v2.why.engine', 'engine {{v}}', { v: d.engineVersion }) : null].filter(Boolean).join(' · ')}
             </Mono>
           )}
         </>

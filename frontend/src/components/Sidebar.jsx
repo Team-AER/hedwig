@@ -16,6 +16,7 @@ import {
 import { useMobile } from '../hooks/useMobile.js';
 import { OwlMark } from '../hedwig/icons.jsx';
 import { useHedwig } from '../hedwig/store.js';
+import ClassicWayBack from '../hedwig/shell/ClassicWayBack.jsx';
 import ProfileModal from './ProfileModal.jsx';
 import { useUiScale, descale } from '../hooks/useUiScale.js';
 
@@ -892,6 +893,8 @@ export default function Sidebar() {
           )}
         </button>
       </div>
+      {/* Hedwig: the way back from the classic shell (renders nothing in the Hedwig shell). */}
+      <ClassicWayBack collapsed={sidebarCollapsed} />
 
       {/* Compose button */}
       <div style={{ padding: '12px 10px' }}>

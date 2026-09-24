@@ -37,10 +37,10 @@ function seed() {
       people: [
         item('anna', { name: 'Anna Berg', email: 'anna.berg@northwind.example' }, 'Q3 report: can you send the final numbers?',
           'Hi, the board pack goes to print Friday morning.', todayAt(9, 40),
-          { needsYou: true, reason: 'Asked for the report by Friday', unread: true }),
+          { needsYou: true, reason: 'Asked for the report by Friday', unread: true, tldr: { text: 'Wants the final Q3 numbers by Thursday evening for Friday’s board pack.', lighter: false, model: 'google/gemma-4-12B-it-qat-w4a16-ct' } }),
         item('marcus', { name: 'Marcus Oduya', email: 'marcus@oduya-lettings.example' }, 'Lease renewal, two options',
           'Attached are the two renewal options we discussed.', daysAgoAt(1, 16, 5),
-          { needsYou: true, reason: 'Waiting four days · your landlord', unread: true, accountId: ACCOUNT_HOME }),
+          { needsYou: true, reason: 'Waiting four days · your landlord', unread: true, accountId: ACCOUNT_HOME, tldr: { text: 'Two renewal options: 12 months at the same rent, or 24 months with a 3% rise.', lighter: false, model: 'google/gemma-4-12B-it-qat-w4a16-ct' } }),
         item('kaur', { name: 'Dr. S. Kaur', email: 'reception@bergen-clinic.example' }, 'Confirm your appointment on 30 Sep',
           'Please confirm or rebook.', daysAgoAt(2, 10, 12),
           { needsYou: true, reason: 'A yes or no is all they need', unread: true, accountId: ACCOUNT_HOME }),
@@ -88,7 +88,8 @@ function seed() {
     },
     screener: [
       { key: 'nordlystravel.no', scope: 'domain', display: 'Nordlys Travel', address: 'booking@nordlystravel.no', count: 3,
-        proposed: 'records', reason: 'Booking confirmations. You bought from this domain in June.', inSpam: false, lastMessageId: 'm-nordlys' },
+        proposed: 'records', reason: 'Booking confirmations. You bought from this domain in June.', inSpam: false, lastMessageId: 'm-nordlys',
+        subjects: ['Booking confirmed: Bergen, 3 nights'] },
       { key: 'list:benedict', scope: 'list', display: "Benedict's Newsletter", address: 'list · weekly', count: 1,
         proposed: 'reading', reason: 'A newsletter with an unsubscribe header.', inSpam: false, lastMessageId: 'm-ben' },
       { key: 'erik.haugen@proton.me', scope: 'address', display: 'Erik Haugen', address: 'erik.haugen@proton.me', count: 1,
@@ -98,7 +99,7 @@ function seed() {
       { key: 'fjellsport.no', scope: 'domain', display: 'Fjellsport', address: 'kundeservice@fjellsport.no', count: 4,
         proposed: 'records', reason: 'Order and shipping updates for your June order.', inSpam: false, lastMessageId: 'm-fjell' },
       { key: 'maria.lopez@studio.example', scope: 'address', display: 'Maria López', address: 'maria.lopez@studio.example', count: 1,
-        proposed: 'people', reason: 'Writes to you by name and Anna is in Cc.', inSpam: false, lastMessageId: 'm-maria' },
+        proposed: 'people', reason: 'Writes to you by name and Anna is in Cc.', inSpam: false, lastMessageId: 'm-maria', subjects: ['Studio visit next week?'] },
       { key: 'list:ruter', scope: 'list', display: 'Ruter', address: 'list · monthly', count: 2,
         proposed: 'reading', reason: 'Monthly service updates, you open about half.', inSpam: false, lastMessageId: 'm-ruter' },
     ],
@@ -119,7 +120,7 @@ function seed() {
     ],
     counts: { screened: 12, bundled: 40, rescued: 2, blocked: 9 },
     questions: [
-      { id: 'q-anna', kind: 'sort', question: "You've replied to Anna Berg 14 times, usually within the hour. Keep her mail in People?",
+      { id: 'q-anna', kind: 'sort', messageId: 'm-anna', question: "You've replied to Anna Berg 14 times, usually within the hour. Keep her mail in People?",
         evidence: { replies: 14, medianReplyMinutes: 42 }, options: [{ id: 'yes', label: 'Yes', always: true }, { id: 'no', label: 'No' }] },
       { id: 'q-ruter', kind: 'needs_you', question: 'Ruter sends a monthly update. Should these ever need you?',
         evidence: { opened: 6, of: 12 }, options: [{ id: 'never', label: 'Never', always: true }, { id: 'sometimes', label: 'Sometimes' }] },
@@ -156,7 +157,105 @@ function seed() {
     ],
     watches: [],
     asks: seedAsks(),
+    // Per-thread overrides of the work route's answer (tests: a story from the lighter model, a failed story).
+    threadExtras: {},
+    admin: seedAdmin(),
+    // GET /work/tldr: TL;DRs for rows that do not carry their own (Screener, Reading, Records).
+    tldrs: {
+      'm-nordlys': { text: 'Your Bergen booking is confirmed: 3 nights, reference NT-44821.', model: 'google/gemma-4-12B-it-qat-w4a16-ct', tier: 'reflex', lighter: false },
+      'm-ben': { text: 'On-device models turn the browser into an inference runtime.', model: 'google/gemma-4-12B-it-qat-w4a16-ct', tier: 'reflex', lighter: false },
+      'm-fjordkraft': { text: 'September electricity: NOK 1,240, due Friday.', model: 'google/gemma-4-12B-it-qat-w4a16-ct', tier: 'reflex', lighter: false },
+    },
+    // indexer/truth.js coverageShare: how much of the mail Ask, search and cards can see.
+    coverage: { share: 0.62, indexed: 34620, total: 55762, complete: false },
   };
+}
+
+// The admin routes (backend/src/hedwig/core adminRoutes, onboarding/routing.js): config fields,
+// the gateway catalog, the routing table, the models people may pick, and the health view.
+function seedAdmin() {
+  const field = (key, value, extra = {}) => ({ key, value, scope: 'system', ...extra });
+  return {
+    config: [
+      field('llm.models.fast', 'google/gemma-4-12B-it-qat-w4a16-ct', { type: 'string', group: 'models' }),
+      field('llm.models.long', 'Qwen/Qwen3.8-Flash-Next', { type: 'string', group: 'models' }),
+      field('llm.models.agent', 'Qwen/Qwen3.8-Flash-Next', { type: 'string', group: 'models' }),
+      field('llm.fallbackModel', 'google/gemma-4-12B-it-qat-w4a16-ct', { type: 'string', group: 'models' }),
+      field('llm.reasoning.fast', 'off', { type: 'enum', options: ['off', 'low', 'medium', 'high', 'xhigh'] }),
+      field('llm.reasoning.long', 'low', { type: 'enum', options: ['off', 'low', 'medium', 'high', 'xhigh'] }),
+      field('llm.reasoning.agent', 'low', { type: 'enum', options: ['off', 'low', 'medium', 'high', 'xhigh'] }),
+    ],
+    catalog: { models: [
+      { id: 'bge-m3', display_name: 'BGE M3', capabilities: ['embeddings'], reasoning_efforts: [], status: 'ready' },
+      { id: 'google/gemma-4-12B-it-qat-w4a16-ct', display_name: 'Gemma 4 12B QAT', capabilities: ['chat', 'reasoning', 'streaming'], reasoning_efforts: ['none', 'high'], max_output_tokens: 32768, status: 'ready' },
+      { id: 'Qwen/Qwen3.8-Flash-Next', display_name: 'Qwen 3.8 Flash Next', capabilities: ['chat', 'tools', 'reasoning', 'streaming'], reasoning_efforts: ['off', 'low', 'medium', 'xhigh'], max_output_tokens: 65536, status: 'ready' },
+    ] },
+    routing: {
+      sort: { override: 'auto', defaultTier: 'reflex', escalateBelow: 0.6, budget: 2000000, cadence: 'Each new message; history 200 messages a minute' },
+      work: { override: 'auto', defaultTier: 'reflex', escalateBelow: null, budget: 1000000, cadence: 'When you open a thread or ask for a draft' },
+      ask: { override: 'auto', defaultTier: 'mixed', escalateBelow: null, budget: 1000000, cadence: 'When you ask' },
+    },
+    enabled: [],
+    degraded: false,
+  };
+}
+
+function routingTable(a) {
+  const tierOf = (r) => (r.override === 'reflex' || r.override === 'reasoning' ? r.override : r.defaultTier);
+  const features = Object.entries(a.routing).map(([feature, r]) => ({
+    feature, tier: tierOf(r), override: r.override, defaultTier: r.defaultTier, tierKey: `routing.${feature}.tier`,
+    escalateBelow: r.escalateBelow, escalateKey: feature === 'sort' ? 'sort.escalateBelow' : null, escalate: [],
+    cadence: r.cadence, budget: r.budget, budgetKey: `llm.tokenBudget.${feature}`, prompts: [],
+  }));
+  const val = (k) => a.config.find((f) => f.key === k)?.value;
+  return { models: { reflex: val('llm.models.fast'), reasoning: val('llm.models.long') }, features };
+}
+
+// llm.js tierStatus: what serves each tier, and the notice.
+function tierStatusOf(a) {
+  const val = (k) => a.config.find((f) => f.key === k)?.value;
+  const fbAll = val('llm.fallbackModel') || null;
+  const entry = (tier, role, label) => {
+    const model = val(`llm.models.${role}`) || null;
+    const fallback = fbAll && fbAll !== model ? fbAll : null;
+    const degraded = Boolean(a.degraded && role !== 'fast');
+    const active = degraded && fallback ? fallback : model;
+    return { tier, label, role, model, fallback, active, degraded, lighterModel: tier === 'reasoning' && active !== model,
+      reason: degraded ? 'no response within 45000 ms' : null, source: degraded ? 'probe' : null, since: null, checkedAt: at(60_000), latencyMs: degraded ? null : (role === 'fast' ? 1900 : 4200) };
+  };
+  const reflex = entry('reflex', 'fast', 'Tier 1 Reflex');
+  const reasoning = entry('reasoning', 'long', 'Tier 2 Reasoning');
+  const agent = entry('reasoning', 'agent', 'Agent (Tier 2, tool calling)');
+  const notice = reasoning.degraded && reasoning.active !== reasoning.model
+    ? { level: 'warning', tier: 'reasoning', text: 'Tier 2 is slow; using the lighter model', detail: `${reasoning.model}: ${reasoning.reason}. ${reasoning.active} answers Tier 2 work until it recovers.` }
+    : null;
+  return { reflex, reasoning, agent, notice, probe: { enabled: true, everySec: 60, timeoutMs: 10000, lastRunAt: at(60_000) } };
+}
+
+const RUNTIME_EFFORTS = ['off', 'low', 'medium', 'high', 'xhigh'];
+function runtimeOf(a) {
+  const val = (k) => a.config.find((f) => f.key === k)?.value;
+  const info = (id) => a.catalog.models.find((m) => m.id === id) || null;
+  const tiers = {};
+  for (const [tier, role, label] of [['reflex', 'fast', 'Tier 1 Reflex'], ['reasoning', 'long', 'Tier 2 Reasoning'], ['agent', 'agent', 'Agent (Tier 2, tool calling)']]) {
+    const model = val(`llm.models.${role}`);
+    const m = info(model);
+    const efforts = m ? [...new Set(m.reasoning_efforts.map((e) => (e === 'none' ? 'off' : e)))].filter((e) => RUNTIME_EFFORTS.includes(e)) : RUNTIME_EFFORTS;
+    const effort = val(`llm.reasoning.${role}`);
+    tiers[tier] = { label, role, modelKey: `llm.models.${role}`, model, modelSource: 'default', effortKey: `llm.reasoning.${role}`, effort, effortSource: 'default',
+      efforts, wireEffort: efforts.includes(effort) ? (effort === 'off' ? 'none' : effort) : (efforts.includes('off') ? 'none' : efforts[0]), inCatalog: Boolean(m) };
+  }
+  return { tiers, fallback: { model: val('llm.fallbackModel') || null, modelKey: 'llm.fallbackModel' }, enabledModels: clone(a.enabled), budgets: {}, status: tierStatusOf(a) };
+}
+
+function activeModelsOf(a) {
+  const val = (k) => a.config.find((f) => f.key === k)?.value;
+  const fb = val('llm.fallbackModel') || null;
+  return Object.fromEntries(['fast', 'long', 'agent'].map((role) => {
+    const primary = val(`llm.models.${role}`);
+    const degraded = Boolean(a.degraded && role !== 'fast' && fb && fb !== primary);
+    return [role, { primary, fallback: fb, active: degraded ? fb : primary, degraded }];
+  }));
 }
 
 // ── G: cards ─────────────────────────────────────────────────────────────────
@@ -392,13 +491,15 @@ export async function mockStream(path, body, { onEvent, signal } = {}) {
     answer = body.followUpOf ? 'Yes. Renewing keeps the same deposit, so there is nothing to pay again [1].' : DEPOSIT_ANSWER;
     if (/cite/i.test(q)) { answer += ' The scheme also sent a certificate [4].'; flags.invalidCitations = [4]; }
   }
-  emit({ type: 'sources', sources, askLogId: id, plan: { text: q } });
+  emit({ type: 'sources', sources, askLogId: id, plan: { text: q }, coverage: clone(db.coverage) });
   await tick();
   for (const word of answer.split(/(?<= )/)) { emit({ type: 'delta', text: word }); await tick(); }
   const checked = flags.invalidCitations.length ? answer.replace(/\s?\[4\]/, '') : answer;
   const citations = [...new Set([...checked.matchAll(/\[(\d+)\]/g)].map((m) => Number(m[1])))];
-  emit({ type: 'done', answer: checked, citations, ...flags, askLogId: id });
-  Object.assign(entry, { status: 'done', completed_at: new Date().toISOString(), answer: checked, citations, sources, unsupported: flags.unsupported, notFound: flags.notFound });
+  // While Tier 2 is degraded (mockSetDegraded) the answer comes from the lighter model, as llm.js reports it.
+  const who = db.admin.degraded ? { model: 'google/gemma-4-12B-it-qat-w4a16-ct', lighterModel: true } : { model: 'Qwen/Qwen3.8-Flash-Next', lighterModel: false };
+  emit({ type: 'done', answer: checked, citations, ...flags, askLogId: id, coverage: clone(db.coverage), ...who });
+  Object.assign(entry, { status: 'done', completed_at: new Date().toISOString(), answer: checked, citations, sources, unsupported: flags.unsupported, notFound: flags.notFound, ...who });
 }
 
 let db = seed();
@@ -454,6 +555,8 @@ const THREADS = {
     },
     deadline: { figure: 'Fri', caption: 'Final Q3 numbers', messageId: 'm-anna', dueAt: nextWeekday(5), commitmentId: 'c-anna', direction: 'i_owe' },
     quickReplies: ['Yes, by Thursday evening.', 'Sending them now.', 'Can it wait until Friday 9am?'],
+    tldr: 'Anna needs your final Q3 numbers by Thursday evening.',
+    messageTldrs: { 'm-anna': 'Wants the final Q3 numbers by Thursday evening; the revenue lines are fixed.' },
   },
 };
 
@@ -479,10 +582,14 @@ const WHY = {
     signals: ['Question addressed to you', 'No reply from you yet', 'Sender is in your contacts'],
     rule: null, promptId: 'sort.reflex', promptVersion: '2026-09-23.1', model: 'google/gemma-4-12B-it-qat-w4a16-ct', senderKey: 'marcus@oduya-lettings.example', senderScope: 'address' },
   'm-ben': { layer: 'rule', reason: 'A newsletter, so it waits in Reading.', confidence: 1,
-    signals: [{ name: 'list', label: 'Mailing list weekly.benedict.example', weight: 0.6 }, { name: 'unsubscribe', label: 'Has an unsubscribe link', weight: 0.3 }],
+    signals: [{ name: 'listRule', label: 'A mailing list: Reading', weight: 0.9 }, { name: 'list', label: 'Mailing list weekly.benedict.example', weight: 0.6 }, { name: 'unsubscribe', label: 'Has an unsubscribe link', weight: 0.3 }],
+    engineVersion: '2026-09-24.2',
     senderDecision: { key: 'weekly.benedict.example', scope: 'list', decision: 'reading', source: 'user' },
     senderKey: 'weekly.benedict.example', senderScope: 'list',
     rule: null, promptId: null, promptVersion: null, model: null },
+  'm-kaur': { layer: 'classifier', reason: 'The clinic asks you to confirm or rebook.', confidence: 0.64, pending: 'reflex', engineVersion: '2026-09-24.2',
+    signals: [{ name: 'alwaysIn', label: 'You have written to them', weight: 0.5 }, { name: 'question', label: 'Asks you to confirm', weight: 0.4 }],
+    rule: null, promptId: null, promptVersion: null, model: null, senderKey: 'reception@bergen-clinic.example', senderScope: 'address' },
   'm-dhl': { layer: 'rule', reason: 'A delivery notice, bundled with Deliveries.', confidence: 1,
     signals: ['From a carrier domain', 'Tracking number in the subject'], rule: { id: 'r-1', name: 'Deliveries' },
     promptId: null, promptVersion: null, model: null, senderKey: 'dhl.example', senderScope: 'domain' },
@@ -535,8 +642,17 @@ function brief() {
     ],
     reading: db.streams.reading.slice(0, 3).map((i) => ({ title: i.subject, line: i.snippet, messageId: i.messageId, threadId: i.threadId, source: i.from?.name })),
     questions: clone(db.questions),
-    today: { ...db.counts },
+    // Where today's prose came from: the template stood in because Tier 2 was not answering.
+    prose: { insightId: 'i-brief', source: 'template', fallback: true, reason: 'tier2_degraded', model: null, at: todayAt(7, 0) },
+    coverage: clone(db.coverage),
+    today: { ...db.counts, ...todayUndo() },
   };
+}
+
+// insights/briefing.js briefToday: the newest undoable "Hedwig today" entries (POST /sort/undo { logId }).
+function todayUndo() {
+  const entries = db.log.filter((e) => e.undoable && !e.undone);
+  return { undoable: entries.length, entries: entries.slice(0, 5).map((e) => ({ id: e.id, action: e.action, text: e.text || null, messageId: e.messageId || null, subject: e.subject || null, createdAt: e.createdAt || null })) };
 }
 
 function route(method, path, body) {
@@ -628,6 +744,10 @@ function route(method, path, body) {
   // ── D: labels ───────────────────────────────────────────────────────────
   if (seg[0] === 'labels' && seg[1] === 'questions') {
     if (method === 'GET' && !seg[2]) return { questions: clone(db.questions) };
+    if (method === 'GET' && seg[2] === 'for' && seg[3]) {
+      const q = db.questions.find((x) => x.messageId === decodeURIComponent(seg[3]));
+      return { question: q ? clone(q) : null };
+    }
     const q = db.questions.find((x) => x.id === seg[2]);
     if (!q) throw notFound();
     if (method === 'POST' && (seg[3] === 'answer' || seg[3] === 'skip')) {
@@ -643,6 +763,7 @@ function route(method, path, body) {
   }
 
   // ── A: index ────────────────────────────────────────────────────────────
+  if (method === 'GET' && seg[0] === 'index' && seg[1] === 'coverage') return clone(db.coverage);
   if (method === 'GET' && seg[0] === 'index' && seg[1] === 'status') {
     const row = (accountId, account, folder, state, total, seen, bodies, chunked, embedded, error, ago) => ({
       accountId, account, folder, spam: false, state, total, seen, duplicates: 0, bodies, bodyFailed: 0, chunked, embedded, error, updatedAt: at(ago),
@@ -666,6 +787,14 @@ function route(method, path, body) {
 
   // ── F: working the inbox ──────────────────────────────────────────────
   if (seg[0] === 'work') {
+    if (method === 'GET' && seg[1] === 'tldr') {
+      const ids = String(params.get('ids') || '').split(',').filter(Boolean).slice(0, 200);
+      return { tldr: Object.fromEntries(ids.filter((id) => db.tldrs[id]).map((id) => [id, clone(db.tldrs[id])])) };
+    }
+    if (method === 'GET' && seg[1] === 'message' && seg[3] === 'tldr') {
+      const id = decodeURIComponent(seg[2]);
+      return { messageId: id, tldr: db.tldrs[id] ? clone(db.tldrs[id]) : null, computed: false };
+    }
     if (seg[1] === 'lists') {
       if (method === 'GET' && !seg[2]) return listCounts();
       const kind = listKind(seg[2]);
@@ -723,7 +852,11 @@ function route(method, path, body) {
         timeline: t.messages.map((m) => ({ messageId: m.id, at: m.date, who: m.from?.name || m.from?.email, kind: 'message', line: String(m.text || '').slice(0, 90) })),
         quickReplies: clone(t.quickReplies || []),
         ...(t.deadline ? { deadline: clone(t.deadline) } : {}),
+        storyMeta: t.story ? { source: 'eager', tier: 'reflex', model: 'google/gemma-4-12B-it-qat-w4a16-ct', lighter: false } : null,
+        tldr: t.tldr || null,
+        messageTldrs: clone(t.messageTldrs || {}),
         provenance: {}, cached: true,
+        ...clone(db.threadExtras[decodeURIComponent(seg[2])] || {}),
       };
     }
     if (method === 'POST' && seg[1] === 'draft') {
@@ -780,6 +913,15 @@ function route(method, path, body) {
       if (!LEDGER_ROWS[seg[2]]) throw bad(`ledger must be one of ${Object.keys(LEDGER_ROWS).join(', ')}`);
       return mockLedger(seg[2], params);
     }
+    if (method === 'GET' && seg[1] === 'messages') {
+      const ids = String(params.get('ids') || '').split(',').filter(Boolean);
+      const out = {};
+      for (const id of ids) {
+        const list = db.cards.filter((c) => !c.dismissedAt && (c.messageId === id || c.messageIds.includes(id))).map(withMessage);
+        if (list.length) out[id] = list;
+      }
+      return { cards: out };
+    }
     if (method === 'GET' && seg[1] === 'message' && seg[2]) {
       const id = decodeURIComponent(seg[2]);
       return { cards: db.cards.filter((c) => c.messageId === id || c.messageIds.includes(id)).map(withMessage) };
@@ -826,6 +968,103 @@ function route(method, path, body) {
     return { subject: t.subject, label: t.label || null, participants: t.participants || null, messages: clone(t.messages) };
   }
 
+  // onboarding/routing.js GET /routing: the table for everyone, read-only, with this person's tokens today.
+  if (method === 'GET' && pathname === '/routing') {
+    const t = routingTable(db.admin);
+    return { ...t, readOnly: true, myModels: {}, modelChoices: clone(db.admin.enabled), features: t.features.map((f) => ({ ...f, usedToday: f.feature === 'sort' ? 48210 : 0 })) };
+  }
+  if (seg[0] === 'admin') {
+    const a = db.admin;
+    if (method === 'GET' && pathname === '/admin/config') return clone(a.config);
+    if (method === 'PATCH' && pathname === '/admin/config') {
+      for (const [k, v] of Object.entries(body || {})) {
+        const f = a.config.find((x) => x.key === k);
+        if (f) f.value = v; else a.config.push({ key: k, value: v, scope: 'system' });
+      }
+      return clone(a.config);
+    }
+    if (method === 'GET' && pathname === '/admin/catalog') return clone(a.catalog);
+    if (method === 'GET' && pathname === '/admin/routing') return routingTable(a);
+    if (method === 'PUT' && pathname === '/admin/routing') {
+      for (const [feature, change] of Object.entries(body || {})) {
+        const r = a.routing[feature];
+        if (!r) throw bad(`unknown feature ${feature}`);
+        if (change.tier !== undefined) r.override = change.tier || 'auto';
+        if (change.escalateBelow !== undefined) r.escalateBelow = change.escalateBelow;
+        if (change.budget !== undefined) r.budget = change.budget;
+      }
+      return { ...routingTable(a), changed: Object.keys(body || {}) };
+    }
+    if (pathname === '/admin/models/enabled') {
+      if (method === 'PUT') a.enabled = [...new Set(body?.models || [])];
+      const val = (k) => a.config.find((f) => f.key === k)?.value;
+      return {
+        models: clone(a.enabled),
+        defaults: { fast: val('llm.models.fast'), long: val('llm.models.long'), agent: val('llm.models.agent') },
+        catalog: a.catalog.models.filter((m) => m.capabilities.includes('chat')).map((m) => ({ id: m.id, displayName: m.display_name, status: m.status, maxOutputTokens: m.max_output_tokens ?? null })),
+      };
+    }
+    if (method === 'GET' && pathname === '/admin/runtime') return runtimeOf(a);
+    if (method === 'PUT' && pathname === '/admin/runtime') {
+      const notes = [];
+      const setKey = (k, v) => { const f = a.config.find((x) => x.key === k); if (f) f.value = v; else a.config.push({ key: k, value: v, scope: 'system' }); };
+      const alias = { reflex: 'fast', reasoning: 'long' };
+      for (const [raw, id] of Object.entries(body?.models || {})) {
+        const role = alias[raw] || raw;
+        const m = a.catalog.models.find((x) => x.id === id);
+        if (id && !m) throw bad(`models.${raw}: ${id} is not in the gateway catalog`);
+        if (role === 'agent' && m && !m.capabilities.includes('tools')) throw bad(`models.agent: ${id} does not support tool calling`);
+        setKey(role === 'fallback' ? 'llm.fallbackModel' : `llm.models.${role}`, id || '');
+      }
+      for (const [raw, e] of Object.entries(body?.effort || {})) {
+        const role = alias[raw] || raw;
+        setKey(`llm.reasoning.${role}`, e);
+        const m = a.catalog.models.find((x) => x.id === a.config.find((f) => f.key === `llm.models.${role}`)?.value);
+        const allowed = m ? m.reasoning_efforts.map((x) => (x === 'none' ? 'off' : x)) : [];
+        if (m && !allowed.includes(e)) notes.push(`${m.id} accepts ${m.reasoning_efforts.join('/')}; ${e} is sent as ${m.reasoning_efforts[0]}`);
+      }
+      if (Array.isArray(body?.enabledModels)) a.enabled = [...new Set(body.enabledModels)];
+      return { ...runtimeOf(a), changed: Object.keys(body || {}), notes };
+    }
+    if (method === 'GET' && pathname === '/admin/models/catalog') {
+      const val = (k) => a.config.find((f) => f.key === k)?.value;
+      return { generatedAt: at(HOUR), models: a.catalog.models.map((m) => {
+        const roles = ['fast', 'long', 'agent'].filter((r) => val(`llm.models.${r}`) === m.id);
+        return { ...clone(m), displayName: m.display_name, chat: m.capabilities.includes('chat'), tools: m.capabilities.includes('tools'), reasoning: m.capabilities.includes('reasoning'),
+          streaming: m.capabilities.includes('streaming'), reasoningEfforts: [...new Set(m.reasoning_efforts.map((e) => (e === 'none' ? 'off' : e)))], roles,
+          fallback: val('llm.fallbackModel') === m.id, enabled: a.enabled.includes(m.id), health: null };
+      }) };
+    }
+    if (method === 'POST' && pathname === '/admin/tiers/probe') {
+      const st = tierStatusOf(a);
+      const models = [...new Set([st.reflex.model, st.reasoning.model, st.agent.model, st.reasoning.fallback].filter(Boolean))];
+      return { ...st, probed: models.map((m) => ({ model: m, ok: !(a.degraded && m === st.reasoning.model), latencyMs: a.degraded && m === st.reasoning.model ? null : (m === st.reflex.model ? 1900 : 4200), error: a.degraded && m === st.reasoning.model ? 'no response within 10000 ms' : null })), skipped: null };
+    }
+    if (method === 'GET' && pathname === '/admin/usage') {
+      if (a.noUsage) throw notFound();
+      const row = (feature, tier, calls, errors, fellBack, escalated, tokens, avg) => ({ feature, tier, calls, errors, fellBack, escalated, tokens, avgLatencyMs: avg, p95LatencyMs: avg * 2,
+        errorRate: calls ? errors / calls : 0, fallbackRate: calls ? fellBack / calls : 0, escalationRate: calls ? escalated / calls : 0 });
+      const features = [row('sort', 'reflex', 400, 3, 0, 12, 910000, 2300), row('sort', 'reasoning', 12, 0, 4, 0, 88000, 9000), row('work', 'reflex', 38, 0, 0, 0, 120000, 3100), row('ask', 'reasoning', 7, 4, 3, 0, 42000, 46000)];
+      const calls = features.reduce((n, r) => n + r.calls, 0);
+      return { days: Number(params.get('days')) || 7, userId: null, daily: [], features, tiers: {}, escalation: { escalated: 12, calls, rate: Math.round((12 / calls) * 1000) / 1000 } };
+    }
+    if (method === 'GET' && pathname === '/admin/health') {
+      return {
+        status: { ready: true }, models: activeModelsOf(a), tiers: tierStatusOf(a), gateway: { ok: true },
+        aiCalls24h: [
+          { feature: 'sort', calls: 412, errors: 3, avg_latency_ms: 2400 },
+          { feature: 'work', calls: 38, errors: 0, avg_latency_ms: 3100 },
+          { feature: 'ask', calls: 7, errors: 4, avg_latency_ms: 46000 },
+        ],
+      };
+    }
+    if (method === 'POST' && pathname === '/admin/test-llm') {
+      const role = body?.role || 'fast';
+      const m = activeModelsOf(a)[role];
+      return { ok: true, model: m?.active, reply: 'ready', ms: role === 'fast' ? 1900 : 4200 };
+    }
+  }
+
   // Not in the contract (B would own it): prompt versions, admin only.
   if (method === 'GET' && pathname === '/admin/prompts') {
     return { prompts: [
@@ -842,6 +1081,20 @@ function route(method, path, body) {
 let requestLog = [];
 /** Every request the mock answered since the last reset ("GET /sort/screener"), for tests. */
 export function mockRequests({ clear = false } = {}) { const out = requestLog; if (clear) requestLog = []; return out; }
+
+/** Override what GET /work/thread/:id answers for a thread (tests: provenance, storyError). */
+export function mockThreadExtras(threadId, extras) { db.threadExtras[threadId] = { ...(db.threadExtras[threadId] || {}), ...extras }; }
+
+/** Answer GET /admin/usage with 404, as a server without it would (tests: the /admin/health fallback). */
+export function mockNoUsage(on = true) { db.admin.noUsage = Boolean(on); }
+
+/** Tier 2 degraded (the fallback standing in) in the mock's /admin/health and mockStatus(). */
+export function mockSetDegraded(on) { db.admin.degraded = Boolean(on); }
+
+/** A /status body with the models block, as core/index.js answers it. */
+export function mockStatus() {
+  return { ready: true, enabled: true, features: { context: true, triage: true, insights: true, agent: true, extraction: true, sort: true }, models: activeModelsOf(db.admin), tiers: tierStatusOf(db.admin) };
+}
 
 /** Add rows to a stream (tests: long lists, new mail arriving). */
 export function mockAddItems(stream, rows) {

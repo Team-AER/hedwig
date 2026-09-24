@@ -14,21 +14,24 @@ import { isMissing, useWork } from './hooks.js';
 import { loadThread, loadBody } from './threadData.js';
 import { archiveThread, addToList, snooze, snoozeTimes, prepareReply, guardReply, sendPrepared, watchForReply, settingValue } from './mail.js';
 import { MessageCards } from './Cards.jsx';
+import { Question } from './Question.jsx';
 import { useWhyDoor } from './WhyDoor.jsx';
 import { Btn, Glyph, IconBtn, LinkBtn, Mono, Quiet, Sheet, Slip, V, Why, ErrorLine, usePhone } from './primitives.jsx';
 import { firstName, fullTime, listTime, senderName, slipDate, storyParts } from './format.js';
 import { tv, tvn } from './i18n.js';
+import { LighterLabel } from './TierNote.jsx';
+import { isLighter } from './tiers.js';
 
 function useThread(item) {
   const [state, setState] = useState({ data: null, error: null, loading: Boolean(item) });
   const key = item ? (item.threadId || item.messageId) : null;
   const seq = useRef(0);
-  const load = useCallback(async (quiet = false) => {
+  const load = useCallback(async (quiet = false, refresh = false) => {
     if (!item) { setState({ data: null, error: null, loading: false }); return; }
     const my = ++seq.current;
     if (!quiet) setState((s) => ({ data: s.data && s.key === key ? s.data : null, error: null, loading: true, key }));
     try {
-      const data = await loadThread(item);
+      const data = await loadThread(item, { refresh });
       if (my === seq.current) setState({ data, error: null, loading: false, key });
     } catch (error) {
       if (my === seq.current) setState({ data: null, error, loading: false, key });
@@ -51,6 +54,21 @@ function useWhy(messageId, fallback) {
     return () => { alive = false; for (const n of names) window.removeEventListener(n, get); };
   }, [messageId]);
   return why?.reason || fallback || null;
+}
+
+/** The open question about this message, asked inline (GET /labels/questions/for/:messageId). */
+function useInlineQuestion(messageId) {
+  const [question, setQuestion] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    setQuestion(null);
+    if (!messageId) return undefined;
+    v2Api.get(`/labels/questions/for/${encodeURIComponent(messageId)}`)
+      .then((d) => { if (alive && d?.question?.id && d.question.question) setQuestion(d.question); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [messageId]);
+  return [question, setQuestion];
 }
 
 function Story({ text, onCite, phone }) {
@@ -109,7 +127,7 @@ function DeadlineSlip({ deadline, from, phone, onRemind, onWrong }) {
   );
 }
 
-function MessageBlock({ m, n, you, phone, children }) {
+function MessageBlock({ m, n, you, phone, tldr = null, children }) {
   const to = m.to && m.to !== 'you' ? tv('hedwig.v2.thread.toName', 'to {{name}}', { name: m.to }) : tv('hedwig.v2.thread.toYou', 'to you');
   const article = (
     <article id={`hw-msg-${n}`} style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '18px 0 0', borderTop: `1px solid ${V.line2}` }}>
@@ -119,6 +137,11 @@ function MessageBlock({ m, n, you, phone, children }) {
         <span style={{ flexGrow: 1 }} />
         <Mono>{n}</Mono>
       </div>
+      {tldr && (
+        <p data-tldr="" aria-label={tv('hedwig.v2.thread.tldrLabel', 'In short: {{text}}', { text: tldr })} style={{ margin: 0, fontSize: 14, lineHeight: 1.45, color: V.muted, maxWidth: '62ch', textWrap: 'pretty' }}>
+          {tldr}
+        </p>
+      )}
       <p style={{ margin: 0, fontSize: 16, lineHeight: phone ? 1.55 : 1.6, maxWidth: '62ch', textWrap: 'pretty', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
         {m.text ?? m.snippet ?? ''}
       </p>
@@ -135,7 +158,7 @@ function MessageBlock({ m, n, you, phone, children }) {
   );
 }
 
-function EarlierMessages({ messages, open, onToggle, myEmails, phone }) {
+function EarlierMessages({ messages, open, onToggle, myEmails, phone, tldrs = {} }) {
   const [bodies, setBodies] = useState({});
   useEffect(() => {
     if (!open) return;
@@ -165,7 +188,7 @@ function EarlierMessages({ messages, open, onToggle, myEmails, phone }) {
         const shown = { ...m, text: m.text ?? (b?.loading ? tv('hedwig.v2.loading', 'Loading…') : b?.text ?? m.snippet) };
         return (
           <div key={m.id} style={{ paddingBottom: 14 }}>
-            <MessageBlock m={shown} n={i + 1} you={myEmails.has(String(m.from?.email || '').toLowerCase())} phone={phone} />
+            <MessageBlock m={shown} n={i + 1} you={myEmails.has(String(m.from?.email || '').toLowerCase())} phone={phone} tldr={tldrs[m.id] || null} />
           </div>
         );
       })}
@@ -207,6 +230,7 @@ export default function Thread({ props }) {
   const helpMeWrite = useV2((s) => s.prefs.helpMeWrite);
   const accounts = useStore((s) => s.accounts);
   const work = useWork();
+  const status = useHedwig((s) => s.status);
   const item = props?.item || selected;
   const t = useThread(item);
   const door = useWhyDoor();
@@ -226,6 +250,7 @@ export default function Thread({ props }) {
   const latest = messages[messages.length - 1];
   const earlier = messages.slice(0, -1);
   const reason = useWhy(latest?.id && item ? item.messageId : null, item?.reason);
+  const [question, setQuestion] = useInlineQuestion(latest?.id || null);
   const myEmails = new Set((accounts || []).flatMap((a) => [a.email_address, ...(a.aliases || []).map((x) => x.email)]).filter(Boolean).map((e) => e.toLowerCase()));
 
   const run = async (key, fn) => {
@@ -335,7 +360,7 @@ export default function Thread({ props }) {
   const replyBar = (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {quick.length > 0 && (
-        <div style={{ display: 'flex', gap: 8, flexWrap: phone ? 'nowrap' : 'wrap', overflowX: phone ? 'auto' : undefined }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: phone ? 'nowrap' : 'wrap', overflowX: phone ? 'auto' : undefined, scrollbarWidth: phone ? 'none' : undefined }}>
           {quick.map((q) => <Btn key={q} size={phone ? 'phone' : 'md'} disabled={Boolean(busy)} onClick={() => { setDraft(q); inputRef.current?.focus(); }}>{q}</Btn>)}
         </div>
       )}
@@ -388,18 +413,38 @@ export default function Thread({ props }) {
             <div style={{ display: 'grid', gridTemplateColumns: !phone && data.story && data.deadline ? 'minmax(0, 1fr) 236px' : 'minmax(0, 1fr)', gap: phone ? 16 : 24, alignItems: 'start' }}>
               {data.story && (
                 <section aria-label={tv('hedwig.v2.thread.story', 'The story so far')} style={{ display: 'flex', flexDirection: 'column', gap: phone ? 6 : 8, padding: phone ? '0 0 14px' : '14px 0', borderTop: phone ? 0 : `1px solid ${V.line2}`, borderBottom: `1px solid ${V.line}` }}>
-                  <Why>{tv('hedwig.v2.thread.story', 'The story so far')}</Why>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
+                    <Why>{tv('hedwig.v2.thread.story', 'The story so far')}</Why>
+                    {isLighter(data.storyProvenance, status) && <LighterLabel what="story" size={13} />}
+                  </div>
                   <Story text={data.story.text} onCite={onCite} phone={phone} />
                 </section>
               )}
               {data.deadline && <DeadlineSlip deadline={data.deadline} from={latest?.from || item.from} phone={phone} onRemind={remind} onWrong={wrongDeadline} />}
             </div>
           )}
+          {!data.story && data.tldr && messages.length > 1 && (
+            <section aria-label={tv('hedwig.v2.thread.inShort', 'In short')} style={{ padding: phone ? '0 0 10px' : '10px 0', borderTop: phone ? 0 : `1px solid ${V.line2}`, borderBottom: `1px solid ${V.line}` }}>
+              <p data-thread-tldr="" style={{ margin: 0, fontSize: 15, lineHeight: 1.5, textWrap: 'pretty' }}>{data.tldr}</p>
+            </section>
+          )}
+          {!data.story && data.storyProblem && messages.length > 1 && (
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap', paddingBottom: 4 }}>
+              <Why size={15}>{data.storyProblem === 'budget'
+                ? tv('hedwig.v2.thread.storyBudget', 'Today’s budget for summaries is spent; the story so far is back tomorrow.')
+                : tv('hedwig.v2.thread.storyFailed', 'Hedwig could not write the story so far just now.')}
+              </Why>
+              {data.storyProblem !== 'budget' && (
+                <LinkBtn hit={phone} disabled={t.loading || Boolean(busy)} onClick={() => t.reload(true, true)}>{tv('hedwig.v2.action.retry', 'Try again')}</LinkBtn>
+              )}
+            </div>
+          )}
           <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
-            <EarlierMessages messages={earlier} open={showEarlier} onToggle={() => setShowEarlier((v) => !v)} myEmails={myEmails} phone={phone} />
+            <EarlierMessages messages={earlier} open={showEarlier} onToggle={() => setShowEarlier((v) => !v)} myEmails={myEmails} phone={phone} tldrs={data.messageTldrs || {}} />
             {latest && (
-              <MessageBlock m={latest} n={messages.length} you={myEmails.has(String(latest.from?.email || '').toLowerCase())} phone={phone}>
+              <MessageBlock m={latest} n={messages.length} you={myEmails.has(String(latest.from?.email || '').toLowerCase())} phone={phone} tldr={data.messageTldrs?.[latest.id] || null}>
                 {whyLine}
+                {question && <Question question={question} compact phone={phone} onDone={() => setQuestion(null)} />}
               </MessageBlock>
             )}
           </div>

@@ -80,7 +80,7 @@ function provOf(p) {
   if (!p) return null;
   return {
     aiCallId: p.aiCallId ?? null, promptId: p.promptId, promptVersion: p.promptVersion, model: p.model, tier: p.tier,
-    fellBack: Boolean(p.fellBack), escalated: Boolean(p.escalated), tokensIn: p.tokensIn, tokensOut: p.tokensOut,
+    fellBack: Boolean(p.fellBack), lighterModel: Boolean(p.lighterModel), escalated: Boolean(p.escalated), tokensIn: p.tokensIn, tokensOut: p.tokensOut,
   };
 }
 
@@ -226,8 +226,8 @@ export async function summariseMessages(userId, rows, { cfg = null, owner = null
 async function saveTldr(userId, messageId, text, prov, error) {
   // A failed rewrite keeps the old line (and its provenance); only a new line replaces them.
   await query(
-    `INSERT INTO hedwig_work_tldr (message_id, user_id, text, prompt_id, prompt_version, model, ai_call_id, tier, error, attempts)
-     SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, CASE WHEN $3::text IS NULL THEN 1 ELSE 0 END
+    `INSERT INTO hedwig_work_tldr (message_id, user_id, text, prompt_id, prompt_version, model, ai_call_id, tier, lighter, error, attempts)
+     SELECT $1, $2, $3, $4, $5, $6, $7, $8, $10, $9, CASE WHEN $3::text IS NULL THEN 1 ELSE 0 END
       WHERE EXISTS (SELECT 1 FROM messages WHERE id = $1) -- deleted meanwhile: nothing to keep
      ON CONFLICT (message_id) DO UPDATE SET
        text = COALESCE(EXCLUDED.text, hedwig_work_tldr.text),
@@ -236,10 +236,12 @@ async function saveTldr(userId, messageId, text, prov, error) {
        model = CASE WHEN EXCLUDED.text IS NULL THEN hedwig_work_tldr.model ELSE EXCLUDED.model END,
        ai_call_id = CASE WHEN EXCLUDED.text IS NULL THEN hedwig_work_tldr.ai_call_id ELSE EXCLUDED.ai_call_id END,
        tier = CASE WHEN EXCLUDED.text IS NULL THEN hedwig_work_tldr.tier ELSE EXCLUDED.tier END,
+       lighter = CASE WHEN EXCLUDED.text IS NULL THEN hedwig_work_tldr.lighter ELSE EXCLUDED.lighter END,
        error = EXCLUDED.error,
        attempts = CASE WHEN EXCLUDED.text IS NULL THEN hedwig_work_tldr.attempts + 1 ELSE 0 END, updated_at = NOW()`,
     [messageId, userId, text, text ? prov?.promptId || null : null, text ? prov?.promptVersion || null : null, text ? prov?.model || null : null,
-      text ? prov?.aiCallId ?? null : null, text ? prov?.tier || null : null, error ? String(error).slice(0, 500) : null],
+      text ? prov?.aiCallId ?? null : null, text ? prov?.tier || null : null, error ? String(error).slice(0, 500) : null,
+      text ? Boolean(prov?.lighterModel) : false],
   );
 }
 

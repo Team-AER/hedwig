@@ -10,6 +10,7 @@ import {
   ActionError, Button, Card, Chip, Empty, Loading, Meter, SectionLabel, StatTile, StateView, T, Table, TileGrid,
 } from '../ui.jsx';
 import { tr } from '../i18n.js';
+import { tierLabel } from '../../v2/tiers.js';
 
 export default function ModelSettings() {
   const isAdmin = useIsAdmin();
@@ -63,7 +64,7 @@ function ModelTests() {
       : await hedwigApi.post('/admin/test-llm', { role: kind });
     setResults((r) => ({ ...r, [kind]: out }));
   });
-  const rows = [['fast', 'Fast model'], ['long', 'Long model'], ['agent', 'Agent model'], ['embeddings', 'Embeddings']];
+  const rows = ['fast', 'long', 'agent', 'embeddings'].map((k) => [k, tierLabel(k)]);
   return (
     <Card style={{ gap: 10 }}>
       <SectionLabel>{tr('modelSettings.testTheGateway', 'Test the gateway')}</SectionLabel>
@@ -73,7 +74,7 @@ function ModelTests() {
           return (
             <div key={kind} style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: 10, borderRadius: 8, background: T.ground }}>
               <Button size="sm" busy={r?.pending} onClick={() => test.run(kind)} style={{ alignSelf: 'flex-start' }}>
-                {kind === 'embeddings' ? 'Test embeddings' : `Test ${label.toLowerCase()}`}
+                {tr('modelSettings.testRole', 'Test {{label}}', { label })}
               </Button>
               {r && !r.pending && (
                 <span role="status" style={{ fontSize: 12, color: r.ok ? T.teal : T.red, overflowWrap: 'anywhere' }}>

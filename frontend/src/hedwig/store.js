@@ -4,10 +4,44 @@
 import { create } from 'zustand';
 import { hedwigApi } from './api.js';
 
+export const SHELL_KEY = 'hedwig_shell';
+// Set once the v2 shell choice has been made in this browser. A 'classic' stored before v2 (when
+// the classic shell was one click away in the top bar and hid every v2 view) is moved to 'hedwig'
+// exactly once; after the stamp, whatever the user picks sticks.
+export const SHELL_STAMP = 'hedwig_shell_v2';
+
+function safeStorage() {
+  try { return typeof localStorage === 'undefined' ? null : localStorage; } catch { return null; }
+}
+
+/** The shell to start in, running the one-time v2 move from 'classic' to 'hedwig'. */
+export function initialShellMode(storage) {
+  if (!storage) return 'hedwig';
+  try {
+    const stored = storage.getItem(SHELL_KEY);
+    if (!storage.getItem(SHELL_STAMP)) {
+      storage.setItem(SHELL_STAMP, '1');
+      if (stored === 'classic') storage.setItem(SHELL_KEY, 'hedwig');
+      return 'hedwig';
+    }
+    return stored === 'classic' ? 'classic' : 'hedwig';
+  } catch {
+    return 'hedwig';
+  }
+}
+
+// One GET /status at a time: the session start, the shell's init and the minute poll can all ask
+// at once on a first load; they share the request in flight.
+let statusInflight = null;
+function fetchStatus() {
+  if (!statusInflight) statusInflight = hedwigApi.get('/status').finally(() => { statusInflight = null; });
+  return statusInflight;
+}
+
 export const useHedwig = create((set, get) => ({
   status: null,                 // /api/hedwig/status
   loadStatus: async () => {
-    try { set({ status: await hedwigApi.get('/status') }); } catch { set({ status: { ready: false } }); }
+    try { set({ status: await fetchStatus() }); } catch { set({ status: { ready: false } }); }
   },
   featureOn: (name) => {
     const s = get().status;
@@ -34,10 +68,24 @@ export const useHedwig = create((set, get) => ({
   activeLayout: null,
   setActiveLayout: (layout) => set({ activeLayout: layout }),
 
-  // Classic MailFlow shell vs Hedwig pane shell. Persisted in localStorage.
-  shellMode: (() => { try { return localStorage.getItem('hedwig_shell') || 'hedwig'; } catch { return 'hedwig'; } })(),
+  // Classic MailFlow shell vs Hedwig pane shell. Persisted in localStorage (see initialShellMode).
+  shellMode: initialShellMode(safeStorage()),
   setShellMode: (mode) => {
-    try { localStorage.setItem('hedwig_shell', mode); } catch { /* storage unavailable */ }
-    set({ shellMode: mode });
+    const next = mode === 'classic' ? 'classic' : 'hedwig';
+    try {
+      localStorage.setItem(SHELL_KEY, next);
+      localStorage.setItem(SHELL_STAMP, '1');
+    } catch { /* storage unavailable */ }
+    set({ shellMode: next });
+  },
+
+  // Refresh /status without dropping what is known when the request fails (the tier indicator
+  // polls it; a failed poll must not read as "Hedwig is off").
+  // An unchanged answer is not set again, so the poll does not re-render every pane each minute.
+  refreshStatus: async () => {
+    try {
+      const next = await fetchStatus();
+      if (JSON.stringify(next) !== JSON.stringify(get().status)) set({ status: next });
+    } catch { /* keep the last status */ }
   },
 }));

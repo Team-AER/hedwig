@@ -1,15 +1,18 @@
-// The Hedwig top bar: brand, the command palette trigger, sync status, the layout switcher,
-// settings, and the way back to the classic MailFlow shell.
+// The Hedwig top bar: brand, the command palette trigger, sync status, the Tier 2 note, the
+// layout switcher and settings. The classic MailFlow shell is in the layout menu (not a one-click
+// button beside Settings: it hides every v2 view, and was too easy to land in by accident).
 import { useEffect, useState } from 'react';
 import { useStore } from '../../store/index.js';
 import { useHedwig } from '../store.js';
 import { Icon } from '../icons.jsx';
 import { ui } from '../theme/styles.js';
 import { useShell } from './state.js';
+import { listPanes } from './model.js';
 import { TEMPLATES } from './templates.js';
 import { exportCurrentLayout } from './layoutFile.js';
 import { MenuButton } from './Menu.jsx';
 import { tr } from './tr.js';
+import { TierNote } from '../v2/TierNote.jsx';
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
 
@@ -90,8 +93,9 @@ export function layoutMenuItems() {
 
 export default function TopBar({ onOpenPalette }) {
   const layoutName = useShell((s) => s.name);
+  // The rail carries the Tier 2 note itself; the top bar says it only for layouts without one.
+  const hasRail = useShell((s) => listPanes(s.tree).some((p) => p.visible && p.node.id === 'hedwig.rail'));
   const setShowAdmin = useStore((s) => s.setShowAdmin);
-  const setShellMode = useHedwig((s) => s.setShellMode);
   const [narrow, setNarrow] = useState(() => window.innerWidth < 1100);
 
   useEffect(() => {
@@ -130,15 +134,13 @@ export default function TopBar({ onOpenPalette }) {
         </kbd>
       </button>
       <div style={{ flex: 1 }} />
+      {!narrow && !hasRail && <TierNote size={13} style={{ whiteSpace: 'nowrap' }} />}
       <SyncStatus compact={narrow} />
       <MenuButton label={tr('layout.menu', 'Layout: {{name}}', { name: layoutName })} items={layoutMenuItems} align="right" buttonStyle={ui.iconButton}>
         <Icon name="layout" size={16} />
       </MenuButton>
       <button type="button" className="hw-btn" aria-label={tr('settings', 'Settings')} title={tr('settings', 'Settings')} onClick={() => setShowAdmin(true)} style={ui.iconButton}>
         <Icon name="settings" size={16} />
-      </button>
-      <button type="button" className="hw-btn" aria-label={tr('classic.switch', 'Switch to the classic MailFlow layout')} title={tr('classic.title', 'Classic MailFlow layout')} onClick={() => setShellMode('classic')} style={ui.iconButton}>
-        <Icon name="classic" size={16} />
       </button>
     </header>
   );

@@ -1,6 +1,6 @@
 // Loading a thread for the v2 thread view. Messages and bodies come from upstream's own routes
-// (GET /mail/thread/:threadKey, /mail/messages/:id/body); the story so far, the deadline and the
-// quick replies from GET /work/thread/:threadId when the work routes are there (otherwise the
+// (GET /mail/thread/:threadKey, /mail/messages/:id/body); the story so far (with storyMeta), the
+// thread and per-message TL;DRs, the deadline and the quick replies from GET /work/thread/:threadId when the work routes are there (otherwise the
 // deadline falls back to the context engine's commitments). Under the mock the messages come
 // from the mock's /mock/thread route and the rest from its /work/thread.
 import { api } from '../../utils/api.js';
@@ -85,21 +85,45 @@ export function normaliseStory(story) {
   return { text: story.text, cites };
 }
 
+/** Why the work route has no story ('budget' | 'failed'), or null. Never the raw error text. */
+export function storyProblem(ex) {
+  if (!ex || ex.story || !ex.storyError) return null;
+  return ex.storyError === 'budget' ? 'budget' : 'failed';
+}
+
+/** { [messageId]: text } from the work route (values may also be { text }). */
+export function messageTldrsOf(raw) {
+  const out = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const [id, v] of Object.entries(raw)) {
+    const text = typeof v === 'string' ? v : (v && typeof v.text === 'string' ? v.text : '');
+    if (text.trim()) out[id] = text.trim();
+  }
+  return out;
+}
+
 function extrasOf(ex) {
+  const prov = ex.provenance && typeof ex.provenance === 'object' ? ex.provenance : {};
   return {
     story: normaliseStory(ex.story),
+    // storyMeta ({ source, tier, model, lighter }) is the work route's; provenance.story the older shape.
+    storyProvenance: ex.storyMeta && typeof ex.storyMeta === 'object' ? ex.storyMeta : (prov.story && typeof prov.story === 'object' ? prov.story : null),
+    tldr: typeof ex.tldr === 'string' && ex.tldr.trim() ? ex.tldr.trim() : (ex.tldr && typeof ex.tldr.text === 'string' ? ex.tldr.text.trim() || null : null),
+    messageTldrs: messageTldrsOf(ex.messageTldrs),
+    storyProblem: storyProblem(ex),
     deadline: normaliseDeadline(ex.deadline),
     quickReplies: Array.isArray(ex.quickReplies) ? ex.quickReplies.filter((q) => typeof q === 'string' && q.trim()) : [],
   };
 }
 
-async function workThread(key) {
+async function workThread(key, { refresh = false } = {}) {
   const work = useV2.getState().caps.work === true ? true : await useV2.getState().probeWork();
   if (work !== true) return { __error: Object.assign(new Error('off'), { status: 404 }) };
-  return v2Api.get(`/work/thread/${encodeURIComponent(key)}`).catch((err) => ({ __error: err }));
+  return v2Api.get(`/work/thread/${encodeURIComponent(key)}${refresh ? '?refresh=1' : ''}`).catch((err) => ({ __error: err }));
 }
 
-export async function loadThread(item) {
+/** `refresh` asks the work route to write the story again instead of using its cached one. */
+export async function loadThread(item, { refresh = false } = {}) {
   if (!item) return null;
   if (item.synthetic || (!item.messageId && String(item.threadId || '').startsWith('reminder:'))) {
     const e = new Error(tv('hedwig.v2.thread.reminder', 'A reminder has no conversation to open.'));
@@ -108,7 +132,7 @@ export async function loadThread(item) {
   }
   const key = item.threadId || item.messageId;
   if (isMockMode()) {
-    const [t, extras] = await Promise.all([v2Api.get(`/mock/thread/${encodeURIComponent(key)}`), workThread(key)]);
+    const [t, extras] = await Promise.all([v2Api.get(`/mock/thread/${encodeURIComponent(key)}`), workThread(key, { refresh })]);
     const ex = extras?.__error ? {} : (extras || {});
     return { ...t, messages: (t.messages || []).map(normaliseMessage), ...extrasOf(ex), extrasMissing: Boolean(extras?.__error) };
   }
@@ -129,7 +153,7 @@ export async function loadThread(item) {
 
   const [body, extras, ctx] = await Promise.all([
     loadBody(latest.id).catch(() => null),
-    workThread(key),
+    workThread(key, { refresh }),
     hedwigApi.get(`/context/messages/${encodeURIComponent(latest.id)}`).catch(() => null),
   ]);
   if (body) Object.assign(latest, body);
@@ -143,6 +167,10 @@ export async function loadThread(item) {
     label: null,
     messages,
     story: ex.story,
+    storyProvenance: ex.storyProvenance,
+    storyProblem: ex.storyProblem,
+    tldr: ex.tldr,
+    messageTldrs: ex.messageTldrs,
     deadline: ex.deadline || deadlineFrom(ctx),
     quickReplies: ex.quickReplies,
     extrasMissing,

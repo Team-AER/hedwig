@@ -3,10 +3,12 @@
 // found in the server's spam folder that looks real is tinted and says so.
 import { useMemo, useState } from 'react';
 import { useStore } from '../../store/index.js';
-import { useV2Resource } from './hooks.js';
+import { useV2Resource, useWork } from './hooks.js';
+import { useTldrs, withTldrs } from './tldrs.js';
 import { v2Api, listOf, announceSortChange } from './client.js';
 import { Btn, ErrorLine, Glyph, Hair, Mono, Pick, Quiet, V, ViewBody, ViewHead, Why, usePhone } from './primitives.jsx';
 import { tv, tvn } from './i18n.js';
+import { tldrOf } from './format.js';
 
 export function decisionOptions() {
   return [
@@ -28,6 +30,9 @@ function SenderRow({ sender, choice, onChoose, onAccept, busy, phone }) {
     ? tv('hedwig.v2.screener.acceptRescue', 'Accept: {{stream}}, rescue from spam', { stream: decisionLabel(choice) })
     : tv('hedwig.v2.screener.accept', 'Accept: {{stream}}', { stream: decisionLabel(choice) });
   const meta = [sender.address, sender.count ? String(sender.count) : null, rescue ? tv('hedwig.v2.screener.inSpam', 'in spam') : null].filter(Boolean).join(' · ');
+  // What they wrote: Hedwig's one-line TL;DR of the latest message when there is one, else its subject.
+  const latestSubject = Array.isArray(sender.subjects) ? sender.subjects.find((x) => typeof x === 'string' && x.trim()) : null;
+  const summary = tldrOf(sender) || (latestSubject ? latestSubject.trim() : null);
   return (
     <article
       aria-label={sender.display || sender.address}
@@ -59,9 +64,16 @@ function SenderRow({ sender, choice, onChoose, onAccept, busy, phone }) {
           <Glyph name={block ? 'close' : 'check'} stroke={1.8} />
         </button>
       </div>
-      <Why tone={rescue ? 'accent' : 'muted'}>
-        {rescue ? rescueLine(sender.reason) : sender.reason}
-      </Why>
+      {summary && (
+        <span data-tldr="" style={{ fontSize: 14, lineHeight: 1.4, color: rescue ? V.inkSoft : V.ink, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+          {summary}
+        </span>
+      )}
+      {(rescue || sender.reason) && (
+        <Why tone={rescue ? 'accent' : 'muted'}>
+          {rescue ? rescueLine(sender.reason) : sender.reason}
+        </Why>
+      )}
       <Pick label={tv('hedwig.v2.screener.streamFor', 'Stream for {{name}}', { name: sender.display || sender.address })} options={decisionOptions()} value={choice} onChange={onChoose} size={phone ? 44 : 40} />
     </article>
   );
@@ -86,7 +98,11 @@ export default function Screener() {
   const [choices, setChoices] = useState({});
   const [busy, setBusy] = useState(null);
   const [error, setError] = useState(null);
-  const senders = useMemo(() => listOf(res.data, 'senders'), [res.data]);
+  const work = useWork();
+  const raw = useMemo(() => listOf(res.data, 'senders'), [res.data]);
+  // Each sender's latest message TL;DR, in one call (GET /work/tldr).
+  const tldrs = useTldrs(useMemo(() => raw.filter((x) => !x.tldr).map((x) => x.lastMessageId), [raw]), work);
+  const senders = useMemo(() => withTldrs(raw, tldrs, (x) => x.lastMessageId), [raw, tldrs]);
   const choiceOf = (s) => choices[`${s.scope}:${s.key}`] || s.proposed || 'people';
 
   const drop = (keys) => {

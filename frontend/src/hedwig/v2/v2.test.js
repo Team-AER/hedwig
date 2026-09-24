@@ -623,7 +623,7 @@ describe('Daily Brief', () => {
     assert.match(text(), /Benedict's NewsletterWhy on-device models change the browser/, 'the source leads a reading pick');
     assert.match(text(), /Question 1 of 2 today/);
     assert.match(text(), /Hedwig screened 12, bundled 40, rescued 2 from spam, blocked 9\./);
-    assert.match(text(), /Compiled from your mail, no model call\./);
+    assert.match(text(), /Written from a template: Tier 2 was not answering\./);
     await click(byText('button', 'Yes, always'));
     assert.doesNotMatch(text(), /Keep her mail in People\?/);
     assert.deepEqual(mock.mockAnswers().at(-1), { id: 'q-anna', optionId: 'yes', always: true }, 'always only from its own button');

@@ -8,9 +8,13 @@ import { useStore } from '../../store/index.js';
 import * as M from './model.js';
 import { buildTemplate, getTemplate } from './templates.js';
 import { pickLayout, savedLayoutsFor, isPreV2Layout } from './layouts.js';
+import { tr } from './tr.js';
 
 const SAVE_DELAY_MS = 800;
-const LOAD_TIMEOUT_MS = 4000;
+let LOAD_TIMEOUT_MS = 4000;
+
+/** Tests: how long init waits for /layouts and /status. */
+export function setLoadTimeout(ms) { LOAD_TIMEOUT_MS = ms; }
 
 function cacheKey(device) {
   const uid = useStore.getState().user?.id || 'anon';
@@ -38,6 +42,10 @@ function withTimeout(promise, ms) {
 let saveTimer = null;
 let initSeq = 0;
 let warnedSave = false;
+let migrationNoted = false; // the "new layout" note shows once per page load
+
+/** Tests: forget that the migration note was shown. */
+export function resetMigrationNote() { migrationNoted = false; }
 
 export const useShell = create((set, get) => ({
   device: 'desktop',
@@ -66,15 +74,19 @@ export const useShell = create((set, get) => ({
     const cached = readCache(device);
     set({ device, ...(cached ? { tree: cached.tree, name: cached.name, templateId: cached.templateId, ready: true } : { ready: false }) });
 
+    // /layouts and /status in parallel: with neither answering, the wait is one timeout, not two.
+    const layoutsReq = hedwigApi.get('/layouts');
+    const statusReq = useHedwig.getState().status
+      ? null
+      : withTimeout(useHedwig.getState().loadStatus(), LOAD_TIMEOUT_MS).catch(() => { /* status stays null */ });
     let rows = null;
-    try { rows = await withTimeout(hedwigApi.get('/layouts'), LOAD_TIMEOUT_MS); } catch (err) {
-      console.warn('[hedwig] could not load saved layouts:', err.message);
+    let timedOut = false;
+    try { rows = await withTimeout(layoutsReq, LOAD_TIMEOUT_MS); } catch (err) {
+      timedOut = err?.message === 'timeout';
+      console.warn('[hedwig] could not load saved layouts:', err?.message || err);
     }
-    let status = useHedwig.getState().status;
-    if (!status) {
-      try { await withTimeout(useHedwig.getState().loadStatus(), LOAD_TIMEOUT_MS); } catch { /* status stays null */ }
-      status = useHedwig.getState().status;
-    }
+    if (statusReq) await statusReq;
+    const status = useHedwig.getState().status;
     if (seq !== initSeq) return; // a newer init (device change) superseded this one
 
     const pick = pickLayout(rows || [], device, status?.ui?.defaultTemplate);
@@ -83,9 +95,8 @@ export const useShell = create((set, get) => ({
       if (!cached || !M.sameShape(cached.tree, pick.tree)) get().setTree(pick.tree, { name: pick.name, templateId: pick.templateId, save: false });
     } else if (pick.source === 'migrate') {
       get().setTree(pick.tree, { name: pick.name, templateId: pick.templateId, save: false });
-      await get().keepClassic(pick.classic, rows);
+      await get().migrate(pick, rows, seq);
       if (seq !== initSeq) return;
-      await get().flushSave();
     } else if (!cached) {
       get().setTree(pick.tree, { name: pick.name, templateId: pick.templateId, save: false });
     } else if (Array.isArray(rows)) {
@@ -93,6 +104,43 @@ export const useShell = create((set, get) => ({
       get().scheduleSave();
     }
     set({ ready: true });
+    // A slow /layouts still counts when it lands: the menu gets its rows, and a layout from
+    // before v2 is still moved to Classic (else it would be left behind under its old name).
+    if (timedOut) {
+      const shown = { name: get().name, tree: get().tree };
+      layoutsReq.then((late) => get().lateLayouts(late, seq, shown)).catch(() => { /* nothing to add */ });
+    }
+  },
+
+  // The pre-v2 move: the old tree kept as Classic, Streams (already on screen) saved as active,
+  // and one note per page load saying where the old layout went. Two inits racing (a device
+  // change, StrictMode, a second tab) converge: PUT /layouts upserts by name and device.
+  async migrate(pick, rows, seq) {
+    const kept = await get().keepClassic(pick.classic, rows);
+    if (seq === initSeq) await get().flushSave();
+    if (migrationNoted) return;
+    migrationNoted = true;
+    const old = kept || pick.classic?.fromName || '';
+    useStore.getState().addNotification?.({
+      type: 'info',
+      title: tr('migrated.title', 'Hedwig has a new layout'),
+      body: old
+        ? tr('migrated.body', 'Your previous layout is kept as “{{name}}” in the layout menu.', { name: old })
+        : tr('migrated.bodyPlain', 'Your previous layout is in the layout menu.'),
+    });
+  },
+
+  async lateLayouts(late, seq, shown) {
+    if (seq !== initSeq || !Array.isArray(late)) return;
+    const mine = get().rows; // saved since (flushSave) — newer than the late answer
+    const sameRow = (a, b) => a.id === b.id || (a.device === b.device && a.name === b.name);
+    const activeHere = new Set(mine.filter((r) => r.is_active).map((r) => r.device));
+    set({ rows: [...late.filter((r) => !mine.some((m) => sameRow(m, r))).map((r) => (activeHere.has(r.device) ? { ...r, is_active: false } : r)), ...mine] });
+    const pick = pickLayout(late, get().device, useHedwig.getState().status?.ui?.defaultTemplate);
+    if (pick.source !== 'migrate') return;
+    const s = get();
+    if (s.name === shown.name && M.sameShape(s.tree, shown.tree)) s.setTree(pick.tree, { name: pick.name, templateId: pick.templateId, save: false });
+    await get().migrate(pick, late, seq);
   },
 
   setTree(tree, { name, templateId, save = true } = {}) {
@@ -137,18 +185,21 @@ export const useShell = create((set, get) => ({
 
   // The layout a user had before v2, kept under "Classic" (stamped, so it is never moved again)
   // in place of the row it came from. The streams template is saved as active by the caller.
+  // Returns the name it was kept under, or null when it could not be saved (the old row stays).
   async keepClassic(classic, rows) {
-    if (!classic?.tree) return;
-    const { device } = get();
-    const from = (rows || []).find((r) => r.is_active && r.device === device);
+    if (!classic?.tree) return null;
+    const device = classic.device || get().device;
+    const from = (rows || []).find((r) => (classic.fromId ? r.id === classic.fromId : (r.is_active && r.device === device)));
     try {
       const row = await hedwigApi.put('/layouts', { name: classic.name, device, tree: { ...classic.tree, version: M.LAYOUT_VERSION }, active: false });
       if (from && from.id !== row.id && from.name !== classic.name) {
         await hedwigApi.del(`/layouts/${from.id}`).catch((err) => console.warn('[hedwig] could not remove the old layout row:', err.message));
       }
       set((s) => ({ rows: [...s.rows.filter((r) => r.id !== row.id && r.id !== from?.id), row] }));
+      return row.name || classic.name;
     } catch (err) {
-      console.warn('[hedwig] could not keep the old layout as Classic:', err.message);
+      console.warn('[hedwig] could not keep the old layout as Classic:', err?.message || err);
+      return null;
     }
   },
 

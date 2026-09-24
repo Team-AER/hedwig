@@ -9,6 +9,7 @@ import { cadenceLabel, statusLabel } from './cards.js';
 import { ErrorLine, Figure, Hair, Mono, Quiet, V, ViewBody, ViewHead, Why, usePhone } from './primitives.jsx';
 import { money, shortDate, fullTime } from './format.js';
 import { tv, tvn } from './i18n.js';
+import { CoverageNote } from './CoverageNote.jsx';
 
 export const LEDGER_KINDS = ['purchases', 'subscriptions', 'travel', 'deliveries'];
 // Simple mode keeps the rail short: the two ledgers with money in them.
@@ -136,6 +137,7 @@ export default function Ledger({ props }) {
         : <ErrorLine error={res.error} onRetry={() => res.reload()} retryLabel={tv('hedwig.v2.action.retry', 'Try again')} />)}
       {res.loading && !res.data && <Quiet>{tv('hedwig.v2.loading', 'Loading…')}</Quiet>}
       {res.data && !rows.length && <Quiet><Why>{tv('hedwig.v2.ledger.empty', 'Nothing here yet. Hedwig adds to this as the mail arrives.')}</Why></Quiet>}
+      {res.data && <CoverageNote what="cards" style={{ padding: phone ? '0 0 10px' : '0 12px 12px' }} />}
     </>
   );
 
