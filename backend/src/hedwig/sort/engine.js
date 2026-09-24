@@ -297,7 +297,12 @@ export function decideCheap(row, ctx) {
   } else if (d.stream !== 'spam') d.bundle = null;
   // A newsletter no keyword places still belongs with the other newsletters.
   if (d.stream === 'reading' && d.listFloor && !d.bundle && (ctx.bundles || []).some((b) => b.key === 'updates' && b.enabled !== false)) d.bundle = 'updates';
-  if (d.stream === 'spam') d.needsYou = false;
+  // Needs You is a People concept for recent mail. List and records mail never need you (their
+  // deadlines live in the ledger), and the question heuristic must not surface a months-old
+  // "PayPal asks: Not sure why you received this email?" as something waiting on the owner.
+  const needsMaxDays = cfg['sort.needsYouMaxAgeDays'] ?? 30;
+  const needsTooOld = needsMaxDays > 0 && row.date && now.getTime() - new Date(row.date).getTime() > needsMaxDays * DAY;
+  if ((d.stream && d.stream !== 'people') || d.listFloor || needsTooOld) { d.needsYou = false; d.needsYouReason = null; }
 
   // Screener: undecided senders' recent mail waits for a decision.
   const holdDays = cfg['sort.screenerHoldDays'] ?? 14;
@@ -347,7 +352,7 @@ export function mergeReflex(d, r, { bundles = [] } = {}) {
     d.bundle = null;
   }
   if (d.inSpamFolder && !userDecided) d.stream = 'spam';
-  if (d.stream === 'spam') d.needsYou = false;
+  if (d.stream !== 'people') { d.needsYou = false; d.needsYouReason = null; } // Needs You is a People concept
   d.ruleMatches = r.matches || [];
   d.prompt = r.provenance || null;
   d.signals.push({ name: r.layer, label: `${r.layer === 'reasoning' ? 'Reasoning model' : 'Reflex'}: ${r.reason || r.stream}`, weight: r.confidence });

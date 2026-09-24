@@ -179,6 +179,7 @@ export const SCHEMA = [
   { key: 'sort.classifierDecideAbove', type: 'number', default: 0.85, min: 0.5, max: 1, group: 'sort', label: 'Let the classifier decide without Reflex at confidence above' },
   { key: 'sort.classifierMinSamples', type: 'number', default: 40, min: 5, max: 10000, group: 'sort', label: 'Labelled messages before the sorting classifier heads are used' },
   { key: 'sort.screenerHoldDays', type: 'number', default: 14, min: 0, max: 365, group: 'sort', label: 'Hold mail from undecided senders in the Screener when newer than (days)' },
+  { key: 'sort.needsYouMaxAgeDays', type: 'number', default: 30, min: 0, max: 3650, group: 'sort', label: 'Needs you only for mail newer than (days)' },
   { key: 'sort.reflexMaxAgeDays', type: 'number', default: 14, min: 0, max: 3650, group: 'sort', label: 'Ask Reflex only about mail newer than (days)' },
   { key: 'sort.newTextChars', type: 'number', default: 2500, min: 200, max: 20000, group: 'sort', label: 'Characters of new text per message sent to Reflex' },
   { key: 'sort.quotedChars', type: 'number', default: 600, min: 0, max: 5000, group: 'sort', label: 'Characters of quoted context per message sent to Reflex' },

@@ -490,6 +490,19 @@ describe('screener proposals', () => {
     expect(engine.decideCheap(msg(), ctxFor({ decisions: blocked }))).toMatchObject({ stream: 'spam', reason: 'You blocked this sender' });
   });
 
+  it('needs you only for recent People mail: never list mail, never months-old questions', () => {
+    const decided = new Map([['address|alex@example.org', { key: 'alex@example.org', scope: 'address', decision: 'people', source: 'user', confidence: 1 }]]);
+    const ask = { subject: 'Thursday?', body_text: 'Can you confirm Thursday at 10 for the call?' };
+    const fresh = engine.decideCheap(msg(ask), ctxFor({ decisions: decided }));
+    expect(fresh.stream).toBe('people');
+    expect(fresh.needsYou).toBe(true);
+    const old = engine.decideCheap(msg({ ...ask, date: daysAgo(400) }), ctxFor({ decisions: decided }));
+    expect(old).toMatchObject({ stream: 'people', needsYou: false, needsYouReason: null });
+    const list = engine.decideCheap(msg({ ...ask, from_email: 'service@paypal.example', is_bulk: true, list_unsubscribe: '<mailto:u@paypal.example>', body_text: 'Not sure why you received this email? Learn more.' }), ctxFor());
+    expect(list.stream).not.toBe('people');
+    expect(list.needsYou).toBe(false);
+  });
+
   it('lets a user rule decide before anything else and counts the hit', () => {
     const rule = { id: 'r1', enabled: true, name: 'Acme bills', conditions: { match: 'all', items: [{ field: 'sender', op: 'is', value: 'example.org' }] }, actions: [{ type: 'bundle', value: 'finance' }, { type: 'label', value: 'bills' }] };
     const ctx = ctxFor({ rules: [rule] });
