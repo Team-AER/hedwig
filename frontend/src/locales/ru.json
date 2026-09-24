@@ -105,6 +105,8 @@
     "toPh": "recipient@example.com",
     "ccPh": "cc@example.com",
     "bccPh": "bcc@example.com",
+    "dropToAttach": "Перетащите файлы, чтобы прикрепить",
+    "attachTooLarge": "Вложения не могут превышать 25 МБ в сумме. Не прикреплено: {{names}}",
     "bodyPh": "Напишите сообщение…",
     "send": "Отправить",
     "sendTooltip": "Отправить (Ctrl+Enter)",

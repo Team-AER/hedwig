@@ -253,6 +253,139 @@ body, #root {
   }
 }
 
+/* Compose header (ComposeModal): Apple Mail style. 36px rows (35px content + 1px hairline), a 56px
+   right-aligned label column, and bare controls: no filled boxes, no borders. Recipient chips
+   and the text input share one wrapping line. */
+.compose-field-row {
+  display: flex;
+  align-items: flex-start;
+  min-height: 36px;
+  padding-right: 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.compose-field-label {
+  flex: 0 0 56px;
+  padding-right: 8px;
+  text-align: right;
+  font-size: 12px;
+  line-height: 35px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  user-select: none;
+}
+.compose-field-bare {
+  flex: 1;
+  min-width: 0;
+  height: 35px;
+  margin: 0;
+  padding: 0 4px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  outline: none;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 13px;
+}
+.compose-subject-input { font-size: 14px; font-weight: 500; }
+.compose-field-bare::placeholder,
+.compose-recipient-input::placeholder { color: var(--text-tertiary); opacity: 1; }
+.compose-from-wrap { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; }
+.compose-from-select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 22px;
+  cursor: pointer;
+  text-overflow: ellipsis;
+}
+.compose-from-chevron {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  color: var(--text-tertiary);
+}
+.compose-recipients {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  padding: 6px 0 5px 4px;
+}
+.compose-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 24px;
+  max-width: 220px;
+  padding: 0 3px 0 8px;
+  border-radius: 6px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 24px;
+  cursor: default;
+  user-select: none;
+}
+.compose-chip.is-invalid {
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+}
+.compose-chip-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.compose-chip-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--motion-fast) var(--ease-standard);
+}
+.compose-chip:hover .compose-chip-x,
+.compose-chip:focus-within .compose-chip-x { opacity: 1; }
+.compose-chip-x:hover { color: var(--text-primary); background: var(--bg-hover); }
+@media (hover: none) { .compose-chip-x { opacity: 1; } }
+.compose-recipient-input {
+  flex: 1 1 120px;
+  min-width: 120px;
+  height: 24px;
+  margin: 0;
+  padding: 0 2px;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 13px;
+}
+.compose-ccbcc-quickadd {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  height: 35px;
+  padding-left: 8px;
+}
+.compose-ccbcc-quickadd button {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 12px;
+  color: var(--accent);
+  cursor: pointer;
+}
+.compose-ccbcc-quickadd button:hover { text-decoration: underline; }
+
 /* TipTap rich-text compose editor */
 .tiptap-compose .ProseMirror {
   outline: none;

@@ -1,6 +1,7 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { measureContentHeight, createHeightController, forceEagerImages } from '../utils/emailFrameHeight.js';
+import { decideMailDark, detectsNativeDark, frameSrcDoc } from '../utils/mailDarkMode.js';
 
 // The email body, rendered in its own sandboxed frame.
 //
@@ -14,8 +15,18 @@ import { measureContentHeight, createHeightController, forceEagerImages } from '
 //
 // The experimental div renderer (VITE_EMAIL_DIV_RENDER) is deliberately NOT here: it is off
 // by default and untested, and moving it would double the size of this change.
-function MessageBodyView({ body, messageId, emailScaleRef, hasNativeContextTarget, onContextMenu, iframeRef }) {
+//
+// `darkMode` asks for smart dark mode (utils/mailDarkMode.js): the frame is decided native,
+// already dark or inverted once it has parsed, and again after its first height settles, and
+// `onDarkMode(mode)` hears the answer. Off, the frame is the white page it has always been.
+function MessageBodyView({ body, messageId, emailScaleRef, hasNativeContextTarget, onContextMenu, iframeRef, darkMode = false, onDarkMode = null }) {
   const { t } = useTranslation();
+  const html = body?.html;
+  const native = useMemo(() => Boolean(darkMode) && detectsNativeDark(html), [darkMode, html]);
+  const srcDoc = useMemo(() => frameSrcDoc(html, { dark: Boolean(darkMode), native }), [html, darkMode, native]);
+  // The callback is read at decision time, so a new function each render does not re-run the effect.
+  const onDarkModeRef = useRef(onDarkMode);
+  useEffect(() => { onDarkModeRef.current = onDarkMode; }, [onDarkMode]);
   // Holds the ResizeObserver watching the frame's document, so the effect can disconnect the
   // previous one before observing a new document.
   const roRef = useRef(null);
@@ -32,6 +43,15 @@ function MessageBodyView({ body, messageId, emailScaleRef, hasNativeContextTarge
     let iframeContextMenuHandler = null;
     let clickDoc = null;
     let iframeClickHandler = null;
+
+    // Smart dark mode: decide on OUR document only, and never in light mode.
+    const runDark = () => {
+      if (!darkMode) return;
+      const doc = iframe.contentDocument;
+      if (!doc || doc !== initialisedDoc) return;
+      const mode = decideMailDark(doc, { native });
+      if (mode) onDarkModeRef.current?.(mode);
+    };
 
     const setHeight = () => {
       const doc = iframe.contentDocument;
@@ -64,6 +84,9 @@ function MessageBodyView({ body, messageId, emailScaleRef, hasNativeContextTarge
       // email, measuring it and binding a ResizeObserver to it. #mf-scale-wrapper is only
       // present in a document we rendered, which makes it a reliable marker.
       if (!doc || !doc.getElementById('mf-scale-wrapper')) return;
+      // The same for a dark-mode flip, which swaps in a document of the other kind: only the
+      // dark document carries data-hw-dark on its root.
+      if (Boolean(darkMode) !== Boolean(doc.documentElement?.hasAttribute('data-hw-dark'))) return;
       // Guard the fast path against re-running on a document already wired up. This is
       // per effect run, so a genuine re-run (changed deps) still re-attaches everything
       // the cleanup tore down.
@@ -181,13 +204,18 @@ function MessageBodyView({ body, messageId, emailScaleRef, hasNativeContextTarge
       };
       expandScrollContainers();
 
+      // Decide dark mode now that the layout (and any scale-to-fit) is in place. Backgrounds
+      // are all a decision reads, and lazy images never change them, so this and one more run
+      // after the first height settle below are enough.
+      runDark();
+
       // Recalculate from scratch with the new scale. The controller deliberately does
       // not seed itself from the frame's current height, so this measurement is
       // authoritative even when it is SHORTER than what is currently applied. That is
       // what clears leftover whitespace when the previous email was taller.
       heights.reset();
       setHeight();
-      rafId = requestAnimationFrame(setHeight);
+      rafId = requestAnimationFrame(() => { setHeight(); runDark(); });
 
       // Intercept all link clicks so they always open in a real browser tab.
       // Without this, relative hrefs (e.g. href="/") resolve to the mailflow
@@ -297,50 +325,15 @@ function MessageBodyView({ body, messageId, emailScaleRef, hasNativeContextTarge
       iframe.removeEventListener('load', onLoaded);
       emailScaleRef.current = 1;
     };
-  }, [body?.html, messageId, hasNativeContextTarget, onContextMenu, emailScaleRef, iframeRef]);
+  }, [body?.html, messageId, hasNativeContextTarget, onContextMenu, emailScaleRef, iframeRef, darkMode, native]);
 
   return (
     <iframe
       ref={iframeRef}
-      srcDoc={`<!DOCTYPE html><html><head><meta charset="utf-8">
-      <meta name="viewport" content="width=device-width,initial-scale=1">
-      <meta name="color-scheme" content="only light">
-      <meta name="referrer" content="no-referrer">
-      <meta http-equiv="Content-Security-Policy" content="script-src 'none'; object-src 'none'; frame-src 'none'; form-action 'none'; style-src 'unsafe-inline';">
-      <base target="_blank">
-    </head><body><div id="mf-scale-wrapper">${
-      body.html.replace(/<a(\s)/gi, '<a rel="noopener noreferrer"$1')
-    }</div><style>
-        /* Injected AFTER email HTML so our rules win the source-order tiebreak
-           for same-specificity !important declarations inside the email's own
-           <style> blocks (which land in <body> after the email HTML). */
-        html, body { height: auto !important; min-height: 0 !important; overflow: hidden !important; }
-        body { margin: 0 !important; padding: 0 !important;
-               background-color: #ffffff !important; color-scheme: light;
-               font-family: -apple-system, Arial, sans-serif;
-               font-size: 14px; line-height: 1.6; color: #1a1a1a;
-               word-wrap: break-word; overflow-wrap: break-word; }
-        img { max-width: 100% !important; height: auto !important; }
-        /* Force top-level wrapper tables to fill the viewport. Selectors cover
-           both the legacy body > table pattern and the mf-scale-wrapper layer. */
-        body > table, body > center > table,
-        body > div > table, body > center > div > table,
-        #mf-scale-wrapper > table, #mf-scale-wrapper > center > table,
-        #mf-scale-wrapper > div > table, #mf-scale-wrapper > center > div > table {
-          width: 100% !important;
-        }
-        /* Reset min-width on cells only — not on table elements, because fluid
-           grid systems (e.g. Oracle Eloqua "tolkien") set min-width on inline-table
-           column elements as a layout fallback when their calc() width resolves to 0. */
-        td, th { min-width: 0 !important; }
-        td { word-break: break-word; }
-        th { overflow-wrap: normal; word-break: normal; }
-        a { color: #6366f1; }
-        pre, code { overflow-x: auto; white-space: pre-wrap; word-break: break-all; }
-        blockquote { border-left: 3px solid #ddd; margin: 0; padding-left: 12px; color: #555; }
-      </style></body></html>`}
+      srcDoc={srcDoc}
       scrolling="no"
-      style={{ width: '1px', minWidth: '100%', border: 'none', display: 'block', height: '300px' }}
+      style={{ width: '1px', minWidth: '100%', border: 'none', display: 'block', height: '300px', ...(darkMode ? { colorScheme: 'dark' } : null) }}
+      data-hw-dark-frame={darkMode ? (native ? 'native' : 'smart') : undefined}
       referrerPolicy="no-referrer"
       sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
       title={t('message.emailFrameTitle')}

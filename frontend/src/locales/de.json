@@ -105,6 +105,8 @@
     "toPh": "empfaenger@example.com",
     "ccPh": "cc@example.com",
     "bccPh": "bcc@example.com",
+    "dropToAttach": "Dateien zum Anhängen hier ablegen",
+    "attachTooLarge": "Anhänge dürfen insgesamt höchstens 25 MB groß sein. Nicht angehängt: {{names}}",
     "bodyPh": "Nachricht schreiben…",
     "send": "Senden",
     "sendTooltip": "Senden (Ctrl+Eingabe)",

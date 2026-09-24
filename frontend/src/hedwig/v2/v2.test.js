@@ -851,6 +851,72 @@ describe('Thread on upstream mail: HTML bodies, quoted history, remote images, a
       assert.match(third.querySelector('[data-quoted]').textContent, /Does Thursday work\?/);
     } finally { await restore(); }
   });
+
+  test('smart dark mode: in the dark theme the HTML message carries a sun (Show original colours) that brings back its white card, remembered per sender, and a moon (Darken this message) that undoes it; nothing in the light theme or with the setting Off', async () => {
+    const prevTheme = useStore.getState().theme;
+    const item = { threadId: 't-html', messageId: 'h6', subject: 'Re: Venue for Friday', from: { name: 'Maria Lopez', email: 'maria@studio.example' } };
+    const glyph = () => document.querySelector('article#hw-msg-6 button[data-mail-dark]');
+    const frameDoc = () => document.querySelector('article#hw-msg-6 iframe[srcdoc]').getAttribute('srcdoc');
+    const card = () => document.querySelector('article#hw-msg-6 [data-html-body]');
+    try {
+      localStorage.removeItem('hedwig_mail_dark');
+      useStore.setState({ theme: 'hedwig-night' });
+      await render(h(Thread, { props: { item } }));
+      await settle(80);
+
+      // Darkened: the sun, the dark frame document and the content-coloured card.
+      let g = glyph();
+      assert.ok(g, 'the glyph is in the message header');
+      assert.ok(g.closest('header'), 'in the header, beside the date');
+      assert.equal(g.getAttribute('data-mail-dark'), 'dark');
+      assert.equal(g.getAttribute('aria-label'), 'Show original colours');
+      assert.equal(g.getAttribute('title'), 'Show original colours');
+      assert.match(frameDoc(), /<html data-hw-dark="pending">/);
+      assert.equal(card().hasAttribute('data-dark'), true);
+      assert.match(card().getAttribute('style'), /var\(--hw-content/);
+      assert.match(card().getAttribute('style'), /border-radius: 10px/);
+
+      // Original colours: the moon, the light document, the white card, and the sender remembered.
+      await click(g);
+      g = glyph();
+      assert.equal(g.getAttribute('data-mail-dark'), 'original');
+      assert.equal(g.getAttribute('aria-label'), 'Darken this message');
+      assert.doesNotMatch(frameDoc(), /data-hw-dark/);
+      assert.match(frameDoc(), /background-color: #ffffff !important/);
+      assert.equal(card().hasAttribute('data-dark'), false);
+      assert.deepEqual(JSON.parse(localStorage.getItem('hedwig_mail_dark')), { 'maria@studio.example': 'light' });
+
+      // The choice holds for the sender the next time a message from them opens.
+      await cleanup();
+      await render(h(Thread, { props: { item } }));
+      await settle(80);
+      assert.equal(glyph().getAttribute('data-mail-dark'), 'original');
+      assert.doesNotMatch(frameDoc(), /data-hw-dark/);
+
+      // The moon darkens it again and forgets the choice.
+      await click(glyph());
+      assert.equal(glyph().getAttribute('data-mail-dark'), 'dark');
+      assert.match(frameDoc(), /data-hw-dark="pending"/);
+      assert.equal(localStorage.getItem('hedwig_mail_dark'), null);
+
+      // Settings → The look → Dark mode for mail: Off.
+      await React.act(async () => { useV2.setState({ prefs: { ...UI_DEFAULTS, mailDark: 'off' } }); });
+      await settle();
+      assert.equal(glyph(), null);
+      assert.doesNotMatch(frameDoc(), /data-hw-dark/);
+
+      // The light theme never darkens and shows no glyph.
+      await React.act(async () => { useV2.setState({ prefs: { ...UI_DEFAULTS } }); useStore.setState({ theme: 'hedwig' }); });
+      await settle();
+      assert.equal(glyph(), null);
+      assert.doesNotMatch(frameDoc(), /data-hw-dark/);
+      assert.equal(card().getAttribute('style').includes('background: rgb(255, 255, 255)') || card().getAttribute('style').includes('#FFFFFF'), true);
+    } finally {
+      localStorage.removeItem('hedwig_mail_dark');
+      useStore.setState({ theme: prevTheme });
+      await restore();
+    }
+  });
 });
 
 describe('quoted history', () => {
@@ -1063,6 +1129,22 @@ describe('Settings → Hedwig (Simple and Power)', () => {
     await click(all('button').find((b) => b.textContent === 'Dry run'));
     await settle();
     assert.match(text(), /Would match 128 messages/);
+  });
+
+  test('The look: Dark mode for mail, Smart (the default) or Off, saved as ui.mailDark', async () => {
+    await cleanup();
+    await render(h(HedwigSettingsV2));
+    const group = document.querySelector('[data-mail-dark-setting]');
+    assert.ok(group, 'the row is in The look');
+    assert.equal(group.getAttribute('aria-label'), 'Dark mode for mail');
+    const radios = all('button[role="radio"]', group);
+    assert.deepEqual(radios.map((b) => b.textContent), ['Smart', 'Off']);
+    assert.deepEqual(radios.map((b) => b.getAttribute('aria-checked')), ['true', 'false']);
+    await click(radios[1]);
+    assert.equal(useV2.getState().prefs.mailDark, 'off');
+    assert.deepEqual(all('button[role="radio"]', document.querySelector('[data-mail-dark-setting]')).map((b) => b.getAttribute('aria-checked')), ['false', 'true']);
+    assert.deepEqual(prefsFromFields([{ key: 'ui.mailDark', value: 'off' }]), { mailDark: 'off' });
+    assert.deepEqual(prefsFromFields([{ key: 'ui.mailDark', value: 'weird' }]), { mailDark: 'smart' });
   });
 });
 

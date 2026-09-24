@@ -3,10 +3,11 @@
 // Change, the summary or story so far with superscript citations, the deadline and the cards in
 // the same box, then the messages: the newest and every unread one open, older read ones as 44px
 // rows, more than four of those folded into one. HTML bodies render in upstream's sandboxed frame
-// (MessageBodyView) on a white card, quoted history behind a "•••" toggle, remote images behind a
-// consent banner, attachments under each body. The reply bar sits at the bottom (sticky): a 40px
+// (MessageBodyView) on a white card (in the dark theme, smart dark mode: a darkened mail on the
+// content colour, with a sun / moon per message to show its original colours), quoted history
+// behind a "•••" toggle, remote images behind a consent banner, attachments under each body. The reply bar sits at the bottom (sticky): a 40px
 // field that grows on focus with Draft in my voice, Remind me if no reply and Send (⌘↩).
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useStore } from '../../store/index.js';
 import { buildKeyMap } from '../../utils/defaultShortcuts.js';
 import { shortcutBus } from '../../utils/shortcutBus.js';
@@ -18,6 +19,7 @@ import { openMessage } from '../views/hooks.js';
 import MessageBodyView from '../../components/MessageBodyView.jsx';
 import MessageHeaderModal from '../../components/MessageHeaderModal.jsx';
 import AttachmentChips from '../../components/AttachmentChips.jsx';
+import { mailDarkWanted, normaliseMailDark, senderMailDark, setSenderMailDark, subscribeSenderMailDark } from '../../utils/mailDarkMode.js';
 import { useV2 } from './state.js';
 import { v2Api, isMockMode, SORT_EVENTS } from './client.js';
 import { isMissing, useRegenerate, useWork } from './hooks.js';
@@ -378,19 +380,22 @@ function RemoteImagesBanner({ senderEmail, onLoad, phone }) {
   );
 }
 
-function HtmlBody({ m, html, body, isReply }) {
+function HtmlBody({ m, html, body, isReply, darkMode = false, onDarkMode = null }) {
   const iframeRef = useRef(null);
   const emailScaleRef = useRef(1);
   const split = useMemo(() => splitQuotedHtml(html, { isReply }), [html, isReply]);
   const [showQuoted, setShowQuoted] = useState(false);
   const shown = useMemo(() => ({ ...body, html: showQuoted || !split.quoted ? html : split.main }), [body, html, showQuoted, split]);
+  // Darkened, the card is the content colour the frame's page matches (still the hairline and
+  // radius 10); in its original colours it is the white card.
   return (
     <>
       <div
         data-html-body=""
-        style={{ background: '#FFFFFF', borderRadius: 10, padding: '14px 16px 12px', overflow: 'hidden', contain: 'layout', border: `1px solid ${V.line}`, colorScheme: 'light' }}
+        data-dark={darkMode ? '' : undefined}
+        style={{ background: darkMode ? V.content : '#FFFFFF', borderRadius: 10, padding: '14px 16px 12px', overflow: 'hidden', contain: 'layout', border: `1px solid ${V.line}`, colorScheme: darkMode ? 'dark' : 'light' }}
       >
-        <MessageBodyView iframeRef={iframeRef} body={shown} messageId={m.id} emailScaleRef={emailScaleRef} hasNativeContextTarget={NATIVE} onContextMenu={NOOP} />
+        <MessageBodyView iframeRef={iframeRef} body={shown} messageId={m.id} emailScaleRef={emailScaleRef} hasNativeContextTarget={NATIVE} onContextMenu={NOOP} darkMode={darkMode} onDarkMode={onDarkMode} />
       </div>
       {split.quoted && <QuoteToggle open={showQuoted} onToggle={() => setShowQuoted((v) => !v)} />}
     </>
@@ -414,7 +419,7 @@ function TextBody({ text }) {
  * The body of one message: the rendered HTML (or plain text), the remote-images banner, the
  * attachments. Loading and error states in place.
  */
-export function MessageBody({ m, state, phone = false }) {
+export function MessageBody({ m, state, phone = false, darkMode = false, onDarkMode = null }) {
   const { body, error, loading, remote, loadImages, retry } = state;
   const isReply = isReplyMessage(m.subject || m.raw?.subject, m.inReplyTo);
   if (!body) {
@@ -435,12 +440,62 @@ export function MessageBody({ m, state, phone = false }) {
       {html && body.hasBlockedRemoteImages && !remote && (
         <RemoteImagesBanner senderEmail={body.senderEmail || m.from?.email} onLoad={loadImages} phone={phone} />
       )}
-      {html ? <HtmlBody m={m} html={html} body={body} isReply={isReply} /> : <TextBody text={text} />}
+      {html ? <HtmlBody m={m} html={html} body={body} isReply={isReply} darkMode={darkMode} onDarkMode={onDarkMode} /> : <TextBody text={text} />}
       {error && <ErrorLine error={error} onRetry={retry} retryLabel={tv('hedwig.v2.action.retry', 'Try again')} />}
       {Array.isArray(body.attachments) && body.attachments.length > 0 && (
         <AttachmentChips look="hedwig" messageId={m.id} attachments={body.attachments} />
       )}
     </div>
+  );
+}
+
+// ── Smart dark mode per message ──────────────────────────────────────────────
+/** The remembered choice for a sender ('light' = original colours), following every change. */
+function useSenderMailDark(email) {
+  return useSyncExternalStore(subscribeSenderMailDark, () => senderMailDark(email), () => null);
+}
+
+/**
+ * Dark mode for one message: whether its HTML body is darkened, what the frame decided, and
+ * the toggle. Only in the dark theme with Settings → The look → Dark mode for mail on Smart.
+ * The choice is remembered per sender address (a sender without one: this view only).
+ */
+export function useMessageDark(m, body) {
+  const dark = useStore((s) => s.theme) === 'hedwig-night';
+  const setting = normaliseMailDark(useV2((s) => s.prefs?.mailDark));
+  const email = body?.senderEmail || m.from?.email || '';
+  const remembered = useSenderMailDark(email);
+  const [local, setLocal] = useState(null);
+  const pref = email ? remembered : local;
+  const darkMode = mailDarkWanted({ dark, setting, senderPref: pref });
+  const [frameMode, setFrameMode] = useState(null);
+  const onDarkMode = useCallback((mode) => setFrameMode(mode), []);
+  const hasHtml = typeof body?.html === 'string' && Boolean(body.html.trim());
+  // A mail that is dark by itself was left alone: nothing to switch.
+  const control = dark && setting === 'smart' && hasHtml && (pref === 'light' || frameMode !== 'already');
+  const toggle = useCallback(() => {
+    const next = pref === 'light' ? null : 'light';
+    if (email) setSenderMailDark(email, next);
+    else setLocal(next);
+  }, [email, pref]);
+  return { darkMode, onDarkMode, control, darkened: darkMode, toggle, frameMode: darkMode ? frameMode : null };
+}
+
+/** The per-message glyph: a sun on a darkened message (show its original colours), a moon otherwise. */
+export function MailDarkToggle({ darkened, onToggle }) {
+  const label = darkened ? tv('hedwig.v2.thread.mailOriginal', 'Show original colours') : tv('hedwig.v2.thread.mailDarken', 'Darken this message');
+  return (
+    <button
+      type="button"
+      data-mail-dark={darkened ? 'dark' : 'original'}
+      aria-label={label}
+      title={label}
+      onClick={onToggle}
+      className="hw-icon-btn"
+      style={{ width: 24, height: 24, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0, border: 0, borderRadius: 6, background: 'transparent', color: V.muted, cursor: 'pointer', flexShrink: 0 }}
+    >
+      <Icon name={darkened ? 'sun' : 'moon'} size={14} />
+    </button>
   );
 }
 
@@ -502,6 +557,7 @@ function TldrLine({ messageId, text, lighter = false, onRegenerate = null }) {
 
 function MessageItem({ m, n, you, open, onToggle, phone, tldr = null, tldrLighter = false, onRegenerateTldr = null, cards = false, onReply, onForward, onSource, children }) {
   const state = useBody(m, open);
+  const mailDark = useMessageDark(m, state.body);
   const [hover, setHover] = useState(false);
   const [recipientsOpen, setRecipientsOpen] = useState(false);
   const name = you ? tv('hedwig.v2.thread.you', 'You') : senderName(m.from);
@@ -569,6 +625,7 @@ function MessageItem({ m, n, you, open, onToggle, phone, tldr = null, tldrLighte
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <span title={when} style={{ fontSize: 12, lineHeight: '19px', color: V.muted, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{phone ? listTime(m.date) : when}</span>
+            {mailDark.control && <MailDarkToggle darkened={mailDark.darkened} onToggle={mailDark.toggle} />}
             {!phone && m.id && <MessageMenu visible={hover} onReply={onReply} onForward={onForward} onSource={onSource} />}
           </div>
           {clip && (
@@ -580,7 +637,7 @@ function MessageItem({ m, n, you, open, onToggle, phone, tldr = null, tldrLighte
       </header>
       {cards && m.id && <MessageCards messageId={m.id} phone={phone} />}
       {tldr && <TldrLine messageId={m.id} text={tldr} lighter={tldrLighter} onRegenerate={m.id ? onRegenerateTldr : null} />}
-      <MessageBody m={m} state={state} phone={phone} />
+      <MessageBody m={m} state={state} phone={phone} darkMode={mailDark.darkMode} onDarkMode={mailDark.onDarkMode} />
       {children}
     </article>
   );

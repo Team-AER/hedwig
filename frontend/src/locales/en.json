@@ -105,6 +105,8 @@
     "toPh": "recipient@example.com",
     "ccPh": "cc@example.com",
     "bccPh": "bcc@example.com",
+    "dropToAttach": "Drop files to attach",
+    "attachTooLarge": "Attachments can total at most 25 MB. Not attached: {{names}}",
     "bodyPh": "Write your message…",
     "send": "Send",
     "sendTooltip": "Send (Ctrl+Enter)",

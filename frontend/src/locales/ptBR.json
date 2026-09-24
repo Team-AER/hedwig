@@ -105,6 +105,8 @@
     "toPh": "destinatario@exemplo.com",
     "ccPh": "cc@exemplo.com",
     "bccPh": "cco@exemplo.com",
+    "dropToAttach": "Solte os arquivos para anexar",
+    "attachTooLarge": "Os anexos podem somar no máximo 25 MB. Não anexado: {{names}}",
     "bodyPh": "Escreva sua mensagem…",
     "send": "Enviar",
     "sendTooltip": "Enviar (Ctrl+Enter)",

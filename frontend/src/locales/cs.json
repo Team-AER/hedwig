@@ -379,6 +379,8 @@
     "toPh": "prijemce@example.com",
     "ccPh": "kopie@example.com",
     "bccPh": "skryta-kopie@example.com",
+    "dropToAttach": "Přetažením sem soubory připojíte",
+    "attachTooLarge": "Přílohy mohou mít celkem nejvýše 25 MB. Nepřipojeno: {{names}}",
     "bodyPh": "Napište zprávu…",
     "send": "Odeslat",
     "sendTooltip": "Odeslat (Ctrl+Enter)",

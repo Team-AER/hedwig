@@ -105,6 +105,8 @@
     "toPh": "destinatario@esempio.com",
     "ccPh": "cc@esempio.com",
     "bccPh": "bcc@esempio.com",
+    "dropToAttach": "Rilascia i file per allegarli",
+    "attachTooLarge": "Gli allegati possono pesare al massimo 25 MB in totale. Non allegato: {{names}}",
     "bodyPh": "Scrivi il tuo messaggio…",
     "send": "Invia",
     "sendTooltip": "Invia (Ctrl+Invio)",

@@ -239,6 +239,7 @@ export const SCHEMA = [
   { key: 'ui.accent', type: 'string', default: '#007AFF', group: 'ui', label: 'Accent colour (hex)', scope: 'user' },
   { key: 'ui.notifications', type: 'boolean', default: true, group: 'ui', label: 'Tell me when something new needs me', scope: 'user' },
   { key: 'ui.helpMeWrite', type: 'boolean', default: true, group: 'ui', label: 'Help me write (quick replies, draft in my voice)', scope: 'user' },
+  { key: 'ui.mailDark', type: 'enum', default: 'smart', options: ['smart', 'off'], group: 'ui', label: 'Dark mode for mail (smart = darken light mail in the dark theme, keeping images)', scope: 'user' },
   // --- end v2 frontend ---
   // --- v2 work ---
   { key: 'work.enabled', type: 'boolean', default: true, group: 'work', label: 'Working the inbox: lists, Done, thread stories, drafts, send guard', scope: 'user' },

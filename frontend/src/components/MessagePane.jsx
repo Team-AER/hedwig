@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo } from 'react';
+import { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useStore } from '../store/index.js';
 import { api } from '../utils/api.js';
@@ -16,6 +16,8 @@ import { aiRuns } from '../utils/aiRunRegistry.js';
 import { renderMarkdown } from '../utils/renderMarkdown.js';
 import { openReplyFromMessage, openForwardFromMessage } from '../utils/composeFromMessage.js';
 import MessageBodyView from './MessageBodyView.jsx';
+import { mailDarkWanted, normaliseMailDark, senderMailDark, subscribeSenderMailDark } from '../utils/mailDarkMode.js';
+import { useV2 } from '../hedwig/v2/state.js';
 import { copyToClipboard } from '../utils/clipboard.js';
 import { folderMatchesQuery } from '../utils/folderDisplay.js';
 import FolderPathLabel from './FolderPathLabel.jsx';
@@ -64,7 +66,7 @@ export default function MessagePane({ windowMessageId = null, onWindowClose = nu
     imageWhitelist, addToImageWhitelist, blockRemoteImages, threadMessages,
     replyDefault, shortcuts, recentFolders, favoriteFolders, todoistConnected,
     categorizationEnabled, setCategoryCounts, adjustCategoryCount,
-    aiActions, setShowAdmin, setAdminTab,
+    aiActions, setShowAdmin, setAdminTab, theme,
   } = useStore();
 
   // Detached-window mode (#219): when a message id is passed in, this pane renders that
@@ -285,6 +287,13 @@ export default function MessagePane({ windowMessageId = null, onWindowClose = nu
   // Ref holding the latest pane action handlers so shortcut subscriptions ([] deps) never go stale
   const paneActionsRef = useRef({});
   const emailScaleRef = useRef(1); // scale applied to wide emails that resist CSS reflow
+
+  // Smart dark mode for the body (utils/mailDarkMode.js): the Hedwig dark theme only, with the
+  // same setting (Settings → The look) and per-sender choice as the Hedwig reader. Every other
+  // theme keeps the white card exactly as before.
+  const mailDarkSetting = useV2((s) => s.prefs?.mailDark);
+  const senderDarkPref = useSyncExternalStore(subscribeSenderMailDark, () => senderMailDark(message?.from_email), () => null);
+  const mailDarkMode = mailDarkWanted({ dark: theme === 'hedwig-night', setting: normaliseMailDark(mailDarkSetting), senderPref: senderDarkPref });
 
   const getPaneSelectionText = useCallback(() => {
     const iframeDoc = iframeRef.current?.contentDocument;
@@ -2350,7 +2359,7 @@ ${bodyContent}
           <div className="msg-card" style={{
             position: 'relative',
             padding: '14px 16px 12px',
-            background: 'white',
+            background: mailDarkMode && !USE_DIV_RENDER ? 'var(--hw-content, var(--bg-secondary))' : 'white',
             borderRadius: isMobile ? 0 : 10,
             border: isMobile ? 'none' : '1px solid var(--border-subtle)',
             overflow: 'hidden',
@@ -2391,6 +2400,7 @@ ${bodyContent}
                 emailScaleRef={emailScaleRef}
                 hasNativeContextTarget={hasNativeContextTarget}
                 onContextMenu={openPaneContextMenu}
+                darkMode={mailDarkMode}
               />
             )}
           </div>

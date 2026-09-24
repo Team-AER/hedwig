@@ -20,12 +20,15 @@ const ACCOUNTS = [
 
 // HTML bodies for the reader: a newsletter (600px table layout, remote images, a pull quote), an
 // order confirmation (logo, order table, tracking number) and a reply whose history sits in a
-// gmail_quote block. Remote images are https so the body route serves them from the cache.
+// gmail_quote block. Remote images are https so the body route serves them from the cache. The
+// newsletter also carries one inline (data:) illustration, which shows even with remote images
+// blocked, so dark mode's counter-inverted images can be checked.
 const NEWSLETTER_HTML = `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f1ea">
 <tr><td align="center" style="padding:24px 12px">
 <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="width:600px;background:#ffffff;font-family:Georgia,serif;color:#222">
 <tr><td style="padding:20px 32px;border-bottom:3px solid #c0392b"><img src="https://placehold.co/160x40/png?text=The+Ken" width="160" height="40" alt="The Ken"></td></tr>
 <tr><td><img src="https://placehold.co/600x260/png?text=Dark+stores" width="600" height="260" alt="A dark store at night" style="display:block;width:100%;height:auto"></td></tr>
+<tr><td style="padding:16px 32px 0"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='200' viewBox='0 0 600 200'%3E%3Cdefs%3E%3ClinearGradient id='s' x1='0' y1='0' x2='0' y2='1'%3E%3Cstop offset='0' stop-color='%232B4C9B'/%3E%3Cstop offset='.55' stop-color='%23F27A54'/%3E%3Cstop offset='1' stop-color='%23FFC56E'/%3E%3C/linearGradient%3E%3CradialGradient id='g' cx='.5' cy='.5' r='.5'%3E%3Cstop offset='0' stop-color='%23FFF4C2'/%3E%3Cstop offset='1' stop-color='%23FFB347'/%3E%3C/radialGradient%3E%3C/defs%3E%3Crect width='600' height='200' fill='url%28%23s%29'/%3E%3Ccircle cx='430' cy='128' r='42' fill='url%28%23g%29'/%3E%3Cpath d='M0 150 Q120 110 240 142 T480 136 T600 128 V200 H0Z' fill='%231F6B3A'/%3E%3Cpath d='M0 172 Q150 146 300 168 T600 160 V200 H0Z' fill='%230F3D22'/%3E%3Cg fill='%2316213E'%3E%3Crect x='60' y='96' width='34' height='70'/%3E%3Crect x='100' y='74' width='26' height='92'/%3E%3Crect x='132' y='112' width='40' height='54'/%3E%3C/g%3E%3C/svg%3E" width="536" height="179" alt="Illustration: dusk over the city's dark stores" style="display:block;width:100%;height:auto;border-radius:4px"></td></tr>
 <tr><td style="padding:24px 32px 8px"><h1 style="margin:0 0 12px;font-size:26px;line-height:1.25">Quick commerce is a real-estate war</h1>
 <p style="margin:0 0 14px;font-size:16px;line-height:1.6">The ten-minute delivery promise is not won with apps. It is won with leases: whoever holds the small, ugly warehouses inside dense neighbourhoods sets the price for everyone else.</p>
 <blockquote style="margin:18px 0;padding:0 0 0 16px;border-left:3px solid #c0392b;font-size:19px;line-height:1.45;font-style:italic">"We stopped thinking of ourselves as a grocer. We are a landlord that happens to sell milk."</blockquote>

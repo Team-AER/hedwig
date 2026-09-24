@@ -113,6 +113,9 @@ Object.assign(PATHS, {
   // The reader's Delete (to Trash) and Junk.
   trash: <><path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><path d="M10 11v6M14 11v6" /></>,
   'alert-octagon': <><path d="M7.86 2h8.28L22 7.86v8.28L16.14 22H7.86L2 16.14V7.86z" /><path d="M12 8v4M12 16h.01" /></>,
+  // Smart dark mode for a message: sun = show original colours, moon = darken it.
+  sun: <><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" /></>,
+  moon: <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />,
   'shield-off': <><path d="m2 2 20 20" /><path d="M5 5a1 1 0 0 0-1 1v7c0 5 3.5 7.5 7.67 8.94a1 1 0 0 0 .67.01c2.35-.82 4.48-1.97 5.9-3.71" /><path d="M9.31 3.84A13 13 0 0 0 12 2.24a1.19 1.19 0 0 1 1.52 0C15.5 3.8 17.5 5 20 5a1 1 0 0 1 1 1v7a9.3 9.3 0 0 1-.3 2.32" /></>,
 });
 PATHS['trash-2'] = PATHS.trash;

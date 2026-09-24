@@ -105,6 +105,8 @@
     "toPh": "odbiorca@example.com",
     "ccPh": "cc@example.com",
     "bccPh": "bcc@example.com",
+    "dropToAttach": "Upuść pliki, aby je załączyć",
+    "attachTooLarge": "Załączniki mogą mieć łącznie najwyżej 25 MB. Nie załączono: {{names}}",
     "bodyPh": "Napisz wiadomość…",
     "send": "Wyślij",
     "sendTooltip": "Wyślij (Ctrl+Enter)",

@@ -1,5 +1,5 @@
 // v2 client state shared by the rail, the tab bar and the views: the per-user ui.* settings
-// (Power mode, blur, accent, and the two switches the frontend itself honours), the stream
+// (Power mode, blur, accent, dark mode for mail, and the two switches the frontend itself honours), the stream
 // counts, the "Hedwig today" numbers and the thread the list panes have selected.
 import { create } from 'zustand';
 import { hedwigApi } from '../api.js';
@@ -8,6 +8,7 @@ import { userVarsCss, DEFAULT_ACCENT, DEFAULT_BLUR, clampBlur, normaliseHex } fr
 import { v2Api, listOf, isMockMode, lastLocalSortChange, COUNTS_EVENT, SORT_EVENTS, REFRESH_DEBOUNCE_MS } from './client.js';
 import { loadDrafts, resetDraftFolderCache } from './drafts.js';
 import { tvn } from './i18n.js';
+import { normaliseMailDark } from '../../utils/mailDarkMode.js';
 
 export const UI_DEFAULTS = {
   powerMode: false,
@@ -15,6 +16,8 @@ export const UI_DEFAULTS = {
   accent: DEFAULT_ACCENT,
   notifications: true,
   helpMeWrite: true,
+  // Dark mode for mail bodies under the dark theme: 'smart' (utils/mailDarkMode.js) or 'off'.
+  mailDark: 'smart',
 };
 
 const UI_KEYS = Object.keys(UI_DEFAULTS);
@@ -42,6 +45,7 @@ export function prefsFromFields(fields) {
   }
   if (out.blur !== undefined) out.blur = clampBlur(out.blur);
   if (out.accent !== undefined) out.accent = normaliseHex(out.accent) || DEFAULT_ACCENT;
+  if (out.mailDark !== undefined) out.mailDark = normaliseMailDark(out.mailDark);
   return out;
 }
 

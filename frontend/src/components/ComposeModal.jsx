@@ -178,6 +178,37 @@ function parseChips(val) {
   return parts;
 }
 
+// The backend refuses a send or draft whose attachments total more than 25 MB (index.js answers
+// 413), so the composer stops at the same line instead of letting the send fail at the end.
+const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// Only a drag that carries files shows the drop overlay; dragging selected text or an image
+// inside the editor must not.
+function dragHasFiles(e) {
+  const types = e.dataTransfer?.types;
+  if (!types) return false;
+  return Array.from(types).includes('Files');
+}
+
+// Split a chip string ("Jane Doe <jane@x.com>", "\"Doe, Jane\" <jane@x.com>", "jane@x.com")
+// into its display name and address.
+function splitChip(chip) {
+  const str = String(chip || '').trim();
+  const m = str.match(/^(.*?)\s*<([^>]+)>\s*$/);
+  if (!m) return { name: '', email: str };
+  const name = m[1].trim().replace(/^"(.*)"$/, '$1').trim();
+  return { name, email: m[2].trim() };
+}
+
+// What a recipient chip shows: the display name when there is one, else the address. A "name"
+// that is only the address again (common with Outlook senders) counts as no name.
+function chipLabel(chip) {
+  const { name, email } = splitChip(chip);
+  if (name && name.toLowerCase() !== email.toLowerCase()) return name;
+  return email || name;
+}
+
 export default function ComposeModal() {
   const { t } = useTranslation();
   const { closeCompose, composeData, accounts, addNotification, setSelectedAccount, plaintextEmail, setThreadMessages } = useStore();
@@ -228,6 +259,11 @@ export default function ComposeModal() {
   const draftWasPreExisting = useRef(composeData?.draftUid != null);
   const [showCc, setShowCc] = useState(() => !!(composeData?.cc?.length));
   const [showBcc, setShowBcc] = useState(() => !!(composeData?.bcc?.length));
+  // A Cc/Bcc row renders once opened, or whenever it already holds recipients.
+  const ccRowOpen = showCc || ccChips.length > 0;
+  const bccRowOpen = showBcc || bccChips.length > 0;
+  // The row the user just opened with its toggle takes focus, as in Apple Mail.
+  const [focusRow, setFocusRow] = useState(null);
 
   // Re-apply on mount — guards against Zustand state not being ready during first render
   useEffect(() => {
@@ -315,6 +351,15 @@ export default function ComposeModal() {
   const posRef = useRef(null);
   const customSizeRef = useRef(null);
   const dragCleanupRef = useRef(null);
+  // Files dragged over the composer: depth counts nested dragenter/dragleave pairs so moving
+  // across child elements does not flicker the overlay.
+  const [dropActive, setDropActive] = useState(false);
+  const dropDepthRef = useRef(0);
+  // The editor's paste/drop hooks are configured once at creation, so they reach the current
+  // addFiles through this ref.
+  const addFilesRef = useRef(null);
+  const attachmentsRef = useRef(attachments);
+  attachmentsRef.current = attachments;
   posRef.current = pos;
   customSizeRef.current = customSize;
 
@@ -360,7 +405,20 @@ export default function ComposeModal() {
     immediatelyRender: false,
     editorProps: {
       attributes: { spellcheck: 'true' },
+      handleDrop(view, event) {
+        // Files dropped on the body become attachments. Claim the event so ProseMirror does not
+        // try to insert anything; the compose window's onDrop (it bubbles there) attaches them.
+        return !!event.dataTransfer?.files?.length;
+      },
       handlePaste(view, event) {
+        // Pasted files that are not images (a PDF copied in Finder, say) become attachments.
+        // Images keep going inline below.
+        const pastedFiles = Array.from(event.clipboardData?.files || []);
+        const otherFiles = pastedFiles.filter(f => !String(f.type || '').startsWith('image/'));
+        if (otherFiles.length) {
+          addFilesRef.current?.(otherFiles);
+          if (otherFiles.length === pastedFiles.length) { event.preventDefault(); return true; }
+        }
         // If clipboard has HTML containing a table (e.g. from Excel), let
         // TipTap parse it natively — Excel provides both image/png and text/html;
         // without this check the image path wins and the table is lost.
@@ -652,22 +710,101 @@ export default function ComposeModal() {
     }
   }, [editor]);
 
-  const handleFileSelect = (e) => {
-    const files = Array.from(e.target.files || []);
+  // The one way files become attachments: the file picker, drag and drop, and pasted files all
+  // come through here, so they share the duplicate check, the size limit and the chips.
+  const addFiles = (fileList) => {
+    const files = Array.from(fileList || []).filter(Boolean);
     if (!files.length) return;
+    let total = attachmentsRef.current.reduce((n, a) => n + (a.size || 0), 0);
+    const seen = new Set(attachmentsRef.current.map(a => a.name));
+    const tooLarge = [];
     files.forEach(file => {
+      if (seen.has(file.name)) return;
+      if (total + file.size > MAX_ATTACHMENT_BYTES) { tooLarge.push(file.name); return; }
+      seen.add(file.name);
+      total += file.size;
       const reader = new FileReader();
       reader.onload = (ev) => {
-        const base64 = ev.target.result.split(',')[1];
+        const base64 = String(ev.target.result || '').split(',')[1] || '';
         setAttachments(prev => {
           if (prev.some(a => a.name === file.name)) return prev;
           return [...prev, { name: file.name, size: file.size, type: file.type, data: base64 }];
         });
       };
+      // A dropped folder cannot be read; skip it rather than attaching an empty file.
+      reader.onerror = () => {};
       reader.readAsDataURL(file);
     });
+    if (tooLarge.length) setError(t('compose.attachTooLarge', { names: tooLarge.join(', ') }));
+  };
+  addFilesRef.current = addFiles;
+
+  const handleFileSelect = (e) => {
+    addFiles(e.target.files);
     e.target.value = '';
   };
+
+  // Drag and drop onto any part of the composer (header, body editor, attachment row).
+  const handleDragEnter = (e) => {
+    if (!dragHasFiles(e)) return;
+    e.preventDefault();
+    dropDepthRef.current += 1;
+    setDropActive(true);
+  };
+  const handleDragOver = (e) => {
+    if (!dragHasFiles(e)) return;
+    // Without this the browser refuses the drop (or, on the editor, opens the file instead).
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+  };
+  const handleDragLeave = (e) => {
+    if (!dragHasFiles(e)) return;
+    dropDepthRef.current = Math.max(0, dropDepthRef.current - 1);
+    if (dropDepthRef.current === 0) setDropActive(false);
+  };
+  const handleDrop = (e) => {
+    dropDepthRef.current = 0;
+    setDropActive(false);
+    const files = e.dataTransfer?.files;
+    if (!files || !files.length) return;
+    // Deliberately not bailing on e.defaultPrevented: a page-wide guard that cancels file drops
+    // (so a stray drop does not navigate away) must not stop the composer attaching them.
+    e.preventDefault();
+    e.stopPropagation();
+    addFiles(files);
+  };
+  // Files pasted outside the body (into To or Subject, say) attach too; the editor handles its
+  // own paste above.
+  const handleWindowPaste = (e) => {
+    if (e.target?.closest?.('.ProseMirror')) return;
+    const files = e.clipboardData?.files;
+    if (!files || !files.length) return;
+    e.preventDefault();
+    addFiles(files);
+  };
+  const dropHandlers = {
+    onDragEnter: handleDragEnter,
+    onDragOver: handleDragOver,
+    onDragLeave: handleDragLeave,
+    onDrop: handleDrop,
+    onPaste: handleWindowPaste,
+  };
+  const dropOverlay = dropActive ? (
+    <div
+      data-compose-drop-overlay=""
+      aria-hidden="true"
+      style={{
+        // Above ProseMirror's drop cursor (z-index 50), which also draws while files hover the body.
+        position: 'absolute', inset: 6, zIndex: 60, pointerEvents: 'none',
+        border: '2px dashed var(--accent)', borderRadius: 12,
+        background: 'color-mix(in srgb, var(--bg-secondary) 90%, var(--accent))',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontSize: 13, fontWeight: 500, color: 'var(--accent)',
+      }}
+    >
+      {t('compose.dropToAttach')}
+    </div>
+  ) : null;
 
   const handleKeyDown = (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
@@ -1110,7 +1247,7 @@ export default function ComposeModal() {
       flex: 1, padding: '12px 0',
       background: 'transparent', border: 'none',
       color: 'var(--text-primary)', fontSize: 16,
-      outline: 'none', width: '100%',
+      outline: 'none', width: '100%', height: 'auto',
     };
 
     return (
@@ -1123,6 +1260,7 @@ export default function ComposeModal() {
       <div
         ref={composePanelRef}
         onKeyDown={handleKeyDown}
+        {...dropHandlers}
         style={{
           position: 'fixed', top: 0, left: 0, right: 0,
           height: viewportHeight,
@@ -1134,6 +1272,7 @@ export default function ComposeModal() {
         }}
       >
         <input ref={fileInputRef} type="file" multiple onChange={handleFileSelect} style={{ display: 'none' }} />
+        {dropOverlay}
         {/* Header */}
         <div style={{
           display: 'flex', alignItems: 'center',
@@ -1275,7 +1414,7 @@ export default function ComposeModal() {
               getSuggestions={getSuggestions}
               containerStyle={{ padding: 0 }}
             />
-            {(!showCc || !showBcc) && (
+            {(!ccRowOpen || !bccRowOpen) && (
               <button
                 ref={ccBccMenuBtnRef}
                 onClick={() => {
@@ -1298,7 +1437,7 @@ export default function ComposeModal() {
           </div>
 
           {/* Cc */}
-          {showCc && (
+          {ccRowOpen && (
             <div style={fieldStyle}>
               <span style={labelStyle}>{t('compose.cc')}</span>
               <ChipInput
@@ -1313,7 +1452,7 @@ export default function ComposeModal() {
           )}
 
           {/* Bcc */}
-          {showBcc && (
+          {bccRowOpen && (
             <div style={fieldStyle}>
               <span style={labelStyle}>{t('compose.bcc')}</span>
               <ChipInput
@@ -1495,15 +1634,15 @@ export default function ComposeModal() {
             borderRadius: 10, overflow: 'hidden', boxShadow: 'var(--shadow-popover)',
             minWidth: 110,
           }}>
-            {!showCc && (
+            {!ccRowOpen && (
               <button
                 onClick={() => { setShowCc(true); setShowCcBccMenu(false); setCcBccMenuPos(null); }}
-                style={{ width: '100%', padding: '13px 18px', textAlign: 'left', background: 'none', border: 'none', color: 'var(--text-primary)', fontSize: 15, cursor: 'pointer', borderBottom: !showBcc ? '1px solid var(--border-subtle)' : 'none', WebkitTapHighlightColor: 'transparent' }}
+                style={{ width: '100%', padding: '13px 18px', textAlign: 'left', background: 'none', border: 'none', color: 'var(--text-primary)', fontSize: 15, cursor: 'pointer', borderBottom: !bccRowOpen ? '1px solid var(--border-subtle)' : 'none', WebkitTapHighlightColor: 'transparent' }}
               >
                 {t('compose.cc')}
               </button>
             )}
-            {!showBcc && (
+            {!bccRowOpen && (
               <button
                 onClick={() => { setShowBcc(true); setShowCcBccMenu(false); setCcBccMenuPos(null); }}
                 style={{ width: '100%', padding: '13px 18px', textAlign: 'left', background: 'none', border: 'none', color: 'var(--text-primary)', fontSize: 15, cursor: 'pointer', WebkitTapHighlightColor: 'transparent' }}
@@ -1697,14 +1836,6 @@ export default function ComposeModal() {
 
   // ── Desktop compose ─────────────────────────────────────────────────────────
 
-  const inputStyle = {
-    width: '100%', padding: '8px 12px',
-    background: 'var(--bg-tertiary)', border: 'none',
-    borderBottom: '1px solid var(--border-subtle)',
-    color: 'var(--text-primary)', fontSize: 13,
-    outline: 'none',
-  };
-
   if (minimized) {
     return (
       <div
@@ -1744,6 +1875,7 @@ export default function ComposeModal() {
       ref={composeWindowRef}
       className="compose-window"
       onKeyDown={handleKeyDown}
+      {...dropHandlers}
       style={maximized ? {
         position: 'fixed', top: 28, left: 28, right: 28, bottom: 28,
         background: 'var(--bg-secondary)', border: '1px solid var(--border)',
@@ -1770,6 +1902,7 @@ export default function ComposeModal() {
     >
       <input ref={fileInputRef} type="file" multiple onChange={handleFileSelect} style={{ display: 'none' }} />
       <input ref={imageInputRef} type="file" accept="image/*" onChange={e => { const f = e.target.files?.[0]; if (f) insertImageIntoEditor(f); e.target.value = ''; }} style={{ display: 'none' }} />
+      {dropOverlay}
       {/* Title bar */}
       <div
         onPointerDown={handleTitleDragStart}
@@ -1876,62 +2009,69 @@ export default function ComposeModal() {
         </div>
       </div>
 
-      {/* Fields — fixed height, not scrollable so toolbar dropdowns aren't clipped */}
-      <div style={{ flexShrink: 0 }}>
+      {/* Fields — fixed height, not scrollable so toolbar dropdowns aren't clipped. Apple Mail
+          style: 36px hairline rows, a right-aligned label column, bare controls, no filled boxes. */}
+      <div className="compose-fields" style={{ flexShrink: 0 }}>
         {/* From */}
-        <div style={{ display: 'flex', alignItems: 'center', borderBottom: '1px solid var(--border-subtle)', padding: '0 12px' }}>
-          <span style={{ fontSize: 12, color: 'var(--text-tertiary)', width: 52, flexShrink: 0 }}>{t('compose.from')}</span>
-          <select
-            value={fromValue}
-            onChange={e => setFromValue(e.target.value)}
-            style={{ flex: 1, padding: '8px 4px', background: 'transparent', border: 'none', color: 'var(--text-primary)', fontSize: 13, outline: 'none', cursor: 'pointer' }}
-          >
-            {accounts.map(a => {
-              const aliases = a.aliases || [];
-              const displayName = a.sender_name || a.name;
-              if (!aliases.length) {
-                return (
-                  <option key={a.id} value={`account:${a.id}`} style={{ background: 'var(--bg-tertiary)' }}>
-                    {displayName} &lt;{a.email_address}&gt;
-                  </option>
-                );
-              }
-              return (
-                <optgroup key={a.id} label={a.name} style={{ background: 'var(--bg-tertiary)' }}>
-                  <option value={`account:${a.id}`} style={{ background: 'var(--bg-tertiary)' }}>
-                    {displayName} &lt;{a.email_address}&gt;
-                  </option>
-                  {aliases.map(alias => (
-                    <option key={alias.id} value={`alias:${alias.id}:${a.id}`} style={{ background: 'var(--bg-tertiary)' }}>
-                      {alias.name} &lt;{alias.email}&gt;
+        <div className="compose-field-row">
+          <span className="compose-field-label">{t('compose.from')}</span>
+          <div className="compose-from-wrap">
+            <select
+              className="compose-field-bare compose-from-select"
+              aria-label={t('compose.from')}
+              value={fromValue}
+              onChange={e => setFromValue(e.target.value)}
+            >
+              {accounts.map(a => {
+                const aliases = a.aliases || [];
+                const displayName = a.sender_name || a.name;
+                if (!aliases.length) {
+                  return (
+                    <option key={a.id} value={`account:${a.id}`} style={{ background: 'var(--bg-tertiary)' }}>
+                      {displayName} &lt;{a.email_address}&gt;
                     </option>
-                  ))}
-                </optgroup>
-              );
-            })}
-          </select>
+                  );
+                }
+                return (
+                  <optgroup key={a.id} label={a.name} style={{ background: 'var(--bg-tertiary)' }}>
+                    <option value={`account:${a.id}`} style={{ background: 'var(--bg-tertiary)' }}>
+                      {displayName} &lt;{a.email_address}&gt;
+                    </option>
+                    {aliases.map(alias => (
+                      <option key={alias.id} value={`alias:${alias.id}:${a.id}`} style={{ background: 'var(--bg-tertiary)' }}>
+                        {alias.name} &lt;{alias.email}&gt;
+                      </option>
+                    ))}
+                  </optgroup>
+                );
+              })}
+            </select>
+            <svg className="compose-from-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+          </div>
         </div>
 
         {/* To */}
-        <div style={{ display: 'flex', alignItems: 'flex-start', borderBottom: '1px solid var(--border-subtle)', padding: '0 12px' }}>
-          <span style={{ fontSize: 12, color: 'var(--text-tertiary)', width: 52, flexShrink: 0, paddingTop: 9 }}>{t('compose.to')}</span>
+        <div className="compose-field-row" data-compose-row="to">
+          <span className="compose-field-label">{t('compose.to')}</span>
           <ChipInput
             chips={toChips} onChipsChange={setToChips}
             value={toInput} onChange={setToInput}
             placeholder={t('compose.toPh')}
+            ariaLabel={t('compose.to')}
             autoFocus={!isReply && !isForward}
-            inputStyle={{ ...inputStyle, borderBottom: 'none', padding: '6px 4px' }}
             getSuggestions={getSuggestions}
           />
-          {(!showCc || !showBcc) && (
-            <div className="compose-ccbcc-quickadd" style={{ display: 'flex', flexShrink: 0 }}>
-              {!showCc && (
-                <button onClick={() => setShowCc(true)} style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', fontSize: 11, padding: '9px 0 4px 6px' }}>
+          {(!ccRowOpen || !bccRowOpen) && (
+            <div className="compose-ccbcc-quickadd">
+              {!ccRowOpen && (
+                <button type="button" data-compose-toggle="cc" onClick={() => { setFocusRow('cc'); setShowCc(true); }}>
                   {t('compose.cc')}
                 </button>
               )}
-              {!showBcc && (
-                <button onClick={() => setShowBcc(true)} style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', fontSize: 11, padding: '9px 0 4px 6px' }}>
+              {!bccRowOpen && (
+                <button type="button" data-compose-toggle="bcc" onClick={() => { setFocusRow('bcc'); setShowBcc(true); }}>
                   {t('compose.bcc')}
                 </button>
               )}
@@ -1939,41 +2079,44 @@ export default function ComposeModal() {
           )}
         </div>
 
-        {/* Cc */}
-        {showCc && (
-          <div style={{ display: 'flex', alignItems: 'flex-start', borderBottom: '1px solid var(--border-subtle)', padding: '0 12px' }}>
-            <span style={{ fontSize: 12, color: 'var(--text-tertiary)', width: 52, flexShrink: 0, paddingTop: 9 }}>{t('compose.cc')}</span>
+        {/* Cc: only when opened or already carrying recipients */}
+        {ccRowOpen && (
+          <div className="compose-field-row" data-compose-row="cc">
+            <span className="compose-field-label">{t('compose.cc')}</span>
             <ChipInput
               chips={ccChips} onChipsChange={setCcChips}
               value={ccInput} onChange={setCcInput}
               placeholder={t('compose.ccPh')}
-              inputStyle={{ ...inputStyle, borderBottom: 'none', padding: '6px 4px' }}
+              ariaLabel={t('compose.cc')}
+              autoFocus={focusRow === 'cc'}
               getSuggestions={getSuggestions}
             />
           </div>
         )}
 
-        {/* Bcc */}
-        {showBcc && (
-          <div style={{ display: 'flex', alignItems: 'flex-start', borderBottom: '1px solid var(--border-subtle)', padding: '0 12px' }}>
-            <span style={{ fontSize: 12, color: 'var(--text-tertiary)', width: 52, flexShrink: 0, paddingTop: 9 }}>{t('compose.bcc')}</span>
+        {/* Bcc: only when opened or already carrying recipients */}
+        {bccRowOpen && (
+          <div className="compose-field-row" data-compose-row="bcc">
+            <span className="compose-field-label">{t('compose.bcc')}</span>
             <ChipInput
               chips={bccChips} onChipsChange={setBccChips}
               value={bccInput} onChange={setBccInput}
               placeholder={t('compose.bccPh')}
-              inputStyle={{ ...inputStyle, borderBottom: 'none', padding: '6px 4px' }}
+              ariaLabel={t('compose.bcc')}
+              autoFocus={focusRow === 'bcc'}
               getSuggestions={getSuggestions}
             />
           </div>
         )}
 
         {/* Subject */}
-        <div style={{ display: 'flex', alignItems: 'center', borderBottom: '1px solid var(--border-subtle)', padding: '0 12px' }}>
-          <span style={{ fontSize: 12, color: 'var(--text-tertiary)', width: 52, flexShrink: 0 }}>{t('compose.subject')}</span>
+        <div className="compose-field-row">
+          <span className="compose-field-label">{t('compose.subject')}</span>
           <input
             type="text" value={subject} onChange={e => setSubject(e.target.value)}
+            className="compose-field-bare compose-subject-input"
+            aria-label={t('compose.subject')}
             placeholder={t('compose.subject')}
-            style={{ flex: 1, ...inputStyle, borderBottom: 'none', padding: '8px 4px' }}
           />
         </div>
       </div>
@@ -3121,7 +3264,7 @@ function formatBytes(bytes) {
 
 function AttachmentChips({ attachments, onRemove, mobile }) {
   return (
-    <div style={{
+    <div data-compose-attachments="" style={{
       display: 'flex', flexWrap: 'wrap', gap: 6,
       padding: mobile ? '6px 16px' : '6px 14px',
       borderBottom: '1px solid var(--border-subtle)',
@@ -3154,7 +3297,7 @@ function AttachmentChips({ attachments, onRemove, mobile }) {
   );
 }
 
-function ChipInput({ chips, onChipsChange, value, onChange, placeholder, autoFocus, inputStyle, getSuggestions, containerStyle }) {
+function ChipInput({ chips, onChipsChange, value, onChange, placeholder, autoFocus, inputStyle, getSuggestions, containerStyle, ariaLabel }) {
   const { t } = useTranslation();
   const uiScale = useUiScale();
   const [suggestions, setSuggestions] = useState([]);
@@ -3183,7 +3326,7 @@ function ChipInput({ chips, onChipsChange, value, onChange, placeholder, autoFoc
           // rather than extending behind the mobile keyboard (which lets the drag
           // fall through and scroll the page underneath).
           const avail = (window.visualViewport?.height || window.innerHeight) - rect.bottom - 16;
-          setDropStyle({ top: rect.bottom + 2, left: rect.left, width: Math.max(rect.width, 220), maxHeight: Math.max(120, Math.min(240, avail)) });
+          setDropStyle({ top: rect.bottom + 4, left: rect.left, width: Math.max(rect.width, 220), maxHeight: Math.max(120, Math.min(240, avail)) });
         }
         setSuggestions(results);
         setSuggIdx(-1);
@@ -3194,9 +3337,15 @@ function ChipInput({ chips, onChipsChange, value, onChange, placeholder, autoFoc
 
   const clearSuggestions = () => { setSuggestions([]); setSuggIdx(-1); setDropStyle(null); };
 
+  // Committing text that holds several addresses ("a@x.com, Bob <b@y.com>", typed or dropped
+  // in by autofill) makes one chip each, never one chip holding the list.
   const commitInput = () => {
     const trimmed = value.trim();
-    if (trimmed) { onChipsChange([...chips, trimmed]); onChange(''); }
+    if (trimmed) {
+      const parts = parseChips(trimmed.replace(/[;\r\n]+/g, ','));
+      onChipsChange([...chips, ...(parts.length ? parts : [trimmed])]);
+      onChange('');
+    }
     clearSuggestions();
   };
 
@@ -3230,6 +3379,20 @@ function ChipInput({ chips, onChipsChange, value, onChange, placeholder, autoFoc
     } else if (e.key === 'Backspace' && !value && chips.length) {
       onChipsChange(chips.slice(0, -1));
     }
+  };
+
+  // Pasting a list ("a@x.com, Bob <b@y.com>; c@z.com" or one per line) makes one chip per
+  // address instead of one chip holding the whole list.
+  const handlePaste = (e) => {
+    const text = e.clipboardData?.getData('text/plain') || '';
+    if (!/[,;\n]/.test(text)) return;
+    const pasted = parseChips(text.replace(/[;\r\n]+/g, ','));
+    if (!pasted.length) return;
+    e.preventDefault();
+    const pending = value.trim();
+    onChipsChange([...chips, ...(pending ? [pending] : []), ...pasted]);
+    onChange('');
+    clearSuggestions();
   };
 
   // Pull the bare email out of a chip string ("Jane <jane@x.com>" -> "jane@x.com").
@@ -3279,43 +3442,47 @@ function ChipInput({ chips, onChipsChange, value, onChange, placeholder, autoFoc
   ] : [];
 
   return (
-    <div ref={wrapperRef} style={{ display: 'flex', flexWrap: 'wrap', gap: 4, flex: 1, alignItems: 'center', padding: '5px 0', minWidth: 0, ...containerStyle }}>
-      {chips.map((chip, i) => (
-        <span key={i}
-          title={chip}
-          onDoubleClick={() => startEdit(i)}
-          onContextMenu={(e) => { e.preventDefault(); openMenu(e.clientX, e.clientY, i); }}
-          onTouchStart={(e) => onChipTouchStart(e, i)}
-          onTouchEnd={cancelLongPress}
-          onTouchMove={cancelLongPress}
-          style={{
-            display: 'inline-flex', alignItems: 'center', gap: 3,
-            background: 'var(--accent-dim)', color: 'var(--accent)',
-            borderRadius: 6, padding: '2px 6px 2px 8px', fontSize: 12,
-            maxWidth: 220, cursor: 'default', userSelect: 'none',
-          }}>
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{chip}</span>
-          <button
-            type="button"
-            onClick={() => onChipsChange(chips.filter((_, j) => j !== i))}
-            style={{ background: 'none', border: 'none', padding: '0 0 0 2px', cursor: 'pointer', color: 'var(--accent)', display: 'flex', lineHeight: 1, flexShrink: 0 }}
+    <div ref={wrapperRef} className="compose-recipients" style={containerStyle}>
+      {chips.map((chip, i) => {
+        const invalid = !EMAIL_RE.test(chipEmail(chip));
+        return (
+          <span key={i}
+            className={invalid ? 'compose-chip is-invalid' : 'compose-chip'}
+            data-compose-chip=""
+            title={chip}
+            onDoubleClick={() => startEdit(i)}
+            onContextMenu={(e) => { e.preventDefault(); openMenu(e.clientX, e.clientY, i); }}
+            onTouchStart={(e) => onChipTouchStart(e, i)}
+            onTouchEnd={cancelLongPress}
+            onTouchMove={cancelLongPress}
           >
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-            </svg>
-          </button>
-        </span>
-      ))}
+            <span className="compose-chip-label">{chipLabel(chip)}</span>
+            <button
+              type="button"
+              className="compose-chip-x"
+              aria-label={`${t('common.remove')} ${chip}`}
+              onClick={() => onChipsChange(chips.filter((_, j) => j !== i))}
+            >
+              <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.75" aria-hidden="true">
+                <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+              </svg>
+            </button>
+          </span>
+        );
+      })}
       <input
         ref={inputRef}
         type="text"
+        className="compose-recipient-input"
+        aria-label={ariaLabel}
         value={value}
         onChange={e => onChange(e.target.value)}
         onKeyDown={handleKeyDown}
+        onPaste={handlePaste}
         onBlur={commitInput}
         placeholder={chips.length ? '' : placeholder}
         autoFocus={autoFocus}
-        style={{ ...inputStyle, flex: '1 1 80px', minWidth: 80 }}
+        style={inputStyle}
       />
       {suggestions.length > 0 && dropStyle && (
         <div

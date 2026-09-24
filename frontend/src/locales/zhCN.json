@@ -105,6 +105,8 @@
     "toPh": "recipient@example.com",
     "ccPh": "cc@example.com",
     "bccPh": "bcc@example.com",
+    "dropToAttach": "拖放文件以添加附件",
+    "attachTooLarge": "附件总大小不能超过 25 MB。未添加：{{names}}",
     "bodyPh": "请输入正文…",
     "send": "发送",
     "sendTooltip": "发送（Ctrl+Enter）",
