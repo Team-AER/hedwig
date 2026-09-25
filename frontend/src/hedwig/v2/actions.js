@@ -10,7 +10,8 @@
 // so Undo simply cancels a call that has not gone yet. Closing the toast, a fourth toast pushing
 // it off the stack, the page going away or the session ending sends it at once. If Undo arrives
 // after the call went (a race with any of those), the inverse runs instead where one exists:
-// Done and Move look the messages up again by Message-ID and move them back, Delete moves them
+// Done and Move look the messages up again by Message-ID and move them back (Done also takes the
+// thread off the server's done list), Delete moves them
 // back from Trash (the single delete route keeps the id), Junk is Not junk (markHam). Flag, Read,
 // Reply Later and Set Aside are sent at once; their Undo is the inverse call.
 import { create } from 'zustand';
@@ -20,7 +21,7 @@ import { useShell } from '../shell/state.js';
 import { useV2, rowKeys, sameRow } from './state.js';
 import { isMockMode, announceSortChange } from './client.js';
 import { openThread, VIEW } from './nav.js';
-import { archiveThread, snooze as snoozeRoute, addToList, removeFromList, flagMessage } from './mail.js';
+import { archiveThread, markThreadDone, reopenThread, snooze as snoozeRoute, addToList, removeFromList, flagMessage } from './mail.js';
 import { isDraftMessage } from './drafts.js';
 import { isMissing } from './hooks.js';
 import { tv, tvn } from './i18n.js';
@@ -96,6 +97,8 @@ const defaultOps = {
     return rows;
   },
   archive: (msgs) => archiveThread(msgs, { quiet: true }),
+  markDone: (threadId) => markThreadDone(threadId),
+  reopenThread: (threadId) => reopenThread(threadId),
   async trash(msgs) {
     if (!isMockMode()) await oneByOne(msgs, (m) => api.deleteMessage(m.id));
     announceSortChange({ deleted: msgs.map((m) => m.id) });
@@ -194,9 +197,16 @@ function planFor(spec, items) {
         async commit(e) {
           const moved = await eachItem(e, (msgs) => msgs.filter(inInbox));
           await ops.archive(moved.flatMap((x) => x.msgs));
+          // Done is the thread's state too, not only the archive: with nothing left in the inbox
+          // (archived elsewhere, the latest in Junk) the archive moves nothing, and the thread
+          // would stay in Needs You.
+          for (const item of e.items) await ops.markDone(threadOf(item));
           return moved;
         },
-        inverse: (e) => ops.relocateBack(e.resolved || []),
+        async inverse(e) {
+          for (const item of e.items) await ops.reopenThread(threadOf(item));
+          await ops.relocateBack(e.resolved || []);
+        },
       };
     case 'delete':
       return {

@@ -142,7 +142,7 @@ function seed() {
       { id: 'b-receipts', key: 'receipts', name: 'Receipts', stream: 'records', schedule: { mode: 'weekly', day: 6, at: '09:00' }, builtin: true, position: 5 },
     ],
     // Work lists hold thread ids (t-…), as hedwig_work_items does.
-    lists: { reply_later: ['t-priya', 't-jonas', 't-lena'], set_aside: ['t-stratechery', 't-hn'], snoozed: ['t-telia'] },
+    lists: { reply_later: ['t-priya', 't-jonas', 't-lena'], set_aside: ['t-stratechery', 't-hn'], snoozed: ['t-telia'], done: [] },
     // Already due whatever the time of day (08:00 today is still ahead just after midnight).
     reminders: [{ id: 7, note: 'Call the dentist about the crown', until: at(HOUR) }],
     answers: [],
@@ -520,7 +520,7 @@ const findThread = (threadId) => ALL_ITEMS().find((i) => i.threadId === threadId
 const LIST_ALIASES = { replyLater: 'reply_later', setAside: 'set_aside', snooze: 'snoozed' };
 const listKind = (k) => LIST_ALIASES[k] || String(k || '').replace(/-/g, '_');
 function listCounts() {
-  const c = { reply_later: db.lists.reply_later.length, set_aside: db.lists.set_aside.length, pin: 0, reminder: db.reminders.length, done: 0, snoozed: db.lists.snoozed.length };
+  const c = { reply_later: db.lists.reply_later.length, set_aside: db.lists.set_aside.length, pin: 0, reminder: db.reminders.length, done: db.lists.done.length, snoozed: db.lists.snoozed.length };
   return { ...c, replyLater: c.reply_later, setAside: c.set_aside };
 }
 function reminderRow(r) {

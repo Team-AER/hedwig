@@ -315,6 +315,48 @@ describe.skipIf(!process.env.HEDWIG_IT)('working the seeded demo mailbox', () =>
     expect(after).toEqual([{ resolved_reason: 'replied' }]);
   });
 
+  it('Done settles Needs You for good (also with nothing in the inbox), Undo brings it back, archiving elsewhere settles it', async () => {
+    const DONE_THREAD = `<work-it-done-${randomUUID()}@hedwig.test>`;
+    // The DesertCart shape: the person's mail is already out of the inbox (archived elsewhere).
+    await addMessage({ folder: 'Archive', subject: 'Order 3473', fromName: 'Nava', fromEmail: 'nava@shop.example', to: ['prakhar.demo@gmail.com'], date: new Date(Date.now() - 5 * DAY), body: 'Could you send an alternative contact number?', thread: DONE_THREAD, stream: 'people' });
+    const open = async () => (await query('SELECT kind FROM hedwig_work_needs WHERE user_id = $1 AND thread_key = $2 AND resolved_at IS NULL', [userId, DONE_THREAD])).rows;
+    // Archived: People's rule, so no "waiting for your reply".
+    await needs.deriveNeeds(userId);
+    expect(await open()).toEqual([]);
+
+    // Back in the inbox it needs a reply; Done clears it at once and the sweep keeps it away.
+    await query("UPDATE messages SET folder = 'INBOX' WHERE thread_id = $1", [DONE_THREAD]);
+    await needs.deriveNeeds(userId);
+    expect(await open()).toEqual([{ kind: 'reply_overdue' }]);
+    await lists.addItem(userId, 'done', { threadId: DONE_THREAD });
+    expect(await open()).toEqual([]);
+    const { rows: settled } = await query('SELECT resolved_reason FROM hedwig_work_needs WHERE user_id = $1 AND thread_key = $2', [userId, DONE_THREAD]);
+    expect(settled).toEqual([{ resolved_reason: 'done' }]);
+    await needs.deriveNeeds(userId);
+    expect(await open()).toEqual([]);
+
+    // Undo: the reason is back without waiting for the sweep.
+    await lists.removeItem(userId, 'done', DONE_THREAD);
+    expect(await open()).toEqual([{ kind: 'reply_overdue' }]);
+  });
+
+  it('keeps archived and Done threads out of the Brief\'s Needs you', async () => {
+    const BRIEF_THREAD = `<work-it-brief-${randomUUID()}@hedwig.test>`;
+    // Dated a minute ahead so it heads the Brief's eight whatever the shared database holds.
+    await addMessage({ subject: 'Alternative number?', fromName: 'Nava', fromEmail: 'nava@shop.example', to: ['prakhar.demo@gmail.com'], date: new Date(Date.now() + 60_000), body: 'Could you send an alternative contact number?', thread: BRIEF_THREAD, stream: 'people', needsYou: true });
+    const { compileBrief } = await import('../insights/briefing.js');
+    const inBrief = async () => (await compileBrief(userId)).needsYou.some((n) => n.threadId === BRIEF_THREAD);
+    expect(await inBrief()).toBe(true);
+    await query("UPDATE messages SET folder = 'Archive' WHERE thread_id = $1", [BRIEF_THREAD]);
+    expect(await inBrief()).toBe(false);
+    await query("UPDATE messages SET folder = 'INBOX', date = NOW() - INTERVAL '1 minute' WHERE thread_id = $1", [BRIEF_THREAD]);
+    expect(await inBrief()).toBe(true);
+    await lists.addItem(userId, 'done', { threadId: BRIEF_THREAD });
+    expect(await inBrief()).toBe(false);
+    await lists.removeItem(userId, 'done', BRIEF_THREAD);
+    expect(await inBrief()).toBe(true);
+  });
+
   it('finds Waiting On from sent mail through the triage sweep', async () => {
     await addMessage({ folder: 'Sent', subject: 'Contract', fromName: 'Prakhar', fromEmail: 'prakhar.demo@gmail.com', to: ['lee@example.org'], date: new Date(Date.now() - 6 * DAY), body: 'Hi Lee, can you send the signed contract?', read: true, thread: ASK_THREAD });
     // The worker's triage.waitingOn schedule (every 15 min) runs this for users with an enabled account;

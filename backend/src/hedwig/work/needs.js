@@ -5,9 +5,12 @@
 //   deadline       an open commitment the owner owes is due within work.deadlineSoonDays ("Due Fri: …")
 // Derived by the sweep over the last work.needsDays of mail (and for new mail within minutes); the
 // owner's reply resolves reply_overdue at once (pipeline step); lapsed reasons resolve on the next pass.
+// A thread the owner marked Done (hedwig_work_items, until new mail reopens it) gets no reasons, and
+// neither does one whose latest message they archived: People's own rule (goneSql).
 import { query } from '../../services/db.js';
 import { getConfig } from '../config.js';
 import { addressesOf } from '../text.js';
+import { goneSql } from '../triage/store.js';
 import { isPersonRow } from './summaries.js';
 import { ownerOf, clampInt, timeZoneOf, DAY_MS } from './util.js';
 
@@ -35,6 +38,12 @@ export function deadlineReason(what, dueAt, tz) {
   return clip(`Due ${day}: ${what}`, 120);
 }
 
+// SQL: the thread is marked Done ($1 is the user id). With `date`, only when that message came
+// before the mark (newer mail shows the thread again even before the pipeline step reopens it).
+const doneSql = (threadKey, date = null) => `EXISTS (SELECT 1 FROM hedwig_work_items w
+   WHERE w.user_id = $1 AND w.kind = 'done' AND w.done_at IS NULL AND w.thread_key = ${threadKey}${date ? `
+     AND (${date} IS NULL OR ${date} <= w.created_at)` : ''})`;
+
 /** Recompute one user's derived reasons. @returns {{ open: number, added: number, resolved: number }} */
 export async function deriveNeeds(userId, { now = new Date() } = {}) {
   const cfg = await getConfig(userId);
@@ -49,7 +58,7 @@ export async function deriveNeeds(userId, { now = new Date() } = {}) {
   const { rows: latest } = await query(
     `SELECT * FROM (
        SELECT DISTINCT ON (m.thread_key) m.id, m.thread_key, m.from_name, m.from_email, m.to_addresses, m.date, m.is_bulk,
-              m.list_unsubscribe, f.special_use, s.stream, COALESCE(s.own, false) AS own
+              m.list_unsubscribe, f.special_use, s.stream, COALESCE(s.own, false) AS own, ${goneSql('m', 'f')} AS gone
          FROM messages m
          JOIN email_accounts a ON a.id = m.account_id
          LEFT JOIN folders f ON f.account_id = m.account_id AND f.path = m.folder
@@ -58,8 +67,9 @@ export async function deriveNeeds(userId, { now = new Date() } = {}) {
           AND m.date > $2::timestamptz - make_interval(days => $3::int)
           AND COALESCE(f.special_use, '') NOT IN ('\\Junk', '\\Trash', '\\Drafts')
           AND m.folder !~* '(^|/)(spam|junk|bulk|trash|bin|deleted items|drafts?)$'
-        ORDER BY m.thread_key, m.date DESC NULLS LAST, m.id DESC) t
-      WHERE t.date <= $2::timestamptz - make_interval(days => $4::int)`,
+        ORDER BY m.thread_key, m.date DESC NULLS LAST, gone, m.id DESC) t
+      WHERE t.date <= $2::timestamptz - make_interval(days => $4::int)
+        AND NOT t.gone AND NOT ${doneSql('t.thread_key', 't.date')}`,
     [userId, now, windowDays, overdueDays],
   );
   const want = [];
@@ -75,6 +85,7 @@ export async function deriveNeeds(userId, { now = new Date() } = {}) {
       WHERE k.user_id = $1 AND k.status = 'open' AND k.direction = 'i_owe' AND k.due_at IS NOT NULL
         AND k.due_at BETWEEN $2::timestamptz - INTERVAL '1 day' AND $2::timestamptz + make_interval(days => $3::int)
         AND COALESCE(k.thread_key, m.thread_key) IS NOT NULL
+        AND NOT ${doneSql('COALESCE(k.thread_key, m.thread_key)')}
       ORDER BY COALESCE(k.thread_key, m.thread_key), k.due_at`,
     [userId, now, soonDays],
   );
@@ -109,6 +120,18 @@ export async function deriveAllNeeds() {
     try { open += (await deriveNeeds(userId)).open; } catch (err) { console.warn(`[hedwig] work: needs-you derivation failed for ${userId}:`, err.message); }
   }
   return open;
+}
+
+/** The owner marked these threads Done: every open reason goes (the sweep keeps them away). */
+export async function resolveDone(userId, threadKeys) {
+  const keys = [...new Set(threadKeys.filter(Boolean))];
+  if (!keys.length) return 0;
+  const { rowCount } = await query(
+    `UPDATE hedwig_work_needs SET resolved_at = NOW(), resolved_reason = 'done'
+      WHERE user_id = $1 AND resolved_at IS NULL AND thread_key = ANY($2::text[])`,
+    [userId, keys],
+  );
+  return rowCount || 0;
 }
 
 /** The owner wrote in these threads: their reply settles "waiting for your reply". */

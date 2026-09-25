@@ -79,6 +79,35 @@ export async function removeFromList(list, threadId) {
   announceSortChange({ list, threadId });
 }
 
+async function hasWork() {
+  const caps = useV2.getState().caps.work;
+  return (caps === null ? await useV2.getState().probeWork() : caps) === true;
+}
+
+/**
+ * Done on the server: POST /work/lists/done { threadId }. The thread leaves People and Needs You
+ * (and the Brief) until someone writes in it again, also when nothing of it was left in the
+ * inbox to archive. A thread the work routes do not know (404) is left to the archive alone.
+ */
+export async function markThreadDone(threadId) {
+  if (!threadId || !(await hasWork())) return;
+  try {
+    await addToList('done', threadId, {}, { quiet: true });
+  } catch (err) {
+    if (err?.status !== 404) throw err;
+  }
+}
+
+/** Undo Done: DELETE /work/lists/done/:threadId. Not on the list (404) is already undone. */
+export async function reopenThread(threadId) {
+  if (!threadId || !(await hasWork())) return;
+  try {
+    await removeFromList('done', threadId);
+  } catch (err) {
+    if (err?.status !== 404) throw err;
+  }
+}
+
 async function fullMessage(messageId) {
   const msg = await api.getMessage(messageId);
   if (!msg?.id) throw new Error(tv('hedwig.v2.mail.notFound', 'That message is no longer there.'));

@@ -7,7 +7,8 @@
 // A done thread leaves People: C's stream query adds peopleFilterSql() (messages dated before the
 // thread was marked done are hidden, so a newer one shows the thread again even before the
 // pipeline step below closes the done item). Marking done also closes the thread's Reply Later,
-// Set Aside and reminder items. The user's own reply closes Reply Later.
+// Set Aside and reminder items and its Needs You reasons (work/needs.js keeps them away while the
+// thread is done). The user's own reply closes Reply Later.
 import { query } from '../../services/db.js';
 import { getConfig } from '../config.js';
 import { zonedParts, addDays, zonedToUtc } from '../insights/time.js';
@@ -15,7 +16,7 @@ import {
   httpError, threadKeyOf, latestOfThreads, streamRow, clampInt, parseDate, timeZoneOf, isUuid,
 } from './util.js';
 import { tldrFor, enqueueForRows } from './summaries.js';
-import { needsFor, resolveReplied } from './needs.js';
+import { needsFor, resolveReplied, resolveDone, deriveNeeds } from './needs.js';
 
 export const KINDS = Object.freeze(['reply_later', 'set_aside', 'pin', 'reminder', 'done', 'snoozed']);
 const POSTABLE = new Set(['reply_later', 'set_aside', 'pin', 'reminder', 'done']);
@@ -29,17 +30,7 @@ export function normalizeKind(kind) {
   return k;
 }
 
-/**
- * SQL for C's People query: hide threads the user marked done (messages dated up to the moment
- * they did) and threads snoozed through Hedwig or sitting in upstream's Snoozed folder.
- * `m` is the messages alias, `s` the hedwig_sort alias (for user_id).
- */
-export function peopleFilterSql(m = 'm', s = 's') {
-  return `(COALESCE(${m}.folder, '') <> 'Snoozed' AND NOT EXISTS (
-    SELECT 1 FROM hedwig_work_items w
-     WHERE w.user_id = ${s}.user_id AND w.thread_key = ${m}.thread_key AND w.done_at IS NULL
-       AND ((w.kind = 'done' AND (${m}.date IS NULL OR ${m}.date <= w.created_at)) OR (w.kind = 'snoozed' AND w.until > NOW()))))`;
-}
+export { peopleFilterSql } from './sql.js';
 
 // ── Counts and lists ────────────────────────────────────────────────────────
 
@@ -112,7 +103,8 @@ async function requireThread(userId, threadKey) {
 
 /**
  * Mark threads done (the user's own call, a sweep, or a done list POST). Closes their Reply Later,
- * Set Aside and reminder items; re-marking a done thread moves its mark to now.
+ * Set Aside and reminder items and their Needs You reasons; re-marking a done thread moves its
+ * mark to now.
  * @returns {Promise<number>} threads marked
  */
 export async function markDone(userId, threadKeys, { note = null } = {}) {
@@ -130,6 +122,7 @@ export async function markDone(userId, threadKeys, { note = null } = {}) {
      DO UPDATE SET created_at = NOW(), note = COALESCE(EXCLUDED.note, hedwig_work_items.note)`,
     [userId, keys, note],
   );
+  await resolveDone(userId, keys);
   return rowCount || keys.length;
 }
 
@@ -199,6 +192,10 @@ export async function removeItem(userId, kindIn, threadId) {
     );
   }
   if (!res.rowCount) throw httpError(404, 'Not on that list');
+  // Undoing Done: the thread's Needs You reasons come back now, not at the next sweep.
+  if (kind === 'done') {
+    await deriveNeeds(userId).catch((err) => console.warn('[hedwig] work: could not re-derive Needs You after undoing Done:', err.message));
+  }
   return { ok: true, counts: await listCounts(userId) };
 }
 

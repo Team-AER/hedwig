@@ -13,6 +13,8 @@ import { responseSamples, responseTrend } from './stats.js';
 import { insertInsight, toInsight } from './store.js';
 import { validTimezone, startOfLocalDay, describeNow } from './time.js';
 import { reasoningTier, ranOnLighterModel } from '../labels/tier.js';
+import { goneSql } from '../triage/store.js';
+import { peopleFilterSql } from '../work/sql.js';
 import { createHash } from 'node:crypto';
 
 const DAY = 86400_000;
@@ -503,18 +505,20 @@ async function briefNeedsYou(userId, hasSort) {
     // One row per conversation (its latest message that needs you), as the People stream counts
     // them, so the headline and the list agree with People.
     // The same list as People's Needs you: sorting's needs_you, plus the reasons work derives (a
-    // reply overdue, a deadline near; hedwig_work_needs, see work/needs.js workNeedsYouSql).
+    // reply overdue, a deadline near; hedwig_work_needs, see work/needs.js workNeedsYouSql), and
+    // People's filters: nothing archived, junked or deleted, nothing marked Done or snoozed.
     const { rows } = await query(
       `SELECT * FROM (
          SELECT DISTINCT ON (m.account_id, COALESCE(m.thread_key, m.id::text))
                 s.message_id AS id, m.thread_key, m.from_name, m.from_email, m.subject, m.snippet, m.date,
                 COALESCE(CASE WHEN s.needs_you THEN s.needs_you_reason END, wn.reason, s.reason) AS reason
            FROM hedwig_sort s JOIN messages m ON m.id = s.message_id JOIN email_accounts a ON a.id = m.account_id AND a.user_id = $1
+           LEFT JOIN folders f ON f.account_id = m.account_id AND f.path = m.folder
            LEFT JOIN LATERAL (
              SELECT w.reason FROM hedwig_work_needs w
               WHERE w.user_id = $1 AND w.thread_key = m.thread_key AND w.resolved_at IS NULL
               ORDER BY CASE w.kind WHEN 'deadline' THEN 0 ELSE 1 END LIMIT 1) wn ON true
-          WHERE s.user_id = $1 AND NOT s.own AND NOT m.is_deleted
+          WHERE s.user_id = $1 AND NOT s.own AND NOT ${goneSql('m', 'f')} AND ${peopleFilterSql('m', 's')}
             AND ((s.needs_you AND m.date > NOW() - INTERVAL '14 days') OR (wn.reason IS NOT NULL AND s.stream <> 'spam'))
           ORDER BY m.account_id, COALESCE(m.thread_key, m.id::text), m.date DESC NULLS LAST, m.id DESC
        ) latest

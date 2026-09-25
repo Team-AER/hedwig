@@ -194,6 +194,23 @@ describe('optimistic actions', () => {
     assert.equal(liveRows([item], useV2.getState().hidden, {}).length, 0);
   });
 
+  test('Done on a thread with nothing left in the inbox still marks it done on the server; Undo reopens it', async () => {
+    const archived = [];
+    actions.setActionOps({ archive: async (msgs) => { archived.push(msgs.map((m) => m.id)); } });
+    const doneCount = async () => (await mock.mockRequest('GET', '/work/lists')).done;
+    const item = await anna();
+    // Archived elsewhere, the latest in the provider's junk folder: nothing for the archive to move.
+    const messages = [{ id: 'm-anna', folder: 'Archive', accountId: 'acc-work' }, { id: 'm-anna-2', folder: 'Bulk', accountId: 'acc-work' }];
+    const id = actions.performAction({ kind: 'done', items: [item], messages, stream: 'people' });
+    await clock.tick(actions.UNDO_MS);
+    assert.deepEqual(archived, [[]], 'nothing in the inbox to archive');
+    assert.equal(await doneCount(), 1, 'the thread is on the done list');
+    assert.deepEqual(titles(), [], 'no failure toast');
+    assert.equal(actions.undo(id), true);
+    await settle();
+    assert.equal(await doneCount(), 0, 'Undo took it off again');
+  });
+
   test('Undo before the window closes cancels the call and puts the row back', async () => {
     const calls = [];
     actions.setActionOps({ trash: async () => { calls.push('trash'); } });
@@ -220,6 +237,8 @@ describe('optimistic actions', () => {
       junk: async (msgs) => { calls.push(['junk', msgs.map((m) => m.id)]); },
       unjunk: async (msgs) => { calls.push(['unjunk', msgs.map((m) => m.id)]); },
       archive: async (msgs) => { calls.push(['archive', msgs.map((m) => m.id)]); },
+      markDone: async (t) => { calls.push(['done', t]); },
+      reopenThread: async (t) => { calls.push(['reopen', t]); },
       relocateBack: async (moved) => { calls.push(['back', moved.flatMap((x) => x.msgs.map((m) => [m.id, m.folder, m.header]))]); },
     });
     actions.setUndoClock(clock);
@@ -250,7 +269,7 @@ describe('optimistic actions', () => {
       ['add', 'replyLater', 't-anna'], ['remove', 'replyLater', 't-anna'],
       ['trash', ['m-anna']], ['untrash', [['m-anna', 'INBOX']]],
       ['junk', ['m-anna']], ['unjunk', ['m-anna']],
-      ['archive', ['m-anna']], ['back', [['m-anna', 'INBOX', '<anna@x>']]],
+      ['archive', ['m-anna']], ['done', 't-anna'], ['reopen', 't-anna'], ['back', [['m-anna', 'INBOX', '<anna@x>']]],
     ], 'drafts are never part of it');
     assert.deepEqual(useV2.getState().hidden, {}, 'every row is back');
   });
