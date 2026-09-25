@@ -1,6 +1,7 @@
 // Writing the index: chunks (with weighted tsvectors), thread rollups, chunk vectors, and the
 // sweeps that keep them complete. Every message Hedwig has seen gets chunked and embedded,
-// whatever its age; pipeline.backfillDays only limits the model steps in other modules.
+// whatever its age; analysis.historyDays and pipeline.backfillDays only limit the model steps in
+// other modules.
 import { pool, query } from '../../services/db.js';
 import { getConfig } from '../config.js';
 import { embed, toVectorLiteral, EmbeddingError } from '../embeddings.js';

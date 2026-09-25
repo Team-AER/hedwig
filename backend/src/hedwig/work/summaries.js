@@ -4,7 +4,7 @@
 //
 //   mail arrives ──pipeline step (work)──▶ enqueue work.summarise for the user (deduplicated)
 //   every work.summariesEverySec ──sweep──▶ enqueue it for users with gaps (the repair pass)
-//   work.summarise job ──▶ gaps newest first within pipeline.backfillDays
+//   work.summarise job ──▶ gaps newest first within analysis.historyDays
 //        threads: 4 per call on Tier 1; longer than work.storyEscalateAbove → Tier 2, or Tier 1
 //                 with lighter = true while Tier 2 is degraded or the call fell back
 //        messages: 6 per call on Tier 1
@@ -14,7 +14,7 @@
 // Opening a thread with no fresh cached story computes it through summariseThreads too (one item,
 // interactive lane), so there is one path and one cache.
 import { query } from '../../services/db.js';
-import { getConfig } from '../config.js';
+import { getConfig, analysisDays } from '../config.js';
 import { runPrompt } from '../prompts/index.js';
 import { activeModels } from '../llm.js';
 import { enqueue } from '../jobs.js';
@@ -271,7 +271,6 @@ export async function tldrFor(userId, messageIds) {
 
 // ── Gaps ────────────────────────────────────────────────────────────────────
 
-const windowDays = (cfg) => Math.max(1, clampInt(cfg['pipeline.backfillDays'], 365, 0, 10000) || 365);
 
 /** Threads of 2+ messages with a real person in them and no story for their current length, newest first. */
 export async function storyGaps(userId, cfg, owner, limit) {
@@ -285,7 +284,7 @@ export async function storyGaps(userId, cfg, owner, limit) {
          LEFT JOIN folders f ON f.account_id = m.account_id AND f.path = m.folder
         WHERE a.user_id = $1 AND NOT m.is_deleted AND m.thread_key IS NOT NULL
         GROUP BY m.thread_key
-       HAVING MAX(m.date) > NOW() - make_interval(days => $2::int))
+       HAVING $2::int = 0 OR MAX(m.date) > NOW() - make_interval(days => $2::int))
      SELECT t.thread_key, t.n, t.last FROM t
        LEFT JOIN hedwig_work_stories w ON w.user_id = $1 AND w.thread_key = t.thread_key
       WHERE t.n >= 2 AND t.person
@@ -293,7 +292,7 @@ export async function storyGaps(userId, cfg, owner, limit) {
              OR (w.error IS NOT NULL AND w.attempted_at < NOW() - make_interval(hours => $3::int)))
       ORDER BY t.last DESC NULLS LAST
       LIMIT $5`,
-    [userId, windowDays(cfg), clampInt(cfg['work.summariseRetryHours'], 6, 1, 720), owner.addresses, limit],
+    [userId, analysisDays(cfg), clampInt(cfg['work.summariseRetryHours'], 6, 1, 720), owner.addresses, limit],
   );
   return rows.map((r) => r.thread_key);
 }
@@ -309,7 +308,7 @@ export async function tldrGaps(userId, cfg, limit, { promptVersion }) {
          JOIN messages m ON m.id = s.message_id
          LEFT JOIN hedwig_work_tldr x ON x.message_id = m.id
         WHERE s.user_id = $1 AND s.stream IN ('people', 'screener') AND NOT s.own AND NOT m.is_deleted
-          AND m.date > NOW() - make_interval(days => $2::int)
+          AND ($2::int = 0 OR m.date > NOW() - make_interval(days => $2::int))
           -- List mail belongs in Reading (sort/headers.js listRule); until the engine re-sort moves
           -- it there, it does not get a TL;DR. The user's own choice to keep a list in People does.
           AND (s.layer = 'user' OR s.rule_id IS NOT NULL OR (m.list_unsubscribe IS NULL AND NOT COALESCE(m.is_bulk, false)))
@@ -320,7 +319,7 @@ export async function tldrGaps(userId, cfg, limit, { promptVersion }) {
         ORDER BY m.account_id, COALESCE(m.message_id, m.id::text), m.date DESC) g
       ORDER BY date DESC NULLS LAST
       LIMIT $5`,
-    [userId, windowDays(cfg), clampInt(cfg['work.summariseRetryHours'], 6, 1, 720), promptVersion, limit],
+    [userId, analysisDays(cfg), clampInt(cfg['work.summariseRetryHours'], 6, 1, 720), promptVersion, limit],
   );
   return rows;
 }

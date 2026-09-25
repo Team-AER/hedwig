@@ -89,6 +89,14 @@ object per `data:` line, blank line between events, a final `{"type":"done"}` ev
 Rows passed to steps carry `MESSAGE_COLUMNS` plus `user_id`, `user_addresses` (Set of the user's
 own addresses) and `is_outgoing`. Steps set their `hedwig_msg.*_at` column when done.
 
+History older than `pipeline.backfillDays` (admin, 365) gets only the `backfill` steps when first
+seen. How far back the model steps go is per person: `analysis.historyDays` (0 = all mail, the
+default; the admin value is the household default). `embed`, `topics` and `extract` cut each batch
+to that window, and the `context.analysisCatchUp` schedule (`context/history.js`) runs them on
+seen mail inside the window that they never reached, so widening it takes effect on old mail.
+Cards, summaries and behaviour labels read the same window. Bodies, chunks and index vectors
+always cover all mail. Commitments are not made from mail older than `pipeline.backfillDays`.
+
 ### Data model
 
 All tables are in `backend/migrations-hedwig/h0001_core.sql`. Modules that need more columns add a

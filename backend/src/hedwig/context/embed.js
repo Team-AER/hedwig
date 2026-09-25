@@ -7,9 +7,10 @@ import { createHash } from 'crypto';
 import { pool, query } from '../../services/db.js';
 import { embed, embeddingProfile, toVectorLiteral } from '../embeddings.js';
 import { MESSAGE_COLUMNS, decorate } from '../pipeline.js';
+import { analysisDays } from '../config.js';
 import { messageHeader, messageText } from '../text.js';
 import { requestBody } from '../core/bodies.js';
-import { contextEnabled, groupByUser } from './entities.js';
+import { analysisGroups, contextEnabled } from './entities.js';
 import { isBulkMessage } from './util.js';
 
 // pgvector's HNSW indexes vectors of up to 2000 dimensions.
@@ -79,10 +80,7 @@ export async function embedRows(rows, { catchUp = false } = {}) {
 }
 
 export async function runEmbedStep(rows) {
-  const eligible = [];
-  for (const [userId, userRows] of groupByUser(rows)) {
-    if (await contextEnabled(userId)) eligible.push(...userRows);
-  }
+  const eligible = (await analysisGroups(rows)).flatMap((g) => g.rows);
   await embedRows(eligible);
 }
 
@@ -107,7 +105,7 @@ export async function embedCatchUp({ limit = 64 } = {}) {
          LEFT JOIN folders f ON f.account_id = m.account_id AND f.path = m.folder
          LEFT JOIN hedwig_embeddings e ON e.message_id = h.message_id
         WHERE h.user_id = $1 AND h.skip_reason IS NULL AND m.is_deleted = false
-          AND m.date >= NOW() - make_interval(days => $3)
+          AND ($3::int = 0 OR m.date >= NOW() - make_interval(days => $3::int))
           AND (
             (h.embedded_at IS NULL AND (m.body_text IS NOT NULL OR m.body_html IS NOT NULL OR COALESCE(m.snippet, '') <> ''))
             OR (h.text_hash LIKE 'partial:%' AND (m.body_text IS NOT NULL OR m.body_html IS NOT NULL))
@@ -115,7 +113,7 @@ export async function embedCatchUp({ limit = 64 } = {}) {
           )
         ORDER BY m.date DESC NULLS LAST
         LIMIT $2`,
-      [userId, limit - done, cfg['pipeline.backfillDays'], profile.model],
+      [userId, limit - done, analysisDays(cfg), profile.model],
     );
     if (!rows.length) continue;
     await decorate(rows);

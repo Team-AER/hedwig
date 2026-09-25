@@ -67,7 +67,7 @@ const { ensureHedwigStyles } = await import('../theme/styles.js');
 const { rescueLine } = await import('./Screener.jsx');
 const { cardParts, todayLine } = await import('./Brief.jsx');
 const { hasListKey, whySignals } = await import('./WhyDoor.jsx');
-const { routingLine } = await import('./HedwigSettings.jsx');
+const { routingLine, historyLabel } = await import('./HedwigSettings.jsx');
 const { firstRowFor } = await import('./rows.jsx');
 const { normaliseStory, normaliseDeadline } = await import('./threadData.js');
 const format = await import('./format.js');
@@ -1180,6 +1180,46 @@ describe('Settings → Hedwig (Simple and Power)', () => {
     assert.deepEqual(all('button[role="radio"]', document.querySelector('[data-mail-dark-setting]')).map((b) => b.getAttribute('aria-checked')), ['false', 'true']);
     assert.deepEqual(prefsFromFields([{ key: 'ui.mailDark', value: 'off' }]), { mailDark: 'off' });
     assert.deepEqual(prefsFromFields([{ key: 'ui.mailDark', value: 'weird' }]), { mailDark: 'smart' });
+  });
+
+  test('Analyze mail from: the household default until the person picks their own window', async () => {
+    await cleanup();
+    const field = { key: 'analysis.historyDays', type: 'number', value: 365, inherited: 365, source: 'admin', scope: 'user' };
+    const sent = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (url, opts) => {
+      const body = JSON.parse(opts.body);
+      sent.push({ url, method: opts.method, body });
+      const v = body['analysis.historyDays'];
+      return new Response(JSON.stringify([{ ...field, value: v ?? field.inherited, source: v == null ? 'admin' : 'user' }]), { headers: { 'content-type': 'application/json' } });
+    };
+    const choose = async (value) => {
+      const select = document.querySelector('[data-history-setting]');
+      await React.act(async () => {
+        select.value = value;
+        select.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+      });
+      await settle();
+    };
+    try {
+      useV2.getState().setSettingsFields([field]);
+      await render(h(HedwigSettingsV2));
+      const select = document.querySelector('[data-history-setting]');
+      assert.equal(select.getAttribute('aria-label'), 'Analyze mail from');
+      assert.equal(select.value, 'household');
+      assert.deepEqual(all('option', select).map((o) => o.textContent),
+        ['Household default (The last year)', 'All mail', 'The last 5 years', 'The last 2 years', 'The last year', 'The last 90 days', 'The last 30 days']);
+      await choose('0');
+      assert.deepEqual(sent.at(-1), { url: '/api/hedwig/settings', method: 'PATCH', body: { 'analysis.historyDays': 0 } });
+      assert.equal(document.querySelector('[data-history-setting]').value, '0');
+      await choose('household');
+      assert.deepEqual(sent.at(-1).body, { 'analysis.historyDays': null }, 'back to the household default clears the override');
+      assert.equal(document.querySelector('[data-history-setting]').value, 'household');
+      assert.equal(historyLabel(45), 'The last 45 days');
+    } finally {
+      globalThis.fetch = realFetch;
+      useV2.getState().setSettingsFields([]);
+    }
   });
 });
 

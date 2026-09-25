@@ -2,7 +2,7 @@
 // (cards.extract, batched, budget feature 'cards') for Purchases/Finance/Travel/Deliveries/Calendar
 // mail they found nothing in, then subscriptions. A schedule queues sorted mail without a scan.
 import { query } from '../../services/db.js';
-import { getConfig } from '../config.js';
+import { getConfig, withinAnalysis, analysisDays } from '../config.js';
 import { enqueue } from '../jobs.js';
 import { guardedFetch, ATTACHMENT_JOB } from '../core/mailYield.js';
 import { runPrompt } from '../prompts/index.js';
@@ -201,9 +201,8 @@ export async function runCardsJob({ userId, messageIds = [] }, { now = new Date(
   // Reflex, newest first, rate-limited per job: Records mail in a data bundle, and People/Records/
   // Screener mail whose subject or sender says it is an order, booking, invoice, ticket or delivery.
   const bundles = new Set(Array.isArray(cfg['cards.reflexBundles']) ? cfg['cards.reflexBundles'] : []);
-  const maxAge = cfg['cards.reflexMaxAgeDays'] * 86400_000;
   const eligible = candidates
-    .filter((r) => reflexEligible(r, { bundles, signalReflex: cfg['cards.signalReflex'] !== false }) && (!maxAge || new Date(now) - new Date(r.date) <= maxAge))
+    .filter((r) => reflexEligible(r, { bundles, signalReflex: cfg['cards.signalReflex'] !== false }) && withinAnalysis(cfg, r.date, new Date(now).getTime()))
     .sort((a, b) => new Date(b.date) - new Date(a.date));
   const size = cfg['cards.batchSize'];
   const allowed = cfg['llm.baseUrl'] ? cfg['cards.reflexPerJob'] * size : 0;
@@ -368,13 +367,13 @@ export async function scanTick() {
         `SELECT s.message_id FROM hedwig_sort s JOIN messages m ON m.id = s.message_id
            LEFT JOIN hedwig_cards_scan x ON x.message_id = s.message_id
           WHERE s.user_id = $1 AND s.stream <> 'spam' AND NOT m.is_deleted AND NOT s.own
-            AND m.date > NOW() - make_interval(days => $2::int)
+            AND ($2::int = 0 OR m.date > NOW() - make_interval(days => $2::int))
             AND (x.message_id IS NULL OR x.version <> $3
                  OR (x.state = 'deferred' AND x.scanned_at < NOW() - INTERVAL '1 hour')
                  OR (x.state = 'waiting' AND x.scanned_at < NOW() - INTERVAL '1 day'))
           ORDER BY m.date DESC
           LIMIT $4`,
-        [userId, cfg['cards.maxAgeDays'], CARDS_VERSION, cfg['cards.scanBatch']],
+        [userId, analysisDays(cfg), CARDS_VERSION, cfg['cards.scanBatch']],
       );
       const ids = rows.map((r) => r.message_id);
       if (!ids.length) continue;

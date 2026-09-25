@@ -2,7 +2,8 @@ import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('../services/db.js', () => ({ query: vi.fn(async () => ({ rows: [] })), pool: {} }));
 
-const { resolveField, coerce, envNameFor, SCHEMA } = await import('./config.js');
+const { resolveField, coerce, envNameFor, SCHEMA, analysisDays, withinAnalysis, describeConfig, invalidateConfigCache } = await import('./config.js');
+const { query } = await import('../services/db.js');
 const { clampEffort, extractJson } = await import('./llm.js');
 const { hashEmbed, cosine, toVectorLiteral, fromVectorLiteral } = await import('./embeddings.js');
 const { stripQuoted, messageText, addressesOf } = await import('./text.js');
@@ -20,6 +21,37 @@ describe('config', () => {
     expect(resolveField(f, { user: { 'triage.needsYouThreshold': 0.4 }, system: { 'triage.needsYouThreshold': 0.6 } })).toBe(0.4);
     const sys = SCHEMA.find((x) => x.key === 'llm.baseUrl');
     expect(resolveField(sys, { user: { 'llm.baseUrl': 'http://evil' }, env: {} })).toBe('http://llm-proxy.cls/v1');
+  });
+  it('analysis.historyDays: per user over a household default, 0 = all mail', async () => {
+    const f = SCHEMA.find((x) => x.key === 'analysis.historyDays');
+    expect(f).toMatchObject({ scope: 'user', default: 0 });
+    expect(resolveField(f, { env: {} })).toBe(0);
+    expect(resolveField(f, { system: { 'analysis.historyDays': 365 }, env: {} })).toBe(365);
+    expect(resolveField(f, { user: { 'analysis.historyDays': 0 }, system: { 'analysis.historyDays': 365 }, env: {} })).toBe(0);
+    for (const gone of ['cards.maxAgeDays', 'cards.reflexMaxAgeDays', 'labels.historyDays']) expect(SCHEMA.some((x) => x.key === gone)).toBe(false);
+
+    const now = Date.parse('2026-09-25T12:00:00Z');
+    expect(analysisDays({ 'analysis.historyDays': 0 })).toBe(0);
+    expect(analysisDays({ 'analysis.historyDays': 90 })).toBe(90);
+    expect(withinAnalysis({ 'analysis.historyDays': 0 }, '2001-01-01', now)).toBe(true);
+    expect(withinAnalysis({ 'analysis.historyDays': 90 }, '2026-07-01', now)).toBe(true);
+    expect(withinAnalysis({ 'analysis.historyDays': 90 }, '2026-06-01', now)).toBe(false);
+    expect(withinAnalysis({ 'analysis.historyDays': 90 }, null, now)).toBe(true);
+
+    // The settings UI shows the household default next to a person's own choice.
+    query.mockImplementation(async (sql) => {
+      if (/system_settings/.test(sql)) return { rows: [{ value: { 'analysis.historyDays': 365 } }] };
+      if (/hedwig_user_settings/.test(sql)) return { rows: [{ settings: { 'analysis.historyDays': 0 } }] };
+      return { rows: [] };
+    });
+    invalidateConfigCache();
+    try {
+      const row = (await describeConfig('u1')).find((x) => x.key === 'analysis.historyDays');
+      expect(row).toMatchObject({ value: 0, inherited: 365, source: 'user' });
+    } finally {
+      query.mockImplementation(async () => ({ rows: [] }));
+      invalidateConfigCache();
+    }
   });
   it('clamps numbers and rejects bad enums', () => {
     const n = SCHEMA.find((x) => x.key === 'agent.maxSteps');

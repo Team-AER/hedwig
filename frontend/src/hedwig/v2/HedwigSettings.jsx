@@ -1,5 +1,5 @@
 // Settings → Hedwig, the v2 part. The Power mode switch (the rail no longer carries it), then
-// Simple: five switches and the look (a blue-family accent, blur, light or dark, dark mode for
+// Simple: five switches, how far back Hedwig analyzes mail, and the look (a blue-family accent, blur, light or dark, dark mode for
 // mail). Power adds the rules list with dry-run (/sort/rules), the model routing table (read-only
 // unless admin), prompt versions (admin) and index status (/index/status). Section headers are the 11px/600
 // SectionLabel, rows 13px, fields radius 8 on --hw-field; mono only for model and prompt ids.
@@ -35,6 +35,37 @@ export function simpleSwitches() {
     { key: 'spam.autoMove', label: tv('hedwig.v2.settings.autoSpam', 'Move spam out of the way'), help: tv('hedwig.v2.settings.autoSpamHelp', 'Confident spam goes to the Junk folder. Hedwig never deletes mail.') },
     { key: 'ui.helpMeWrite', label: tv('hedwig.v2.settings.helpWrite', 'Help me write'), help: tv('hedwig.v2.settings.helpWriteHelp', 'Quick replies and drafts in your voice under each thread.') },
   ];
+}
+
+// How far back Hedwig analyzes mail (analysis.historyDays, 0 = all mail). Search always covers all of it.
+export const HISTORY_DAYS = [0, 1825, 730, 365, 90, 30];
+
+export function historyLabel(days) {
+  const n = Number(days) || 0;
+  if (!n) return tv('hedwig.v2.settings.historyAll', 'All mail');
+  if (n % 365 === 0) return n === 365 ? tv('hedwig.v2.settings.historyYear', 'The last year') : tv('hedwig.v2.settings.historyYears', 'The last {{n}} years', { n: n / 365 });
+  return tv('hedwig.v2.settings.historyDays', 'The last {{n}} days', { n });
+}
+
+function HistoryRow({ field, onSave }) {
+  const label = tv('hedwig.v2.settings.history', 'Analyze mail from');
+  const own = field.source === 'user';
+  const value = Number(field.value) || 0;
+  const days = HISTORY_DAYS.includes(value) ? HISTORY_DAYS : [...HISTORY_DAYS, value];
+  const selectStyle = { font: 'inherit', fontSize: 13, color: V.ink, background: V.field, border: `1px solid ${V.line}`, borderRadius: 8, height: 28, boxSizing: 'border-box', padding: '0 8px', flexShrink: 0, maxWidth: '100%' };
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 0', borderTop: `1px solid ${V.line}`, flexWrap: 'wrap' }}>
+      <span style={{ flexGrow: 1, flexBasis: 240, display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+        <span style={{ fontSize: 13 }}>{label}</span>
+        <span style={{ fontSize: 12, color: V.muted }}>{tv('hedwig.v2.settings.historyHelp', 'Summaries, topics, facts, cards and learning cover this much of your mail. Search always covers all of it.')}</span>
+      </span>
+      <select aria-label={label} data-history-setting="" value={own ? String(value) : 'household'} style={selectStyle}
+        onChange={(e) => onSave(e.target.value === 'household' ? null : Number(e.target.value))}>
+        <option value="household">{tv('hedwig.v2.settings.historyHousehold', 'Household default ({{choice}})', { choice: historyLabel(field.inherited) })}</option>
+        {days.map((d) => <option key={d} value={String(d)}>{historyLabel(d)}</option>)}
+      </select>
+    </div>
+  );
 }
 
 function Switch({ checked, onChange, label, help, disabled, note, title, ...rest }) {
@@ -92,6 +123,7 @@ function SimpleSection() {
             onChange={(v) => save(s.key, v)} />
         );
       })}
+      {byKey.get('analysis.historyDays') && <HistoryRow field={byKey.get('analysis.historyDays')} onSave={(v) => save('analysis.historyDays', v)} />}
       <ErrorLine error={error} />
     </Section>
   );

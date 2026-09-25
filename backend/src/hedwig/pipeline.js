@@ -8,7 +8,9 @@
 //   history  — by absence: any message in an included folder without a hedwig_msg row, whatever
 //              its age, newest first. Folders come from the coverage ledger (indexer/coverage.js),
 //              whose states are recounted from absence, so history never "finishes" for good while
-//              mail is unseen. pipeline.backfillDays only limits which steps run (see runSteps).
+//              mail is unseen. pipeline.backfillDays only limits which steps run (see runSteps); the
+//              context module's analysis catch-up (context/history.js) brings the model steps to
+//              older mail inside each user's analysis.historyDays.
 import { query } from '../services/db.js';
 import { getConfig } from './config.js';
 import { setState } from './state.js';

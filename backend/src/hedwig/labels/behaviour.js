@@ -19,15 +19,16 @@
 //   unsubscribe        messages.unsubscribed_at on any message from the sender → not people (silver)
 // Gmail archives into All Mail, which is not synced, so Gmail archives are invisible here.
 //
-// Windows: replies and sent mail are facts whatever their age, so they are read over
-// labels.historyDays (a newly connected account has years of history and little recent
-// behaviour); reads, archives, spam marks and unsubscribes over labels.windowDays.
+// Windows: replies and sent mail are facts whatever their age, so they are read over the user's
+// analysis window, analysis.historyDays, 0 = all mail (a newly connected account has years of
+// history and little recent behaviour); reads, archives, spam marks and unsubscribes over
+// labels.windowDays.
 //
 // Behaviour also feeds the question queue (behaviourCandidates): a sender you have replied to or
 // written to whose latest mail Hedwig sorted into Reading or Records, and mail in the server spam
 // folder that sorting thinks is real (a rescue candidate).
 import { query } from '../../services/db.js';
-import { getConfig } from '../config.js';
+import { getConfig, analysisDays } from '../config.js';
 import { getState, setState } from '../state.js';
 import { outgoingSql, userAddresses } from '../triage/store.js';
 import { upsertLabels } from './store.js';
@@ -192,7 +193,7 @@ async function fetchReplies(userId, addrs, days, hours) {
             AND ((m.message_id IS NOT NULL AND o.in_reply_to = m.message_id) OR (m.thread_key IS NOT NULL AND o.thread_key = m.thread_key))
             AND ${outgoingSql('o', 'ofo', '$2')}
           ORDER BY 2 DESC, o.date LIMIT 1) r ON true
-      WHERE NOT m.is_deleted AND m.date > NOW() - make_interval(days => $3::int)
+      WHERE NOT m.is_deleted AND ($3::int = 0 OR m.date > NOW() - make_interval(days => $3::int))
         AND NOT ${outgoingSql('m', 'f', '$2')} AND ${NOT_BIN}`,
     [userId, addrs, days, hours],
   );
@@ -271,14 +272,14 @@ async function fetchSentTo(userId, addrs, days) {
          JOIN email_accounts a ON a.id = m.account_id AND a.user_id = $1
          LEFT JOIN folders f ON f.account_id = m.account_id AND f.path = m.folder
          CROSS JOIN LATERAL jsonb_array_elements(COALESCE(m.to_addresses, '[]'::jsonb) || COALESCE(m.cc_addresses, '[]'::jsonb)) t
-        WHERE ${outgoingSql('m', 'f', '$2')} AND NOT m.is_deleted AND m.date > NOW() - make_interval(days => $3::int)
+        WHERE ${outgoingSql('m', 'f', '$2')} AND NOT m.is_deleted AND ($3::int = 0 OR m.date > NOW() - make_interval(days => $3::int))
         GROUP BY 1)
      SELECT m.id, m.message_id AS mid, lower(m.from_email) AS sender, m.date, s.n AS sent_count, s.last_sent
        FROM messages m
        JOIN email_accounts a ON a.id = m.account_id AND a.user_id = $1
        LEFT JOIN folders f ON f.account_id = m.account_id AND f.path = m.folder
        JOIN sent s ON s.addr = lower(m.from_email)
-      WHERE NOT m.is_deleted AND m.date > NOW() - make_interval(days => $3::int)
+      WHERE NOT m.is_deleted AND ($3::int = 0 OR m.date > NOW() - make_interval(days => $3::int))
         AND NOT ${outgoingSql('m', 'f', '$2')} AND ${NOT_BIN}
         AND NOT (COALESCE(m.is_bulk, false) OR m.list_unsubscribe IS NOT NULL)
         AND lower(m.from_email) <> ALL($2::text[])`,
@@ -307,7 +308,7 @@ async function fetchUnsubscribed(userId, days) {
 export async function behaviourForUser(userId, addresses, cfg) {
   const addrs = [...(addresses || [])];
   const days = cfg['labels.windowDays'];
-  const history = Math.max(days, cfg['labels.historyDays'] ?? 3650);
+  const history = analysisDays(cfg) && Math.max(days, analysisDays(cfg));
   const [replies, archived, reads, spamMarks, sentTo, unsubscribed] = await Promise.all([
     fetchReplies(userId, addrs, history, cfg['labels.replyWithinHours']),
     fetchArchived(userId, addrs, days),

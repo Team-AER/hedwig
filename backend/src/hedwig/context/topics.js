@@ -10,7 +10,7 @@ import { chatJson } from '../llm.js';
 import { enqueue } from '../jobs.js';
 import { cosine, embeddingProfile, fromVectorLiteral, l2, toVectorLiteral } from '../embeddings.js';
 import { messageText } from '../text.js';
-import { contextEnabled, groupByUser } from './entities.js';
+import { analysisGroups } from './entities.js';
 import { isBulkMessage } from './util.js';
 
 const CANDIDATE_TOPICS = 2000;
@@ -217,9 +217,7 @@ export function needsLabel(topic, minMessages) {
 
 export async function runTopicsStep(rows) {
   const profile = await embeddingProfile();
-  for (const [userId, userRows] of groupByUser(rows)) {
-    const cfg = await contextEnabled(userId);
-    if (!cfg) continue;
+  for (const { userId, rows: userRows, cfg } of await analysisGroups(rows)) {
     const [state, spam] = await Promise.all([
       loadState(userId, userRows, profile, cfg['context.topicThreshold']),
       query(

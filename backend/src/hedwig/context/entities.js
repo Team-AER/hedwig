@@ -4,7 +4,7 @@
 // one entity (all of the user's own addresses share one 'self' entity). Counts are bumped only for
 // hedwig_message_entities rows this run actually inserted, which makes re-running a batch a no-op.
 import { query } from '../../services/db.js';
-import { getConfig } from '../config.js';
+import { getConfig, withinAnalysis } from '../config.js';
 import { addressesOf, domainOf } from '../text.js';
 import { cleanName, isAutomatedAddress, isBulkMessage, orgNameFromDomain, registrableDomain } from './util.js';
 
@@ -259,6 +259,18 @@ async function processUser(userId, rows, cfg) {
 export async function contextEnabled(userId) {
   const cfg = await getConfig(userId);
   return cfg.enabled && cfg['features.context'] ? cfg : null;
+}
+
+/** Rows per user whose context engine is on, cut to that user's analysis window (analysis.historyDays). */
+export async function analysisGroups(rows) {
+  const out = [];
+  for (const [userId, userRows] of groupByUser(rows)) {
+    const cfg = await contextEnabled(userId);
+    if (!cfg) continue;
+    const inWindow = userRows.filter((r) => withinAnalysis(cfg, r.date));
+    if (inWindow.length) out.push({ userId, rows: inWindow, cfg });
+  }
+  return out;
 }
 
 export function groupByUser(rows) {

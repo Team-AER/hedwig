@@ -10,7 +10,7 @@ import { enqueue } from '../jobs.js';
 import { MESSAGE_COLUMNS, decorate } from '../pipeline.js';
 import { messageHeader, messageText } from '../text.js';
 import { requestBody } from '../core/bodies.js';
-import { contextEnabled, groupByUser } from './entities.js';
+import { analysisGroups } from './entities.js';
 import { endOfDayInZone, isBulkMessage, isoDay, nearDuplicate, phraseSimilarity } from './util.js';
 
 const MAX_COMMITMENTS = 10;
@@ -218,13 +218,10 @@ function extractionPriority(date) {
 }
 
 export async function runExtractStep(rows) {
-  for (const [userId, userRows] of groupByUser(rows)) {
-    const cfg = await contextEnabled(userId);
-    if (!cfg) continue;
+  for (const { userId, rows: userRows, cfg } of await analysisGroups(rows)) {
     const ids = userRows.map((r) => r.id);
     const enqueueIds = [];
     if (cfg['features.extraction']) {
-      const cutoff = Date.now() - cfg['pipeline.backfillDays'] * DAY;
       const [{ rows: spam }, { rows: senders }] = await Promise.all([
         query(
           `SELECT message_id FROM hedwig_triage WHERE message_id = ANY($1::uuid[])
@@ -243,7 +240,6 @@ export async function runExtractStep(rows) {
       const withPeople = new Set(senders.filter((r) => r.has_person).map((r) => r.message_id));
       for (const r of userRows) {
         if (spamIds.has(r.id) || isBulkMessage(r) || !withPeople.has(r.id)) continue;
-        if (r.date && new Date(r.date).getTime() < cutoff) continue;
         await enqueue('context.extract', { messageId: r.id }, { userId, dedupeKey: `extract:${r.id}`, priority: extractionPriority(r.date) });
         enqueueIds.push(r.id);
       }
@@ -488,6 +484,9 @@ export async function runExtraction({ messageId, deferred = false, recheck = fal
   });
   if (data == null) throw new Error('extraction: model returned no JSON');
   const ex = normaliseExtraction(data, { minConfidence: cfg['context.extractMinConfidence'], messageDate: row.date || new Date(), timeZone });
+  // History older than the live window still gives facts, but not open commitments: a promise from
+  // years ago would only land as overdue.
+  if (row.date && Date.now() - new Date(row.date).getTime() > cfg['pipeline.backfillDays'] * DAY) ex.commitments = [];
   const created = await applyExtraction(row, ex, { participants, topicId, open });
   await settleReplies(userId, row.thread_key, row.user_addresses || new Set());
   await markDone();

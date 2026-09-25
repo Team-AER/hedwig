@@ -8,6 +8,7 @@ import { runEntitiesStep } from './entities.js';
 import { embedCatchUp, ensureVectorIndex, runEmbedStep } from './embed.js';
 import { labelTopic, runTopicsStep } from './topics.js';
 import { runExtractStep, runExtraction } from './extract.js';
+import { analysisCatchUp } from './history.js';
 import { refreshStaleSummaries, summarizeEntity, summarizeTopic } from './summaries.js';
 import { sweepOverdue } from './commitments.js';
 import { contextRoutes } from './routes.js';
@@ -36,6 +37,7 @@ export default {
     defineJob('context.summarizeTopic', ({ topicId }) => summarizeTopic(topicId), { timeoutMs: 3 * 60_000 });
 
     defineSchedule({ name: 'context.embedCatchUp', everySec: 120, run: () => embedCatchUp() });
+    defineSchedule({ name: 'context.analysisCatchUp', everySec: 60, run: () => analysisCatchUp() });
     defineSchedule({ name: 'context.refreshSummaries', everySec: 1800, run: () => refreshStaleSummaries() });
     defineSchedule({ name: 'context.overdueSweep', everySec: 900, run: () => sweepOverdue() });
 

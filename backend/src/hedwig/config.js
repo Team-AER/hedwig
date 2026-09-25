@@ -28,6 +28,7 @@ export const SCHEMA = [
   { key: 'features.insights', type: 'boolean', default: true, group: 'general', label: 'Insights and briefings', scope: 'user' },
   { key: 'features.agent', type: 'boolean', default: true, group: 'general', label: 'Agent and automations', scope: 'user' },
   { key: 'features.extraction', type: 'boolean', default: true, group: 'general', label: 'Model-based extraction of commitments and facts', scope: 'user' },
+  { key: 'analysis.historyDays', type: 'number', default: 0, min: 0, max: 36500, group: 'general', label: 'Analyze mail from the last (days)', help: '0 = all mail. Limits summaries, topics, extraction, cards and what Hedwig learns from your history. Search indexing always covers all mail. The admin value is the household default; each person can override it.', scope: 'user' },
 
   // ── Model gateway ──────────────────────────────────────────────────────────
   { key: 'llm.baseUrl', type: 'string', default: 'http://llm-proxy.cls/v1', group: 'models', label: 'OpenAI-compatible base URL', help: 'Leave empty to disable every model feature.' },
@@ -65,7 +66,7 @@ export const SCHEMA = [
   // ── Pipeline ───────────────────────────────────────────────────────────────
   { key: 'pipeline.scanIntervalSec', type: 'number', default: 15, min: 2, max: 3600, group: 'pipeline', label: 'Scan for new mail every (s)' },
   { key: 'pipeline.batchSize', type: 'number', default: 50, min: 1, max: 1000, group: 'pipeline', label: 'Messages per scan batch' },
-  { key: 'pipeline.backfillDays', type: 'number', default: 365, min: 0, max: 10000, group: 'pipeline', label: 'Backfill history (days)', help: 'Older mail is indexed for people but not embedded or extracted.' },
+  { key: 'pipeline.backfillDays', type: 'number', default: 365, min: 0, max: 10000, group: 'pipeline', label: 'Run triage and work on history up to (days)', help: 'Older mail still gets sorted, indexed and analyzed; how far analysis goes is each person\'s analysis.historyDays.' },
   { key: 'pipeline.workerConcurrency', type: 'number', default: 4, min: 1, max: 64, group: 'pipeline', label: 'Worker job concurrency' },
   { key: 'pipeline.excludeSpecialUse', type: 'json', default: ['\\Junk', '\\Trash', '\\Drafts', '\\All', '\\Flagged', '\\Important'], group: 'pipeline', label: 'Skip folders with these IMAP special-use flags' },
   { key: 'pipeline.excludeFolders', type: 'json', default: [], group: 'pipeline', label: 'Also skip these folder paths' },
@@ -270,8 +271,6 @@ export const SCHEMA = [
   { key: 'cards.batchSize', type: 'number', default: 4, min: 1, max: 8, group: 'cards', label: 'Messages per Reflex card extraction call' },
   { key: 'cards.reflexPerJob', type: 'number', default: 5, min: 0, max: 50, group: 'cards', label: 'Reflex extraction calls per cards job (rate limit)' },
   { key: 'cards.reflexBundles', type: 'json', default: ['purchases', 'finance', 'travel', 'deliveries', 'calendar'], group: 'cards', label: 'Bundles whose mail goes to the Reflex model when no deterministic card is found' },
-  { key: 'cards.maxAgeDays', type: 'number', default: 400, min: 1, max: 3650, group: 'cards', label: 'Make cards from mail up to (days) old' },
-  { key: 'cards.reflexMaxAgeDays', type: 'number', default: 365, min: 0, max: 3650, group: 'cards', label: 'Ask the Reflex model about mail up to (days) old' },
   { key: 'cards.textChars', type: 'number', default: 3000, min: 300, max: 20000, group: 'cards', label: 'Characters of each message sent to the Reflex model' },
   { key: 'cards.subscriptionMinCharges', type: 'number', default: 3, min: 3, max: 12, group: 'cards', label: 'Receipts from one merchant at a steady interval before it counts as a subscription (at least 3: two charges cannot show a cadence)' },
   { key: 'cards.codeFreshMin', type: 'number', default: 15, min: 1, max: 1440, group: 'cards', label: 'Show a one-time code on the Brief for (min) after it arrives' },
@@ -320,7 +319,6 @@ export const SCHEMA = [
   // --- end v2 cards audit ---
   // --- v2 index audit ---
   { key: 'labels.judgeDeferHours', type: 'number', default: 18, min: 0, max: 168, group: 'labels', label: 'While Tier 2 is degraded, wait up to (hours) for it before judging on Tier 1 alone', help: 'The judge needs two different models. Until then the nightly job waits (no attempt spent); after this many hours it runs only the Tier 1 side and marks its labels single-judge.' },
-  { key: 'labels.historyDays', type: 'number', default: 3650, min: 30, max: 36500, group: 'labels', label: 'Learn "you replied" and "you wrote to them" labels from mail up to (days) old', help: 'Replies and sent mail are facts whatever their age; a newly connected account has little recent behaviour.' },
   { key: 'labels.behaviourQuestions', type: 'number', default: 5, min: 0, max: 50, group: 'labels', label: 'Questions queued per behaviour sweep where what you did disagrees with how Hedwig sorted', help: 'They join the judge\'s questions in one queue; at most labels.questionsPerDay are asked a day.' },
   { key: 'profile.deferHours', type: 'number', default: 24, min: 0, max: 168, group: 'profile', label: 'While Tier 2 is degraded, wait up to (hours) before rebuilding the profile on Tier 1 (marked provisional)' },
   { key: 'profile.fallbackDays', type: 'number', default: 365, min: 30, max: 3650, group: 'profile', label: 'When the last profile.windowDays hold too few facts, learn from up to (days) instead' },
@@ -329,6 +327,19 @@ export const SCHEMA = [
 ];
 
 const BY_KEY = new Map(SCHEMA.map((f) => [f.key, f]));
+
+/** How many days back a user's mail is analyzed; 0 = all mail. Takes a resolved config. */
+export function analysisDays(cfg) {
+  const n = Math.round(Number(cfg?.['analysis.historyDays']));
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/** Whether a message dated `date` is inside the user's analysis window. Undated mail is. */
+export function withinAnalysis(cfg, date, now = Date.now()) {
+  const days = analysisDays(cfg);
+  if (!days || !date) return true;
+  return new Date(date).getTime() >= now - days * 86400_000;
+}
 
 export function envNameFor(key) {
   return 'HEDWIG_' + key.replace(/([a-z0-9])([A-Z])/g, '$1_$2').replace(/\./g, '_').toUpperCase();
@@ -463,7 +474,8 @@ function makeView(values) {
   });
 }
 
-/** Where each value came from — for the settings UI. Secrets are masked. */
+/** Where each value came from — for the settings UI. `inherited` is the value without this user's
+ * override (the household default for scope 'user' keys). Secrets are masked. */
 export async function describeConfig(userId) {
   const [system, user] = await Promise.all([loadSystemOverrides(), loadUserOverrides(userId)]);
   return SCHEMA.map((field) => {
@@ -472,8 +484,9 @@ export async function describeConfig(userId) {
     else if (system[field.key] !== undefined) source = 'admin';
     else if (envValue(field) !== undefined) source = 'env';
     let value = resolveField(field, { user, system });
-    if (field.type === 'secret') value = value ? '••••••••' : '';
-    return { ...field, value, source, env: envNameFor(field.key) };
+    let inherited = resolveField(field, { system });
+    if (field.type === 'secret') { value = value ? '••••••••' : ''; inherited = inherited ? '••••••••' : ''; }
+    return { ...field, value, inherited, source, env: envNameFor(field.key) };
   });
 }
 

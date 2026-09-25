@@ -33,7 +33,7 @@ const cfg = {
   'labels.windowDays': 30, 'labels.replyWithinHours': 24, 'labels.archiveUnreadMin': 3, 'labels.readEngagedSec': 30,
   'labels.bulkArchiveMin': 5, 'labels.askTriplesPerNight': 10, 'eval.gatePoints': 2, 'llm.probe.enabled': false,
 };
-vi.mock('../config.js', () => ({ getConfig: vi.fn(async () => ({ ...cfg, get: (k) => cfg[k] })) }));
+vi.mock('../config.js', async (importOriginal) => ({ ...(await importOriginal()), getConfig: vi.fn(async () => ({ ...cfg, get: (k) => cfg[k] })) }));
 
 const behaviour = await import('./behaviour.js');
 const { stratifiedSample, stratumOf } = await import('./sample.js');
@@ -688,14 +688,26 @@ describe('question queue', () => {
     expect(out[0].priority).toBeGreaterThan(out[1].priority);
   });
 
-  it('replies and sent mail are read over labels.historyDays, the rest over labels.windowDays', async () => {
-    db.routes = [];
-    await behaviour.behaviourForUser(USER, new Set(['me@x.com']), { ...cfg, 'labels.historyDays': 3650, 'labels.behaviourQuestions': 0 });
-    const replies = db.calls.find((c) => /JOIN LATERAL/.test(c.sql));
-    const sentTo = db.calls.find((c) => /WITH sent AS/.test(c.sql));
-    const archived = db.calls.find((c) => /WITH arch AS/.test(c.sql));
-    expect(replies.params[2]).toBe(3650);
-    expect(sentTo.params[2]).toBe(3650);
-    expect(archived.params[2]).toBe(30);
+  it('replies and sent mail are read over the analysis window (0 = all mail), the rest over labels.windowDays', async () => {
+    const read = async (historyDays) => {
+      db.routes = [];
+      db.calls.length = 0;
+      await behaviour.behaviourForUser(USER, new Set(['me@x.com']), { ...cfg, 'analysis.historyDays': historyDays, 'labels.behaviourQuestions': 0 });
+      return {
+        replies: db.calls.find((c) => /JOIN LATERAL/.test(c.sql)),
+        sentTo: db.calls.find((c) => /WITH sent AS/.test(c.sql)),
+        archived: db.calls.find((c) => /WITH arch AS/.test(c.sql)),
+      };
+    };
+    const all = await read(0);
+    expect(all.replies.params[2]).toBe(0);
+    expect(all.sentTo.params[2]).toBe(0);
+    expect(all.replies.sql).toMatch(/\$3::int = 0 OR m\.date > NOW\(\)/);
+    expect(all.archived.params[2]).toBe(30);
+    const year = await read(365);
+    expect(year.replies.params[2]).toBe(365);
+    expect(year.sentTo.params[2]).toBe(365);
+    // Never narrower than the behaviour window.
+    expect((await read(7)).replies.params[2]).toBe(30);
   });
 });
