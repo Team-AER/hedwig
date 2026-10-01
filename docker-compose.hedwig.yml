@@ -46,6 +46,10 @@ x-backend-env: &backend-env
   HEDWIG_INDEX_TIKA_URL: ${HEDWIG_INDEX_TIKA_URL:-http://10.0.1.69:9998}
   HEDWIG_PLUGINS_DIR: /plugins
   HEDWIG_INSIGHTS_TIMEZONE: ${HEDWIG_INSIGHTS_TIMEZONE:-UTC}
+  # Sorting: the decision model (System One via llm-proxy) and how far the classifier may decide alone.
+  HEDWIG_SORT_DECISION_ENABLED: ${HEDWIG_SORT_DECISION_ENABLED:-true}
+  HEDWIG_SORT_DECISION_MODEL: ${HEDWIG_SORT_DECISION_MODEL:-aer-laya}
+  HEDWIG_SORT_CLASSIFIER_DECIDE_ABOVE: ${HEDWIG_SORT_CLASSIFIER_DECIDE_ABOVE:-0.85}
   TZ: ${TZ:-UTC}
 
 services:
