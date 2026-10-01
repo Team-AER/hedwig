@@ -15,8 +15,8 @@ async function enqueueResort(userId, reason) {
 export async function retrainSortDue(now = new Date()) {
   const { rows } = await query(
     `SELECT s.user_id,
-            COUNT(*) FILTER (WHERE s.layer IN ('user','rule') OR (s.layer IN ('reflex','reasoning') AND s.confidence >= 0.8))::int AS labels,
-            MAX(s.decided_at) FILTER (WHERE s.layer IN ('user','rule','reflex','reasoning')) AS last_label,
+            COUNT(*) FILTER (WHERE s.layer IN ('user','rule') OR (s.layer IN ('decision','reflex','reasoning') AND s.confidence >= 0.8))::int AS labels,
+            MAX(s.decided_at) FILTER (WHERE s.layer IN ('user','rule','decision','reflex','reasoning')) AS last_label,
             (SELECT MIN(m.trained_at) FROM hedwig_sort_models m WHERE m.user_id = s.user_id) AS trained_at,
             (SELECT t.trained_at FROM hedwig_triage_models t WHERE t.user_id = s.user_id) AS triage_trained_at
        FROM hedwig_sort s WHERE NOT s.own GROUP BY s.user_id`,

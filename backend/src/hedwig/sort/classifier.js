@@ -104,7 +104,7 @@ export async function loadHeads(userId) {
   return Object.fromEntries(rows.map((r) => [r.head, r]));
 }
 
-const LABEL_WEIGHT = { user: 3, rule: 1.5, reflex: 0.7, reasoning: 0.9 };
+const LABEL_WEIGHT = { user: 3, rule: 1.5, decision: 0.6, reflex: 0.7, reasoning: 0.9 };
 
 /**
  * The server spam folder alone is a weak label: a spam-folder row teaches the spam head only when
@@ -113,7 +113,7 @@ const LABEL_WEIGHT = { user: 3, rule: 1.5, reflex: 0.7, reasoning: 0.9 };
  */
 export function spamLabelOf(r) {
   if (r.spam === 'rescued') return 0;
-  const judged = ['user', 'reflex', 'reasoning'].includes(r.layer) || r.spam === 'phishing';
+  const judged = ['user', 'decision', 'reflex', 'reasoning'].includes(r.layer) || r.spam === 'phishing';
   if (r.in_spam_folder && !judged) return null;
   return r.spam === 'suspected' || r.spam === 'phishing' || r.stream === 'spam' ? 1 : 0;
 }
@@ -142,7 +142,7 @@ export async function trainHeads(userId) {
   const { rows } = await query(
     `SELECT features, stream, proposed_stream, spam, layer, confidence, decided_at, in_spam_folder FROM hedwig_sort
       WHERE user_id = $1 AND features IS NOT NULL AND NOT own
-        AND (layer = 'user' OR (layer IN ('reflex','reasoning') AND confidence >= 0.8)
+        AND (layer = 'user' OR (layer IN ('decision','reflex','reasoning') AND confidence >= 0.8)
              OR (layer = 'rule' AND engine_version = $2))
       ORDER BY decided_at DESC LIMIT 20000`,
     [userId, engineStamp()],

@@ -88,6 +88,10 @@ export function mockGateway({ baseUrl = 'http://llm-proxy.cls/v1', catalog = DEF
     catalogUrl: catUrl,
     calls: [],
     embeddings: [],
+    // System One decision requests (POST /v1/systemone). Set gw.systemone = (body, headers) => answer
+    // (an object to return, or { status, error } for an error); requests are kept in gw.decisions.
+    decisions: [],
+    systemone: null,
 
     on(workflow, handler) {
       routes.set(workflow, Array.isArray(handler) && !handler[SPEC] ? { queue: [...handler] } : { handler });
@@ -135,6 +139,12 @@ export function mockGateway({ baseUrl = 'http://llm-proxy.cls/v1', catalog = DEF
           data: inputs.map((t, index) => ({ object: 'embedding', index, embedding: hashVector(t, body.dimensions || dims) })),
           usage: { prompt_tokens: inputs.reduce((a, t) => a + estimate(t), 0) },
         });
+      }
+      if (path === '/systemone') {
+        gw.decisions.push({ body, headers });
+        const out = gw.systemone ? await gw.systemone(body, headers) : { status: 404, error: `model "${body.model}" not found` };
+        if (out && out.status && out.status !== 200) return json({ error: out.error || 'mock error' }, out.status);
+        return json(out);
       }
       if (path !== '/chat/completions') return new Response(`mockGateway: no endpoint ${path}`, { status: 404 });
 

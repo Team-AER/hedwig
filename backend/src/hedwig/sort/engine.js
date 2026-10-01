@@ -11,6 +11,7 @@ import { enqueue } from '../jobs.js';
 import { llmAvailable } from '../llm.js';
 import { messageText, addressesOf, domainOf } from '../text.js';
 import { MESSAGE_COLUMNS, decorate } from '../pipeline.js';
+import { decideBatch } from './decision.js';
 import { HEDWIG_HOOKS, collectHedwigHook, runHedwigHook } from '../hooks.js';
 import { stage1 } from '../triage/signals.js';
 import { loadSenderStats, outgoingSql } from '../triage/store.js';
@@ -314,6 +315,8 @@ export function decideCheap(row, ctx) {
 // ── Merge model output ──────────────────────────────────────────────────────
 
 const SPAM_RANK = { clean: 0, suspected: 1, phishing: 2 };
+// Layers decided by a model (the decision model, Reflex, the reasoning model).
+const MODEL_LAYERS = ['decision', 'reflex', 'reasoning'];
 // A model's "suspected" verdict moves mail out of the streams only when it is this sure.
 const SUSPECTED_TO_SPAM = 0.8;
 
@@ -355,7 +358,8 @@ export function mergeReflex(d, r, { bundles = [] } = {}) {
   if (d.stream !== 'people') { d.needsYou = false; d.needsYouReason = null; } // Needs You is a People concept
   d.ruleMatches = r.matches || [];
   d.prompt = r.provenance || null;
-  d.signals.push({ name: r.layer, label: `${r.layer === 'reasoning' ? 'Reasoning model' : 'Reflex'}: ${r.reason || r.stream}`, weight: r.confidence });
+  const who = { reasoning: 'Reasoning model', decision: 'Decision model' }[r.layer] || 'Reflex';
+  d.signals.push({ name: r.layer, label: r.layer === 'decision' ? r.reason : `${who}: ${r.reason || r.stream}`, weight: r.confidence });
   if (d.needsScreen && d.senderDecision) d.needsScreen = false;
   return d;
 }
@@ -637,7 +641,7 @@ export async function sortRows(rows, { historical = false, allowReflex = true, o
         if (!historical && !d.own) await applyPluginVerdict(userId, row, d);
         // A model decision is only replaced by another model decision, or by the user's own rules
         // and sender decisions, which apply at once.
-        if (prev && ['reflex', 'reasoning'].includes(prev.layer) && !userAuthoritative(d) && !headerSettled(d)) {
+        if (prev && MODEL_LAYERS.includes(prev.layer) && !userAuthoritative(d) && !headerSettled(d)) {
           if (eligible && !row.is_outgoing) {
             await query(`UPDATE hedwig_sort SET pending = 'reflex' WHERE message_id = $1 AND user_id = $2 AND layer <> 'user'`, [row.id, userId]);
             toReflex.push(row.id);
@@ -701,12 +705,12 @@ export async function runReflexJob({ messageIds }, job = {}) {
   const rows = all.filter((r) => !spamRows.includes(r));
   if (!rows.length) return { sorted: 0, rescueChecked: spamRows.length };
   const ctx = await loadUserContext(userId, rows, cfg);
-  const todo = [];
+  let todo = [];
   for (const row of rows) {
     const prev = ctx.existing.get(row.id);
     if (prev?.layer === 'user') continue;
     // Judged by a model since this job was queued (a duplicate job, a sweep): nothing left to do.
-    if (prev && !prev.pending && ['reflex', 'reasoning'].includes(prev.layer)) continue;
+    if (prev && !prev.pending && MODEL_LAYERS.includes(prev.layer)) continue;
     const d = decideCheap(row, ctx);
     // The user's own rules and decisions are final, and so are newsletters the list headers
     // settled; the model is not asked to second-guess them.
@@ -717,9 +721,33 @@ export async function runReflexJob({ messageIds }, job = {}) {
     todo.push({ row, d, prev });
   }
   if (!todo.length) return { sorted: 0 };
+  const partsById = new Map();
+  for (const { row } of todo) partsById.set(row.id, await messagePartsFor(row.id, row, { userId }));
+  const rules = matchDescriptions(ctx.rules);
+  let sorted = 0;
+  let decided = 0;
+  // The decision model settles what it is sure of (stream, clean, needs-you); Reflex gets the rest.
+  // Natural-language rules need Reflex to read them, so with any such rule the layer stands aside.
+  if (cfg['sort.decision.enabled'] && cfg['sort.decision.model'] && !rules.length) {
+    const answers = await decideBatch(userId, todo.map(({ row, d }) => ({ row, d, parts: partsById.get(row.id) })), cfg);
+    for (const { row, d } of todo) {
+      const r = answers.get(row.id);
+      if (!r) continue;
+      mergeReflex(d, r, { bundles: ctx.bundles, cfg });
+      applyPostRules(d, row, ctx);
+      await finalize(userId, row, d, ctx, { pending: null });
+      sorted++;
+      decided++;
+    }
+    todo = todo.filter(({ row }) => !answers.has(row.id));
+    if (!todo.length) {
+      await bumpHits(userId, ctx.ruleHits);
+      return { sorted, decided, escalated: 0 };
+    }
+  }
   const items = [];
   for (const [index, { row, d }] of todo.entries()) {
-    const parts = await messagePartsFor(row.id, row, { userId });
+    const parts = partsById.get(row.id);
     items.push(reflexItem(row, parts, {
       index, userAddresses: ctx.userAddresses, sender: ctx.stats.get(d.keys.address || '') || null,
       decision: d.senderDecision && d.senderDecision.source !== 'import' ? d.senderDecision.decision : null,
@@ -729,7 +757,7 @@ export async function runReflexJob({ messageIds }, job = {}) {
   }
   const tz = validTimezone(cfg['insights.timezone']);
   const batch = {
-    items, messageIds: todo.map((t) => t.row.id), user: ctx.user, bundles: ctx.bundles, rules: matchDescriptions(ctx.rules),
+    items, messageIds: todo.map((t) => t.row.id), user: ctx.user, bundles: ctx.bundles, rules,
     corrections: await recentCorrections(userId, { limit: cfg['sort.correctionExamples'] }), now: describeNow(new Date(), tz),
   };
   let results;
@@ -746,7 +774,6 @@ export async function runReflexJob({ messageIds }, job = {}) {
     // (sort.reflexSweep) re-enqueues what is still waiting if it fails for good.
     throw err;
   }
-  let sorted = 0;
   let missing = 0;
   for (const { row, d, prev } of todo) {
     const r = results.get(row.id);
@@ -754,7 +781,7 @@ export async function runReflexJob({ messageIds }, job = {}) {
       // Still waiting for a model: keep it pending so the sweep asks again (a few times a day at
       // most). A model decision already stored stays until a new one replaces it.
       missing++;
-      if (prev && ['reflex', 'reasoning'].includes(prev.layer)) continue;
+      if (prev && MODEL_LAYERS.includes(prev.layer)) continue;
       d.signals.push({ name: 'reflexMissing', label: 'The model gave no answer for this message yet', weight: 0 });
       await finalize(userId, row, d, ctx, { pending: 'reflex' });
       continue;
@@ -765,7 +792,7 @@ export async function runReflexJob({ messageIds }, job = {}) {
     sorted++;
   }
   await bumpHits(userId, ctx.ruleHits);
-  const out = { sorted, escalated: [...results.values()].filter((r) => r.layer === 'reasoning').length };
+  const out = { sorted, decided, escalated: [...results.values()].filter((r) => r.layer === 'reasoning').length };
   if (missing) return { ...out, missing, status: 'partial', note: `${missing} message(s) got no answer; they stay pending for the Reflex sweep` };
   return out;
 }
@@ -907,7 +934,7 @@ export async function pendingSweep() {
        FROM hedwig_sort s JOIN messages m ON m.id = s.message_id
       WHERE NOT s.own AND s.layer <> 'user' AND (
               (s.pending = 'body' AND (m.body_text IS NOT NULL OR m.body_html IS NOT NULL OR s.decided_at < NOW() - make_interval(secs => $1)))
-           OR (s.pending IS NULL AND NOT s.body_seen AND s.layer IN ('classifier','reflex','reasoning')
+           OR (s.pending IS NULL AND NOT s.body_seen AND s.layer IN ('classifier','decision','reflex','reasoning')
                AND (m.body_text IS NOT NULL OR m.body_html IS NOT NULL) AND m.date > NOW() - INTERVAL '14 days'))
       LIMIT 500`,
     [cfg['sort.bodyWaitSec']],

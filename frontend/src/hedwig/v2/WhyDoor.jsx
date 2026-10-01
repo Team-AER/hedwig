@@ -190,7 +190,7 @@ export function WhyDoor({ item, anchor, onClose }) {
   const detailed = power ? powerSignals(d) : [];
   const title = tv('hedwig.v2.why.title', 'Why Hedwig put it here');
   // A model wrote the decision (sparkles) or a rule, your history or you made it (info).
-  const glyph = d?.layer === 'reflex' || d?.layer === 'reasoning' ? 'sparkles' : 'info';
+  const glyph = ['decision', 'reflex', 'reasoning'].includes(d?.layer) ? 'sparkles' : 'info';
 
   const body = (
     <Sheet

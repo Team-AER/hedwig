@@ -265,6 +265,42 @@ function gatewayHeaders(workflow) {
   return { 'X-Session-ID': 'hedwig', 'X-Workflow': String(workflow || 'hedwig').slice(0, 120) };
 }
 
+/**
+ * One System One decision request (Ollama/Nimble-compatible `POST /v1/systemone`) through the gateway:
+ * typed questions answered with probabilities, no text. Same auth, provenance headers, budget and
+ * hedwig_ai_calls logging as a completion. Returns { answers, usage, aiCallId }; throws LlmError on
+ * any failure so the caller can fall back to Reflex.
+ */
+export async function systemOne(request, { userId, feature = 'sort', workflow = 'sort.decision', prompt = null, timeoutMs = 30000, fetchFn = fetch } = {}) {
+  const cfg = await getConfig(userId);
+  if (!cfg.enabled || !cfg['llm.baseUrl']) throw new LlmError('model features are turned off', { status: 503, code: 'llm_disabled' });
+  await checkBudget(cfg, userId, feature, null);
+  // llm.baseUrl is the OpenAI base (…/v1); System One lives next to it at /v1/systemone.
+  const url = `${cfg['llm.baseUrl'].replace(/\/+$/, '').replace(/\/v1$/, '')}/v1/systemone`;
+  const started = Date.now();
+  let data = null;
+  let failure = null;
+  try {
+    const res = await fetchFn(url, {
+      method: 'POST', headers: authHeaders(cfg['llm.apiKey'], gatewayHeaders(workflow)),
+      body: JSON.stringify(request), signal: AbortSignal.timeout(timeoutMs),
+    });
+    data = await res.json().catch(() => null);
+    if (!res.ok) failure = new LlmError(`decision model: ${data?.error || `HTTP ${res.status}`}`, { status: res.status, code: 'decision_failed' });
+    else if (!data || typeof data.answers !== 'object') failure = new LlmError('decision model returned no answers', { code: 'decision_failed' });
+  } catch (err) {
+    failure = err instanceof LlmError ? err : new LlmError(`decision model: ${errorText(err)}`, { code: 'decision_failed' });
+  }
+  const usage = { prompt_tokens: data?.usage?.input_tokens ?? 0, completion_tokens: data?.usage?.output_tokens ?? 0 };
+  recordUsage(usage);
+  const aiCallId = await logCall({
+    userId, feature, model: request.model, promptTokens: usage.prompt_tokens, completionTokens: usage.completion_tokens,
+    latencyMs: Date.now() - started, ok: !failure, error: failure ? errorText(failure) : null, prompt, workflow, tier: 'decision',
+  });
+  if (failure) throw failure;
+  return { answers: data.answers, usage: data.usage, aiCallId };
+}
+
 /** Whether model features can run at all right now. */
 export async function llmAvailable(userId) {
   const cfg = await getConfig(userId);
