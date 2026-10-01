@@ -3226,3 +3226,14 @@ describe('IDLE verification after a sync', () => {
     expect(logger.info).toHaveBeenCalledWith(expect.stringMatching(/IMAP IDLE active/));
   });
 });
+
+describe('folderKnown', () => {
+  it('is false only for a folder missing from a folder list the account already has', async () => {
+    const known = (row) => { query.mockResolvedValueOnce({ rows: [row] }); return ImapManager.prototype.folderKnown.call({}, 'acct', 'Todo'); };
+    expect(await known({ known: true, listed: true })).toBe(true);
+    expect(await known({ known: false, listed: true })).toBe(false);
+    // A fresh account whose folders were never listed: nothing is skipped.
+    expect(await known({ known: false, listed: false })).toBe(true);
+    expect(query).toHaveBeenLastCalledWith(expect.stringContaining('FROM folders'), ['acct', 'Todo']);
+  });
+});

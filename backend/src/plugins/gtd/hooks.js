@@ -93,6 +93,10 @@ export const gtdEnabledForAccount = async (ctx) => {
 // releaseFolderSync, folderFingerprint, syncFolderViaPool, broadcast) — no raw engine. The body is
 // wrapped in one try/catch so a config-fetch DB blip is logged with account context instead of
 // escaping as an unhandled rejection.
+// Label folders already reported missing, so the log says it once per account and folder, not
+// every tick; forgotten when the folder appears.
+const missingReported = new Set();
+
 export async function gtdSyncTick({ mgr, account }) {
   try {
     // Live persistent connection is our signal the account is healthy; syncFolderViaPool runs on
@@ -104,6 +108,17 @@ export async function gtdSyncTick({ mgr, account }) {
 
     const changedFolders = [];
     for (const folder of folders) {
+      // GTD on with label folders that were never created: SELECTing them every tick only fails
+      // ("Unknown Mailbox"), and Gmail answered the repeats with THROTTLED for the whole account.
+      const seen = `${account.id}:${folder}`;
+      if (typeof mgr.folderKnown === 'function' && !(await mgr.folderKnown(account.id, folder))) {
+        if (!missingReported.has(seen)) {
+          missingReported.add(seen);
+          console.warn(`GTD: label folder "${folder}" is not on the server for account ${account.id}; skipping it until it is (create it from GTD settings, or turn GTD off)`);
+        }
+        continue;
+      }
+      missingReported.delete(seen);
       if (!mgr.tryClaimFolderSync(account.id, folder)) continue; // a user-triggered sync owns this folder
       try {
         const before = await mgr.folderFingerprint(account.id, folder);

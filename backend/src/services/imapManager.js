@@ -3204,6 +3204,18 @@ export class ImapManager {
   // ticks use to decide whether a folder actually changed. Advances when a row is inserted,
   // removed, moved in/out, or flipped read/unread. SUM(uid) catches same-count membership churn
   // (one in, one out) that COUNT alone would miss.
+  // Is this folder on the server, as far as the last folder-list sync knows (the folders table)?
+  // True while the account's list is not known yet, so a fresh account skips nothing. Lets a plugin
+  // tick leave out a label folder that was never created instead of SELECTing it every tick.
+  async folderKnown(accountId, folder) {
+    const { rows } = await query(
+      `SELECT EXISTS (SELECT 1 FROM folders WHERE account_id = $1 AND path = $2) AS known,
+              EXISTS (SELECT 1 FROM folders WHERE account_id = $1) AS listed`,
+      [accountId, folder]
+    );
+    return Boolean(rows[0]?.known) || !rows[0]?.listed;
+  }
+
   async folderFingerprint(accountId, folder) {
     const { rows } = await query(
       `SELECT COUNT(*)::int AS n,

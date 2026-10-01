@@ -35,6 +35,8 @@ export function createPluginMailFacade(engine) {
     releaseFolderSync: (accountId, folder) => engine.onDemandSyncing.delete(`${accountId}:${folder}`),
 
     // Sync-capability primitives — all run on pooled connections, never disturbing the IDLE client.
+    // folderKnown reads the account's folder list from the database (no IMAP).
+    folderKnown: (accountId, folder) => engine.folderKnown(accountId, folder),
     folderFingerprint: (accountId, folder) => engine.folderFingerprint(accountId, folder),
     syncFolderViaPool: (account, folder) => engine.syncFolderViaPool(account, folder),
     syncFolderOnDemand: (account, folder) => engine.syncFolderOnDemand(account, folder),

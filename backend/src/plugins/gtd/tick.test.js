@@ -43,7 +43,7 @@ describe('gtd hooks — gtdSyncTick', () => {
     threadKeysInFolders.mockReset();
     [
       'acct-tick-noconn', 'acct-tick-err', 'acct-tick-off',
-      'acct-tick-same', 'acct-tick-changed', 'acct-tick-first', 'acct-tick-partial',
+      'acct-tick-same', 'acct-tick-changed', 'acct-tick-first', 'acct-tick-partial', 'acct-tick-missing',
     ].forEach(invalidateGtdConfigCache);
   });
 
@@ -138,5 +138,26 @@ describe('gtd hooks — gtdSyncTick', () => {
     expect(mgr.syncFolderViaPool).toHaveBeenNthCalledWith(2, account, 'Watch');
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('GTD sync error'), 'imap boom');
     warnSpy.mockRestore();
+  });
+
+  // Prod, 2026-10-01: GTD on for two accounts whose five label folders were never created. Each tick
+  // SELECTed all five ("Unknown Mailbox") and Gmail answered the repeats with THROTTLED.
+  it('leaves out label folders the server does not have, says so once, and still syncs the rest', async () => {
+    const folders = { todo: 'Todo', watch: 'Watch', delegated: 'Watch', someday: 'Watch', reference: 'Watch' };
+    getAccountConfig.mockResolvedValue({ enabled: true, folders });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const mgr = mgrWithConnection('acct-tick-missing', {
+      folderKnown: vi.fn(async (_id, folder) => folder === 'Watch'),
+      folderFingerprint: vi.fn().mockResolvedValue('same'),
+    });
+    const account = { id: 'acct-tick-missing', user_id: 'user-1' };
+    await gtdSyncTick({ mgr, account });
+    await gtdSyncTick({ mgr, account });
+    expect(mgr.syncFolderViaPool.mock.calls.map((c) => c[1])).toEqual(['Watch', 'Watch']);
+    expect(mgr.tryClaimFolderSync).not.toHaveBeenCalledWith('acct-tick-missing', 'Todo');
+    const said = warnSpy.mock.calls.filter((c) => String(c[0]).includes('"Todo" is not on the server'));
+    expect(said.length).toBe(1);
+    warnSpy.mockRestore();
+    getAccountConfig.mockReset();
   });
 });
