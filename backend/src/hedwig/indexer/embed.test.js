@@ -138,19 +138,24 @@ describe('embedPending vector insert race', () => {
 });
 
 describe('retryEmbedErrors', () => {
-  it('queues messages whose embedding failed more than index.embedRetryHours ago again', async () => {
+  it('queues every failed embedding again once per index.embedRetryHours, whatever its updated_at', async () => {
     const { query } = await import('../../services/db.js');
     const real = query.getMockImplementation();
-    let call = null;
+    const updates = [];
     query.mockImplementation(async (sql, params) => {
-      if (/UPDATE hedwig_index_msg SET error = NULL/.test(sql)) { call = { sql: sql.replace(/\s+/g, ' '), params }; return { rows: [], rowCount: 7077 }; }
+      if (/UPDATE hedwig_index_msg SET error = NULL/.test(sql)) { updates.push(sql.replace(/\s+/g, ' ')); return { rows: [], rowCount: 7077 }; }
       return real(sql, params);
     });
     vi.spyOn(console, 'log').mockImplementation(() => {});
-    expect(await retryEmbedErrors()).toBe(7077);
-    expect(call.sql).toMatch(/error LIKE 'embed:%'/);
-    expect(call.sql).toMatch(/updated_at < NOW\(\) - make_interval\(hours => \$1::int\)/);
-    expect(call.params).toEqual([24]);
+    const t0 = Date.parse('2026-10-01T00:45:00Z');
+    expect(await retryEmbedErrors({ now: t0 })).toBe(7077);
+    // Thread-chunk refreshes keep bumping updated_at on busy threads: the round must not depend on it.
+    expect(updates[0]).toMatch(/WHERE error LIKE 'embed:%'$/);
+    expect(db.state.get('index.embedRetry')).toMatchObject({ at: new Date(t0).toISOString(), retried: 7077 });
+    expect(await retryEmbedErrors({ now: t0 + 23 * 3600_000 })).toBe(0);
+    expect(updates).toHaveLength(1);
+    expect(await retryEmbedErrors({ now: t0 + 24 * 3600_000 })).toBe(7077);
+    expect(updates).toHaveLength(2);
     query.mockImplementation(real);
   });
 });

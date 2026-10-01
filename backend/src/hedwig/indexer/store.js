@@ -352,22 +352,25 @@ export async function embedPending({ messageIds = null, maxChunks = 256 } = {}) 
   return done;
 }
 
+const EMBED_RETRY = 'index.embedRetry';
+
 /**
- * Give messages whose embedding failed another chance once the failure is `index.embedRetryHours`
- * old: an error that was really the endpoint's must not keep mail out of the index (and the
- * coverage share below 100%) for good. A truly bad input fails again and waits another round.
+ * Every `index.embedRetryHours`, give messages whose embedding failed another chance: an error
+ * that was really the endpoint's must not keep mail out of the index (and the coverage share
+ * below 100%) for good. A truly bad input fails again and waits for the next round. Rounds, not
+ * per-message ages: updated_at moves whenever a thread's chunks are refreshed, so on busy threads
+ * (Gmail's SMS folder) an error never looked old enough.
  * @returns {Promise<number>} messages queued again
  */
-export async function retryEmbedErrors() {
+export async function retryEmbedErrors({ now = Date.now() } = {}) {
   const cfg = await getConfig();
   const hours = Number(cfg['index.embedRetryHours']);
   if (!(hours > 0)) return 0;
-  const { rowCount } = await query(
-    `UPDATE hedwig_index_msg SET error = NULL, updated_at = NOW()
-      WHERE error LIKE 'embed:%' AND updated_at < NOW() - make_interval(hours => $1::int)`,
-    [Math.round(hours)],
-  );
-  if (rowCount) console.log(`[hedwig] index: embedding ${rowCount} message(s) again that failed more than ${Math.round(hours)} h ago`);
+  const last = await getState(EMBED_RETRY, null);
+  if (last?.at && now - Date.parse(last.at) < hours * 3600_000) return 0;
+  const { rowCount } = await query("UPDATE hedwig_index_msg SET error = NULL, updated_at = NOW() WHERE error LIKE 'embed:%'");
+  await setState(EMBED_RETRY, { at: new Date(now).toISOString(), retried: rowCount || 0 });
+  if (rowCount) console.log(`[hedwig] index: embedding ${rowCount} message(s) again whose embedding had failed`);
   return rowCount || 0;
 }
 
