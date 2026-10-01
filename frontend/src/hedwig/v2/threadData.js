@@ -155,8 +155,36 @@ async function threadOfMessage(messageId) {
   return v2Api.get(`/work/message/${encodeURIComponent(messageId)}/thread`).then((r) => r?.threadId || null).catch(() => null);
 }
 
-/** `refresh` asks the work route to write the story again instead of using its cached one. */
-export async function loadThread(item, { refresh = false } = {}) {
+// How long the reader waits for the story after the body is in. /work/thread answers from its cache
+// in tens of ms, but on a thread's first open it may ask a model (5–8 s on prod, 2026-10-01) and the
+// whole reader used to sit on "Loading…" for it.
+export const EXTRAS_GRACE_MS = 250;
+
+/** The story, TL;DRs, deadline and quick replies, as loadThread's fields. Pure. */
+export function extrasFields(extras, ctx) {
+  const extrasMissing = Boolean(extras?.__error);
+  const ex = extrasOf(extrasMissing ? {} : (extras || {}));
+  return {
+    story: ex.story,
+    storyProvenance: ex.storyProvenance,
+    storyProblem: ex.storyProblem,
+    tldr: ex.tldr,
+    messageTldrs: ex.messageTldrs,
+    deadline: ex.deadline || deadlineFrom(ctx),
+    quickReplies: ex.quickReplies,
+    extrasMissing,
+    extrasPending: false,
+  };
+}
+
+/**
+ * `refresh` asks the work route to write the story again instead of using its cached one.
+ * The thread resolves as soon as its messages and latest body are in. The story and the rest come
+ * from /work/thread: with them when they are ready within EXTRAS_GRACE_MS, otherwise the thread
+ * comes back with `extrasPending` and `onExtras(fields)` gets them when they arrive. Without
+ * `onExtras` it waits for everything.
+ */
+export async function loadThread(item, { refresh = false, onExtras = null } = {}) {
   if (!item) return null;
   if (item.synthetic || (!item.messageId && String(item.threadId || '').startsWith('reminder:'))) {
     const e = new Error(tv('hedwig.v2.thread.reminder', 'A reminder has no conversation to open.'));
@@ -188,31 +216,29 @@ export async function loadThread(item, { refresh = false } = {}) {
   const messages = rows.map(normaliseMessage).sort((a, b) => String(a.date).localeCompare(String(b.date)));
   const latest = messages[messages.length - 1];
 
-  // One request for the latest body: the reader renders it, and its text feeds the rest.
-  const [body, extras, ctx] = await Promise.all([
-    loadFullBody(latest.id).catch(() => null),
+  // The story and the context start with the body; only the body holds the reader.
+  const extrasP = Promise.all([
     workThread(key, { refresh }),
     hedwigApi.get(`/context/messages/${encodeURIComponent(latest.id)}`).catch(() => null),
-  ]);
+  ]).then(([extras, ctx]) => extrasFields(extras, ctx));
+  const body = await loadFullBody(latest.id).catch(() => null);
   if (body) Object.assign(latest, { body, text: textOfBody(body), hasBlockedRemoteImages: Boolean(body.hasBlockedRemoteImages), trackersBlocked: body.trackersBlocked ?? null });
-  const extrasMissing = Boolean(extras?.__error);
-  const ex = extrasOf(extrasMissing ? {} : (extras || {}));
-  const people = participantsOf(messages);
-  return {
+  const base = {
     threadId,
     subject: latest.raw?.subject || item.subject || '',
     participants: null,
-    people,
+    people: participantsOf(messages),
     label: null,
     messages,
-    story: ex.story,
-    storyProvenance: ex.storyProvenance,
-    storyProblem: ex.storyProblem,
-    tldr: ex.tldr,
-    messageTldrs: ex.messageTldrs,
-    deadline: ex.deadline || deadlineFrom(ctx),
-    quickReplies: ex.quickReplies,
-    extrasMissing,
+  };
+  if (typeof onExtras !== 'function') return { ...base, ...(await extrasP) };
+  const PENDING = Symbol('pending');
+  const early = await Promise.race([extrasP, new Promise((r) => { setTimeout(() => r(PENDING), EXTRAS_GRACE_MS); })]);
+  if (early !== PENDING) return { ...base, ...early };
+  extrasP.then(onExtras, () => onExtras(extrasFields({ __error: new Error('extras failed') }, null)));
+  return {
+    ...base, story: null, storyProvenance: null, storyProblem: null, tldr: null, messageTldrs: {}, deadline: null, quickReplies: [],
+    extrasMissing: false, extrasPending: true,
   };
 }
 

@@ -100,8 +100,13 @@ function useThread(item) {
     if (!item) { setState({ data: null, error: null, loading: false }); return; }
     const my = ++seq.current;
     if (!quiet) setState((s) => ({ data: s.data && s.key === key ? s.data : null, error: null, loading: true, key }));
+    // The story and the rest arrive after the messages when a model is writing them: merged in only
+    // while this load is still the reader's.
+    const onExtras = (fields) => {
+      if (my === seq.current) setState((s) => (s.data && s.key === key ? { ...s, data: { ...s.data, ...fields } } : s));
+    };
     try {
-      const data = await loadThread(item, { refresh });
+      const data = await loadThread(item, { refresh, onExtras });
       if (my === seq.current) setState({ data, error: null, loading: false, key });
     } catch (error) {
       if (my === seq.current) setState({ data: null, error, loading: false, key });
@@ -1204,6 +1209,12 @@ export default function Thread({ props }) {
         >
           <Clamped><Story text={data.story.text} onCite={onCite} phone={phone} /></Clamped>
         </SummaryBox>
+      )}
+      {!data.story && data.extrasPending && (
+        <div data-thread-extras-pending="" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: V.muted }}>
+          <Icon name="sparkles" size={12} />
+          <span>{tv('hedwig.v2.thread.storyPending', 'Writing the summary…')}</span>
+        </div>
       )}
       {!data.story && data.tldr && messages.length > 1 && (
         <SummaryBox

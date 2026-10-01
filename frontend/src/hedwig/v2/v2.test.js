@@ -884,6 +884,33 @@ describe('Thread on upstream mail: HTML bodies, quoted history, remote images, a
     } finally { await restore(); }
   });
 
+  // Regression (2026-10-01): on a thread's first open /work/thread asks a model (5–8 s on prod) and
+  // the reader showed "Loading…" until it answered, though the body had long arrived.
+  test('the message shows as soon as its body is in; a story the model is still writing joins it after', async () => {
+    let release;
+    const story = new Promise((r) => { release = r; });
+    const inner = globalThis.fetch;
+    globalThis.fetch = async (url, opts) => {
+      if (String(url).startsWith('/api/hedwig/work/thread/t-html')) {
+        await story;
+        return { ok: true, status: 200, json: async () => ({ threadId: 't-html', story: { text: 'Maria confirmed the venue for Friday at 7.' }, messageTldrs: {}, quickReplies: [] }), headers: { get: (h) => (h === 'content-type' ? 'application/json' : '') } };
+      }
+      return inner(url, opts);
+    };
+    try {
+      useV2.setState({ caps: { work: true } });
+      await render(h(Thread, { props: { item: { threadId: 't-html', messageId: 'h6', subject: 'Re: Venue for Friday', from: { name: 'Maria Lopez', email: 'maria@studio.example' } } } }));
+      await settle(400);
+      assert.ok(document.querySelector('article#hw-msg-6 iframe[srcdoc]'), 'the latest message is on screen while the story is still being written');
+      assert.ok(document.querySelector('[data-thread-extras-pending]'), 'with a quiet note that the summary is coming');
+      release();
+      await settle(80);
+      assert.equal(Boolean(document.querySelector('[data-thread-extras-pending]')), false, 'the note goes');
+      assert.match(document.body.textContent, /Maria confirmed the venue for Friday at 7\./, 'the story joins the open reader');
+      assert.ok(document.querySelector('article#hw-msg-6 iframe[srcdoc]'), 'the message stays open');
+    } finally { release?.(); globalThis.fetch = inner; await restore(); }
+  });
+
   test('smart dark mode: in the dark theme the HTML message carries a sun (Show original colours) that brings back its white card, remembered per sender, and a moon (Darken this message) that undoes it; nothing in the light theme or with the setting Off', async () => {
     const prevTheme = useStore.getState().theme;
     const item = { threadId: 't-html', messageId: 'h6', subject: 'Re: Venue for Friday', from: { name: 'Maria Lopez', email: 'maria@studio.example' } };
