@@ -18,12 +18,13 @@ export const VIEW = {
   today: 'hedwig.today',
   list: 'hedwig.list',
   ledger: 'hedwig.ledger',
+  bills: 'hedwig.bills',
   waiting: 'hedwig.waiting',
   drafts: 'hedwig.drafts',
 };
 
 // Views that live in the "list" pane of the streams layout; the rail swaps between them.
-export const MAIN_VIEWS = [VIEW.people, VIEW.reading, VIEW.records, VIEW.screener, VIEW.brief, VIEW.today, VIEW.list, VIEW.ledger, VIEW.waiting, VIEW.drafts];
+export const MAIN_VIEWS = [VIEW.people, VIEW.reading, VIEW.records, VIEW.screener, VIEW.brief, VIEW.today, VIEW.list, VIEW.ledger, VIEW.bills, VIEW.waiting, VIEW.drafts];
 
 const isPhone = () => typeof window !== 'undefined' && window.innerWidth < 768;
 

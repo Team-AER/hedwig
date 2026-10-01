@@ -1,8 +1,9 @@
 // cards module (v2 stream G): Records cards from mail — receipts, invoices, subscriptions, deliveries,
 // travel, events, one-time codes, and deadlines (the commitments view). Deterministic detectors
-// first, the Reflex model for sorted Records mail they miss; routes for the list, one message's
-// cards, edits (corrections), dismissals, "Not a subscription" / "Not a <kind>" and their undo, the
-// owner's feedback, ledger views, the Brief's "Today" figures and card actions.
+// first, the Reflex model for sorted Records mail (and Trash mail about money) they miss; routes for
+// the list, one message's cards, edits (corrections), dismissals, "Not a subscription" / "Not a
+// <kind>" and their undo, the owner's feedback, ledger views, bills, the Brief's "Today" figures and
+// card actions.
 import { getConfig } from '../config.js';
 import { defineJob } from '../jobs.js';
 import { defineSchedule } from '../schedule.js';
@@ -12,6 +13,7 @@ import { CARD_KINDS } from './kinds.js';
 import { listCards, getCard, patchCard, dismissCard, restoreCard, cardsForMessages } from './store.js';
 import { listFeedback, feedbackCount } from './feedback.js';
 import { ledger, LEDGERS } from './ledger.js';
+import { bills, billDetail, trackBill, untrackBill, notBill, restoreBill, parsePayee } from './bills.js';
 import { cardsToday } from './today.js';
 import { cardActions } from './actions.js';
 import { CARDS_JOB, ICS_JOB, runCardsJob, scanTick, pendingPayloads, makeIcsHandler } from './extract.js';
@@ -79,6 +81,15 @@ export default {
       if (!LEDGERS[req.params.kind]) return res.status(400).json({ error: `ledger must be one of ${Object.keys(LEDGERS).join(', ')}` });
       return ledger(req.session.userId, req.params.kind, { sort: req.query.sort, dir: req.query.dir, since: req.query.since, limit: req.query.limit });
     }));
+
+    // Bills: running subscriptions and unpaid invoices by payee, with what is due, and the payees that
+    // might be bills. A payee is its payeeKey ('anthropic'), URL-encoded.
+    r.get('/cards/bills', handle((req) => bills(req.session.userId)));
+    r.get('/cards/bills/:payee', handle((req) => billDetail(req.session.userId, parsePayee(req.params.payee))));
+    r.post('/cards/bills/:payee/track', handle((req) => trackBill(req.session.userId, parsePayee(req.params.payee), req.body || {})));
+    r.post('/cards/bills/:payee/untrack', handle((req) => untrackBill(req.session.userId, parsePayee(req.params.payee))));
+    r.post('/cards/bills/:payee/not-bill', handle((req) => notBill(req.session.userId, parsePayee(req.params.payee))));
+    r.post('/cards/bills/:payee/restore', handle((req) => restoreBill(req.session.userId, parsePayee(req.params.payee))));
 
     // --- v2 cards audit --- cards for list and bundle rows in one call: GET /cards/messages?ids=<uuid>,<uuid>
     r.get('/cards/messages', handle(async (req) => {

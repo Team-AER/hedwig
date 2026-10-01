@@ -2,7 +2,7 @@
 // over anything Hedwig reads later; deadline cards are the commitments view (hedwig_cards_all).
 import { query } from '../../services/db.js';
 import { recordCorrection } from '../ledger/corrections.js';
-import { CARD_KINDS, FIELDS, INTERNAL_FIELDS, dedupeKey, eventAt, normField, normFields } from './kinds.js';
+import { CARD_KINDS, FIELDS, INTERNAL_FIELDS, currencyFromText, dedupeKey, eventAt, normField, normFields } from './kinds.js';
 import { recordFeedback, withdrawFeedback } from './feedback.js';
 
 const LAYER_RANK = { user: 6, schema_org: 5, ics: 5, pattern: 4, reasoning: 3, reflex: 2, derived: 1 };
@@ -80,6 +80,13 @@ export async function upsertCard(userId, card, { messageDate = null } = {}) {
   const fields = normFields(card.kind, card.fields);
   if (card.kind === 'delivery' && Array.isArray(card.fields?.history)) fields.history = card.fields.history;
   if (!Object.keys(fields).length) return null;
+  // A card alert states its currency in the amount's sentence ("USD 23.6 spent at …") and its card
+  // often has no currency field: keep the one the sentence states.
+  const amountKey = card.kind === 'receipt' ? 'total' : card.kind === 'invoice' ? 'amount' : null;
+  if (amountKey && fields[amountKey] != null && !fields.currency) {
+    const cur = currencyFromText(card.sources?.[amountKey]?.quote);
+    if (cur) { fields.currency = cur; card = { ...card, sources: { ...card.sources, currency: card.sources[amountKey] } }; }
+  }
   const sources = Object.fromEntries(Object.entries(card.sources || {}).filter(([k]) => k in fields));
   const key = card.dedupeKey || dedupeKey({ ...card, fields });
   const msgDate = messageDate ? new Date(messageDate).toISOString() : null;

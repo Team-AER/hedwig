@@ -11,6 +11,9 @@ import { validTimezone } from '../insights/time.js';
 import { detectDeterministic, calendarAttachments, dataSignal, needsFill } from './detect/index.js';
 import { findSubscriptions } from './subscriptions.js';
 import { upsertCard } from './store.js';
+import { loadCharges } from './bills.js';
+import { relinkToRows, relinkOrphans } from './relink.js';
+import { requestBody } from '../core/bodies.js';
 import { normFields, normField, dedupeKey } from './kinds.js';
 import { loadBlocks, isBlocked, feedbackForMessages } from './feedback.js';
 
@@ -90,9 +93,19 @@ export function verifyModelCard(raw, { messageId, text, attachments, provenance,
   return { kind, messageId, fields, sources, confidence, layer, provenance };
 }
 
+// Trash mail is not sorted (no stream or bundle); a subject about money is what gets it read: a card
+// alert ("A payment was made using your Credit Card"), a receipt, a renewal. Not a deposit alert.
+const MONEY_SUBJECT = /\b(payments?|paid|spent|debited|charged|txn|transaction|credit card|debit card|bill|invoice|receipt|renewal|renews?|subscription|order|purchase)\b/i;
+
+/** Is this unsorted Trash mail about a charge? Pure. */
+export function trashMoneySignal(row) {
+  return dataSignal(row) || MONEY_SUBJECT.test(String(row?.subject || ''));
+}
+
 /** Which mail the Reflex model reads when the detectors found nothing (or only a partial pattern card). Pure. */
 export function reflexEligible(row, { bundles, signalReflex = true }) {
   if (!row || row.stream === 'spam') return false;
+  if (!row.stream) return Boolean(row.trash) && signalReflex && trashMoneySignal(row);
   if (row.stream === 'records' && row.bundle && bundles.has(row.bundle)) return true;
   return signalReflex && ['records', 'people', 'screener'].includes(row.stream) && dataSignal(row);
 }
@@ -113,7 +126,8 @@ export function twinOf(card, patternCards = []) {
 // ── The job ─────────────────────────────────────────────────────────────────
 
 const ROW_SQL = `SELECT m.id, m.account_id, m.subject, m.from_name, m.from_email, m.date, m.body_text, m.body_html, m.snippet,
-                        m.attachments, m.has_attachments, m.folder, s.bundle, s.stream
+                        m.attachments, m.has_attachments, m.folder, s.bundle, s.stream,
+                        EXISTS (SELECT 1 FROM folders f WHERE f.account_id = m.account_id AND f.path = m.folder AND f.special_use = '\\Trash') AS trash
                    FROM messages m JOIN email_accounts a ON a.id = m.account_id
                    LEFT JOIN hedwig_sort s ON s.message_id = m.id
                   WHERE a.user_id = $1 AND m.id = ANY($2::uuid[]) AND m.is_deleted = false`;
@@ -168,6 +182,23 @@ export async function runCardsJob({ userId, messageIds = [] }, { now = new Date(
   const { rows } = await query(ROW_SQL, [userId, ids]);
   const tz = validTimezone(cfg['insights.timezone']);
   const gone = ids.filter((id) => !rows.some((r) => r.id === id));
+  // Trash mail usually has no body yet (headers only): fetch it first, read it on the next pass.
+  // After two finished fetches without a body it is read as it is (subject and snippet).
+  let bodiless = rows.filter((r) => !r.stream && r.trash && !r.body_text && !r.body_html);
+  if (bodiless.length) {
+    const { rows: tried } = await query(
+      `SELECT dedupe_key, COUNT(*)::int AS n FROM hedwig_jobs
+        WHERE dedupe_key = ANY($1::text[]) AND (done_at IS NOT NULL OR failed_at IS NOT NULL) GROUP BY dedupe_key`,
+      [bodiless.map((r) => `body:${r.id}`)],
+    );
+    const spent = new Set(tried.filter((t) => t.n >= 2).map((t) => t.dedupe_key.slice(5)));
+    bodiless = bodiless.filter((r) => !spent.has(r.id));
+    for (const r of bodiless) await requestBody(r.id, { priority: 8 });
+    const skip = new Set(bodiless.map((r) => r.id));
+    rows.splice(0, rows.length, ...rows.filter((r) => !skip.has(r.id)));
+  }
+  // Cards whose mail moved here (a receipt filed to Trash) point at it again before anything is made.
+  const relinked = rows.length ? await relinkToRows(userId, rows) : 0;
   const [parts, attachments] = await Promise.all([icsPartsFor(rows.map((r) => r.id)), attachmentTexts(rows.map((r) => r.id))]);
 
   const found = new Map();
@@ -270,9 +301,10 @@ export async function runCardsJob({ userId, messageIds = [] }, { now = new Date(
   await markScan(userId, done, 'done', { found, reflex: reflexed });
   await markScan(userId, waiting, 'waiting');
   await markScan(userId, [...new Set(deferred)], 'deferred', { error: partial });
+  await markScan(userId, bodiless.map((r) => r.id), 'waiting');
   if (gone.length) await markScan(userId, gone, 'done');
-  if (money) await syncSubscriptions(userId, { cfg, now });
-  const note = `${rows.length} messages, ${stored} cards, ${reflexed.size} via reflex, ${waiting.length} waiting for calendar parts, ${deferred.length} deferred${blocked ? `, ${blocked} left out by the owner's feedback` : ''}`;
+  if (money || relinked) await syncSubscriptions(userId, { cfg, now });
+  const note = `${rows.length} messages, ${stored} cards, ${reflexed.size} via reflex, ${waiting.length} waiting for calendar parts, ${deferred.length} deferred${bodiless.length ? `, ${bodiless.length} waiting for a body` : ''}${relinked ? `, ${relinked} cards relinked to moved mail` : ''}${blocked ? `, ${blocked} left out by the owner's feedback` : ''}`;
   return partial || deferred.length ? { status: 'partial', note: `${note}${partial ? ` (${partial})` : ''}` } : { status: 'done', note };
 }
 
@@ -284,31 +316,12 @@ export async function runCardsJob({ userId, messageIds = [] }, { now = new Date(
  */
 export async function syncSubscriptions(userId, { cfg = null, now = new Date() } = {}) {
   const config = cfg || await getConfig(userId);
-  const { rows } = await query(
-    `SELECT c.id, c.kind, c.message_id, c.fields, c.sources, m.date, m.subject, LEFT(m.snippet, 300) AS snippet,
-            ARRAY(SELECT DISTINCT k.kind FROM hedwig_cards k
-                   WHERE k.user_id = c.user_id AND k.id <> c.id AND k.dismissed_at IS NULL
-                     AND (k.message_id = c.message_id OR c.message_id = ANY(k.message_ids))) AS sibling_kinds
-       FROM hedwig_cards c LEFT JOIN messages m ON m.id = c.message_id
-      WHERE c.user_id = $1 AND c.kind IN ('receipt', 'invoice') AND c.dismissed_at IS NULL`,
-    [userId],
-  );
-  const charges = rows.map((r) => ({
-    cardId: r.id,
-    kind: r.kind,
-    messageId: r.message_id,
-    merchant: r.fields.merchant || r.fields.issuer,
-    amount: r.fields.total ?? r.fields.amount,
-    currency: r.fields.currency || null,
-    date: r.fields.date || r.fields.issuedDate || (r.date ? new Date(r.date).toISOString().slice(0, 10) : null),
-    orderNumber: r.kind === 'receipt' ? r.fields.orderNumber || null : null,
-    siblingKinds: r.sibling_kinds || [],
-    subject: r.subject || null,
-    snippet: r.snippet || null,
-    sources: r.sources,
-  }));
+  // A few orphaned cards each run: their mail may have moved since (bank alerts filed to Trash).
+  await relinkOrphans(userId, { limit: 10 }).catch((err) => console.warn('[hedwig] cards relink failed:', err.message));
+  const charges = await loadCharges(userId);
   const { oneOff } = await loadBlocks(userId);
-  const subs = findSubscriptions(charges, { minCharges: config['cards.subscriptionMinCharges'], now, oneOff });
+  const known = Array.isArray(config['cards.recurringPayees']) ? config['cards.recurringPayees'] : [];
+  const subs = findSubscriptions(charges, { minCharges: config['cards.subscriptionMinCharges'], now, oneOff, known });
   const byCard = new Map(charges.map((c) => [c.cardId, c]));
   const kept = [];
   let n = 0;
@@ -322,7 +335,8 @@ export async function syncSubscriptions(userId, { cfg = null, now = new Date() }
       merchant: last.sources?.merchant || last.sources?.issuer || derived, amount: amountSrc, currency: amountSrc,
       cadence: derived, lastCharged: derived, charges: derived, ...(s.nextRenewal ? { nextRenewal: derived } : {}),
     };
-    const res = await upsertCard(userId, { kind: 'subscription', messageId: s.lastMessageId, fields, sources, confidence: 0.8, layer: 'derived' }, {});
+    // Keyed by payee, so 'Anthropic, PBC' on a receipt and 'ANTHROPIC' on a card alert stay one card.
+    const res = await upsertCard(userId, { kind: 'subscription', messageId: s.lastMessageId, fields, sources, confidence: 0.8, layer: 'derived', dedupeKey: `merchant:${s.payee}:${s.currency || ''}` }, {});
     if (res) {
       n++;
       kept.push(res.id);
@@ -349,12 +363,17 @@ export async function syncSubscriptions(userId, { cfg = null, now = new Date() }
 
 // ── Scheduling ──────────────────────────────────────────────────────────────
 
-/** Queue card jobs for sorted mail that has not been scanned under the current detector version. */
+/**
+ * Queue card jobs for sorted mail that has not been scanned under the current detector version, and
+ * for recent Trash mail about money (Trash is never sorted, and mail filed there after reading is
+ * still a receipt or a card alert).
+ */
 export async function scanTick() {
   const { rows: users } = await query(
     `SELECT DISTINCT s.user_id FROM hedwig_sort s
       WHERE s.decided_at > NOW() - INTERVAL '400 days'
         AND NOT EXISTS (SELECT 1 FROM hedwig_cards_scan x WHERE x.message_id = s.message_id AND x.version = $1 AND x.state = 'done')
+      UNION SELECT DISTINCT a.user_id FROM email_accounts a
       LIMIT 1000`,
     [CARDS_VERSION],
   );
@@ -376,6 +395,25 @@ export async function scanTick() {
         [userId, analysisDays(cfg), CARDS_VERSION, cfg['cards.scanBatch']],
       );
       const ids = rows.map((r) => r.message_id);
+      const trashDays = Number(cfg['cards.trashScanDays']) || 0;
+      if (trashDays > 0) {
+        const { rows: trash } = await query(
+          `SELECT m.id, m.subject, m.from_email FROM messages m JOIN email_accounts a ON a.id = m.account_id
+             JOIN folders f ON f.account_id = m.account_id AND f.path = m.folder AND f.special_use = '\\Trash'
+             LEFT JOIN hedwig_cards_scan x ON x.message_id = m.id
+            WHERE a.user_id = $1 AND NOT m.is_deleted AND m.date > NOW() - make_interval(days => $2::int)
+              AND NOT EXISTS (SELECT 1 FROM hedwig_sort s WHERE s.message_id = m.id)
+              AND (x.message_id IS NULL OR x.version <> $3
+                   OR (x.state = 'deferred' AND x.scanned_at < NOW() - INTERVAL '1 hour')
+                   OR (x.state = 'waiting' AND x.scanned_at < NOW() - INTERVAL '10 minutes'))
+            ORDER BY m.date DESC LIMIT $4`,
+          [userId, trashDays, CARDS_VERSION, cfg['cards.scanBatch']],
+        );
+        const money = trash.filter(trashMoneySignal).map((r) => r.id);
+        // The rest is looked at once, so it is not fetched again every tick.
+        await markScan(userId, trash.filter((r) => !money.includes(r.id)).map((r) => r.id), 'done');
+        ids.push(...money);
+      }
       if (!ids.length) continue;
       // Held as 'waiting' until the job runs, so the next tick does not queue them again.
       await markScan(userId, ids, 'waiting');

@@ -1,5 +1,5 @@
 // The desktop rail (DESIGN-AUDIT-2026-09-24 §a): the owl and "Hedwig" with New message, then only
-// places: the streams with glyphs and counts (the Records ledgers under Records), "Later" (Reply
+// places: the streams with glyphs and counts (Bills and the Records ledgers under Records), "Later" (Reply
 // Later, Set Aside, Snoozed, Waiting on when the work routes are there; Drafts always, with its
 // count) and "Hedwig" (Daily Brief, Today, Settings). The footer is the account line and one
 // quiet status line: sync, or the tier note while a model tier is degraded. Search lives in the
@@ -193,6 +193,7 @@ export default function Rail() {
         <NavItem icon="users" label={tv('hedwig.v2.stream.people', 'People')} count={countText(counts, more, 'people')} hint={countHint('people', countText(counts, more, 'people'))} attention on={on(VIEW.people)} onClick={() => showView(VIEW.people)} />
         <NavItem icon="book-open" label={tv('hedwig.v2.stream.reading', 'Reading')} count={countText(counts, more, 'reading')} hint={countHint('reading', countText(counts, more, 'reading'))} on={on(VIEW.reading)} onClick={() => showView(VIEW.reading)} />
         <NavItem icon="receipt" label={tv('hedwig.v2.stream.records', 'Records')} count={countText(counts, more, 'records')} hint={countHint('records', countText(counts, more, 'records'))} on={on(VIEW.records)} onClick={() => showView(VIEW.records)} />
+        <NavItem sub icon="calendar" label={tv('hedwig.v2.bills.title', 'Bills')} on={on(VIEW.bills)} onClick={() => showView(VIEW.bills)} />
         {ledgers.map((kind) => (
           <NavItem key={kind} sub icon={LEDGER_ICONS[kind] || 'receipt'} label={ledgerTitle(kind)} on={onLedger(kind)} onClick={() => showView(VIEW.ledger, { kind })} />
         ))}

@@ -319,6 +319,17 @@ export const SCHEMA = [
   // --- v2 cards audit ---
   { key: 'cards.signalReflex', type: 'boolean', default: true, group: 'cards', label: 'Ask the Reflex model about People and Records mail that looks like an order, booking, invoice, ticket or delivery, whatever its bundle' },
   // --- end v2 cards audit ---
+  // --- v2 bills ---
+  { key: 'cards.recurringPayees', type: 'json', scope: 'user', group: 'cards', label: 'Subscription services: one charge from these is a possible bill, two a month apart are one',
+    help: 'Payee names as on a receipt or a card alert ("Netflix", "OpenAI"); a name also covers longer ones that start with it ("YouTube" covers "YouTube Premium").',
+    default: ['anthropic', 'openai', 'ollama', 'perplexity', 'cursor', 'midjourney', 'github', 'netflix', 'spotify', 'youtube', 'google one', 'google workspace',
+      'icloud', 'apple music', 'apple tv', 'notion', 'figma', 'canva', 'adobe', 'microsoft 365', 'dropbox', '1password', 'bitwarden', 'proton', 'fastmail',
+      'digitalocean', 'hetzner', 'linode', 'vultr', 'cloudflare', 'godaddy', 'namecheap', 'vercel', 'heroku', 'render', 'backblaze', 'twilio', 'linkedin',
+      'medium', 'substack', 'patreon', 'ken', 'hotstar', 'jiohotstar', 'disney', 'prime video', 'amazon prime', 'zee5', 'sonyliv', 'jio', 'airtel', 'act fibernet',
+      'tata play', 'duolingo', 'headspace', 'strava', 'nordvpn', 'mullvad', 'expressvpn', 'pocket'] },
+  { key: 'cards.trashScanDays', type: 'number', default: 45, min: 0, max: 400, group: 'cards', label: 'Read receipts and card alerts from Trash mail up to (days) old (0: never)',
+    help: 'Trash is never sorted. Mail about money there (a card alert, a receipt, a renewal) is fetched with BODY.PEEK and read for cards like Records mail.' },
+  // --- end v2 bills ---
   // --- v2 index audit ---
   { key: 'labels.judgeDeferHours', type: 'number', default: 18, min: 0, max: 168, group: 'labels', label: 'While Tier 2 is degraded, wait up to (hours) for it before judging on Tier 1 alone', help: 'The judge needs two different models. Until then the nightly job waits (no attempt spent); after this many hours it runs only the Tier 1 side and marks its labels single-judge.' },
   { key: 'labels.behaviourQuestions', type: 'number', default: 5, min: 0, max: 50, group: 'labels', label: 'Questions queued per behaviour sweep where what you did disagrees with how Hedwig sorted', help: 'They join the judge\'s questions in one queue; at most labels.questionsPerDay are asked a day.' },

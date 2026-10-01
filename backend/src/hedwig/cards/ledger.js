@@ -1,20 +1,29 @@
 // Ledger views: purchases, subscriptions, travel and deliveries as sortable rows, with totals by
-// currency (subscriptions also as a monthly equivalent).
+// currency (subscriptions also as a monthly equivalent). Purchases are read as charges (bills.js): the
+// merchant falls back to the sender, the currency to the one the sentence states, and money coming in
+// (a deposit, a refund) is listed but not spent.
 import { listCards } from './store.js';
+import { chargeOf, fillCurrencies } from './bills.js';
 
 export const LEDGERS = {
   purchases: {
     kinds: ['receipt', 'invoice'],
-    row: (c) => ({
+    charges: true,
+    row: (c, ch) => ({
       id: c.id, kind: c.kind, messageId: c.messageId,
-      date: c.fields.date || c.fields.issuedDate || (c.message?.date ? new Date(c.message.date).toISOString().slice(0, 10) : null),
-      merchant: c.fields.merchant || c.fields.issuer || null,
-      reference: c.fields.orderNumber || c.fields.invoiceNumber || null,
-      amount: c.fields.total ?? c.fields.amount ?? null,
-      currency: c.fields.currency || null,
-      status: c.kind === 'invoice' ? (c.fields.status || 'due') : 'paid',
+      date: ch.date,
+      merchant: ch.merchant,
+      payee: ch.payee || null,
+      reference: ch.reference,
+      amount: ch.amount,
+      currency: ch.currency,
+      currencyGuessed: ch.currencyGuessed,
+      direction: ch.direction,
+      status: ch.direction === 'in' ? 'received' : ch.status,
       dueDate: c.fields.dueDate || null,
       items: c.fields.items || [],
+      // The mail was deleted or moved and has not been found again: the row opens what Hedwig kept.
+      missing: !c.messageId,
     }),
     sorts: ['date', 'merchant', 'amount', 'dueDate', 'status'],
     defaultSort: ['date', 'desc'],
@@ -77,7 +86,7 @@ export function sortRows(rows, field, dir = 'desc') {
 export function totalsByCurrency(rows, { monthly = false } = {}) {
   const by = new Map();
   for (const r of rows) {
-    if (r.amount == null) continue;
+    if (r.amount == null || r.direction === 'in') continue;
     const cur = r.currency || '?';
     const t = by.get(cur) || { currency: r.currency || null, total: 0, count: 0, ...(monthly ? { monthly: 0, unknownCadence: 0 } : {}) };
     t.total += Number(r.amount);
@@ -99,7 +108,11 @@ export async function ledger(userId, name, { sort = null, dir = null, since = nu
   const def = LEDGERS[name];
   if (!def) return null;
   const cards = await listCards(userId, { kinds: def.kinds, limit });
-  let rows = cards.map(def.row);
+  let rows;
+  if (def.charges) {
+    const charges = fillCurrencies(cards.map((c) => chargeOf(c)));
+    rows = cards.map((c, i) => def.row(c, charges[i]));
+  } else rows = cards.map((c) => def.row(c));
   if (since) {
     const s = String(since).slice(0, 10);
     const key = name === 'deliveries' ? 'updatedAt' : name === 'subscriptions' ? 'lastCharged' : 'date';

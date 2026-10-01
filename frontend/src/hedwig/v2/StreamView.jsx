@@ -325,6 +325,7 @@ export default function StreamView({ props }) {
     const ledgerLinks = stream === 'records'
       ? (
         <nav aria-label={tv('hedwig.v2.ledger.label', 'Ledgers')} style={{ display: 'flex', gap: 18, flexWrap: 'wrap' }}>
+          <LinkBtn style={{ minHeight: 44, minWidth: 44, fontSize: 15 }} onClick={() => showView(VIEW.bills)}>{tv('hedwig.v2.bills.title', 'Bills')}</LinkBtn>
           {(power ? LEDGER_KINDS : SIMPLE_LEDGERS).map((kind) => (
             <LinkBtn key={kind} style={{ minHeight: 44, minWidth: 44, fontSize: 15 }} onClick={() => showView(VIEW.ledger, { kind })}>{ledgerTitle(kind)}</LinkBtn>
           ))}

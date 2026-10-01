@@ -316,6 +316,14 @@ function seedCards() {
       { merchant: 'Adlibris', orderNumber: 'AB-99812', total: 398, currency: 'NOK', date: dayOffset(-3) }, { total: src('m-adlibris', 'Totalt: 398,00 kr') }),
     card('c-amazon', 'receipt', 'm-amazon',
       { merchant: 'Amazon', orderNumber: '026-5512209', total: 34.99, currency: 'GBP', date: dayOffset(-21) }, { total: src('m-amazon', 'Order Total: £34.99') }),
+    // Bills: two monthly charges from a known service (a bill), and one card alert whose mail was
+    // moved and not found again (a candidate that opens what Hedwig kept).
+    card('c-anthropic-1', 'receipt', 'm-anthropic-1',
+      { merchant: 'Anthropic, PBC', total: 236, currency: 'USD', date: dayOffset(-55) }, { total: src('m-anthropic-1', 'Amount paid $236.00') }, { layer: 'reflex' }),
+    card('c-anthropic-2', 'receipt', 'm-anthropic-2',
+      { merchant: 'ANTHROPIC', total: 236, currency: 'USD', date: dayOffset(-25) }, { total: src('m-anthropic-2', 'USD 236 spent at ANTHROPIC') }, { layer: 'reflex' }),
+    card('c-openai', 'receipt', null,
+      { merchant: 'OPENAI', total: 40, date: dayOffset(-22) }, { total: src(null, 'USD 40 spent at OPENAI') }, { layer: 'reflex', messageIds: ['m-gone'] }),
   ];
 }
 
@@ -369,8 +377,9 @@ const LEDGER_ROWS = {
     kinds: ['receipt', 'invoice'], sorts: ['date', 'merchant', 'amount', 'dueDate', 'status'], def: ['date', 'desc'],
     row: (c) => ({
       id: c.id, kind: c.kind, messageId: c.messageId, date: c.fields.date || c.fields.issuedDate || (findItem(c.messageId) ? localDay(findItem(c.messageId).date) : null), merchant: c.fields.merchant || c.fields.issuer || null,
-      reference: c.fields.orderNumber || c.fields.invoiceNumber || null, amount: c.fields.total ?? c.fields.amount ?? null, currency: c.fields.currency || null,
+      reference: c.fields.orderNumber || c.fields.invoiceNumber || null, amount: c.fields.total ?? c.fields.amount ?? null, currency: c.fields.currency || mockCurrency(c),
       status: c.kind === 'invoice' ? (c.fields.status || 'due') : 'paid', dueDate: c.fields.dueDate || null, items: [],
+      payee: mockPayee(c.fields.merchant || c.fields.issuer), direction: 'out', missing: !c.messageId,
     }),
   },
   subscriptions: {
@@ -411,6 +420,84 @@ function sortLedger(rows, field, dir) {
     return String(x).localeCompare(String(y)) * sign;
   });
 }
+// cards/bills.js, in short: payees from subscription cards, unpaid invoices and receipts (two
+// steady monthly charges, or one from a known service as a candidate); the owner's Track and Not a bill.
+const MOCK_KNOWN = ['anthropic', 'openai', 'spotify', 'netflix'];
+function mockPayee(name) {
+  const k = String(name || '').toLowerCase().replace(/\b(inc|pbc|as|ltd)\b\.?/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+  return k || null;
+}
+function mockCurrency(c) {
+  const q = Object.values(c.sources || {}).map((x) => x?.quote || '').join(' ');
+  return /\bUSD\b|\$/.test(q) ? 'USD' : /\bNOK\b|\bkr\b/.test(q) ? 'NOK' : /£|\bGBP\b/.test(q) ? 'GBP' : null;
+}
+function mockCharges() {
+  return db.cards.filter((c) => !c.dismissedAt && (c.kind === 'receipt' || c.kind === 'invoice')).map((c) => ({
+    cardId: c.id, kind: c.kind, date: c.fields.date || c.fields.issuedDate || (findItem(c.messageId) ? localDay(findItem(c.messageId).date) : null),
+    amount: c.fields.total ?? c.fields.amount ?? null, currency: c.fields.currency || mockCurrency(c), currencyGuessed: !c.fields.currency,
+    merchant: c.fields.merchant || c.fields.issuer, payee: mockPayee(c.fields.merchant || c.fields.issuer), reference: c.fields.orderNumber || c.fields.invoiceNumber || null,
+    status: c.kind === 'invoice' ? (c.fields.status || 'due') : 'paid', dueDate: c.fields.dueDate || null, direction: 'out',
+    messageId: c.messageId && findItem(c.messageId) ? c.messageId : null, subject: c.messageId ? findItem(c.messageId)?.subject || null : null,
+    from: null, quote: (c.sources.total || c.sources.amount || {}).quote || null, missing: !(c.messageId && findItem(c.messageId)),
+  }));
+}
+function mockBills() {
+  const today = localDay(Date.now());
+  const days = (d) => Math.round((Date.parse(`${d}T12:00:00Z`) - Date.parse(`${today}T12:00:00Z`)) / DAY);
+  const status = (next, invoice) => (!next ? (invoice ? 'due' : 'unknown') : days(next) < 0 ? (invoice ? 'overdue' : 'late') : days(next) <= 7 ? 'due_soon' : 'upcoming');
+  const no = new Set(db.cardFeedback.filter((f) => f.verdict === 'not_recurring' && f.payee).map((f) => f.payee));
+  const charges = mockCharges();
+  const bills = [];
+  const candidates = [];
+  const add = (b) => bills.push({ ...b, status: status(b.nextDue, Boolean(b.invoice)), daysUntil: b.nextDue ? days(b.nextDue) : null, monthly: b.cadence === 'monthly' ? b.amount : b.cadence === 'yearly' ? Math.round(b.amount / 12 * 100) / 100 : null });
+  for (const c of db.cards.filter((x) => !x.dismissedAt && x.kind === 'subscription')) {
+    const payee = mockPayee(c.fields.merchant);
+    if (no.has(payee)) continue;
+    add({ id: `${payee}|${c.fields.currency || ''}`, payee, name: c.fields.merchant, amount: c.fields.amount ?? null, currency: c.fields.currency || null, cadence: c.fields.cadence || null,
+      lastPaid: c.fields.lastCharged || null, nextDue: c.fields.nextRenewal || null, charges: c.fields.charges || 0, cardId: c.id, layer: c.layer, invoice: null, messageId: c.messageId });
+  }
+  const groups = new Map();
+  for (const ch of charges) if (ch.kind === 'receipt' && ch.payee) groups.set(ch.payee, [...(groups.get(ch.payee) || []), ch]);
+  for (const [payee, list] of groups) {
+    if (no.has(payee) || bills.some((b) => b.payee === payee)) continue;
+    const sorted = [...list].sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    const last = sorted[sorted.length - 1];
+    const next = localDay(Date.parse(`${last.date}T12:00:00Z`) + 30 * DAY);
+    const steady = sorted.length >= 2 && Math.abs(days(sorted[1].date) - days(sorted[0].date) - 30) <= 5;
+    const base = { id: `${payee}|${last.currency || ''}`, payee, name: last.merchant, amount: last.amount, currency: last.currency, lastPaid: last.date, charges: sorted.length, messageId: [...sorted].reverse().find((x) => x.messageId)?.messageId || null };
+    if (steady && MOCK_KNOWN.includes(payee)) add({ ...base, cadence: 'monthly', nextDue: next, cardId: null, layer: 'derived', invoice: null });
+    else if (MOCK_KNOWN.includes(payee)) candidates.push({ ...base, cadence: null, reason: 'cadence_unknown', evidence: { known: true } });
+  }
+  for (const ch of charges) {
+    if (ch.kind !== 'invoice' || ch.status === 'paid' || no.has(ch.payee)) continue;
+    add({ id: `${ch.payee}|${ch.currency || ''}|${ch.cardId}`, payee: ch.payee, name: ch.merchant, amount: ch.amount, currency: ch.currency, cadence: null, lastPaid: null, nextDue: ch.dueDate,
+      charges: 0, cardId: null, layer: 'invoice', invoice: { cardId: ch.cardId, reference: ch.reference, dueDate: ch.dueDate, amount: ch.amount, currency: ch.currency, status: ch.status, messageId: ch.messageId }, messageId: ch.messageId });
+  }
+  const rank = { overdue: 0, late: 1, due_soon: 2, due: 3, upcoming: 4, unknown: 5, ended: 6 };
+  bills.sort((a, b) => (rank[a.status] - rank[b.status]) || String(a.nextDue || '9999').localeCompare(String(b.nextDue || '9999')));
+  const by = new Map();
+  for (const b of bills) {
+    const t = by.get(b.currency) || { currency: b.currency, monthly: 0, count: 0, due: 0, dueCount: 0 };
+    t.count++;
+    if (b.monthly && !b.invoice) t.monthly = round2(t.monthly + b.monthly);
+    if (['overdue', 'late', 'due_soon', 'due'].includes(b.status)) { t.due = round2(t.due + (b.amount || 0)); t.dueCount++; }
+    by.set(b.currency, t);
+  }
+  return { today, bills, candidates, totals: [...by.values()].sort((a, b) => b.count - a.count) };
+}
+function mockBillDetail(payee) {
+  const view = mockBills();
+  const charges = mockCharges().filter((c) => c.payee === payee).sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  const card = db.cards.find((c) => !c.dismissedAt && c.kind === 'subscription' && mockPayee(c.fields.merchant) === payee) || null;
+  if (!charges.length && !card) throw notFound();
+  return {
+    payee, name: card?.fields.merchant || charges[0]?.merchant || payee, bills: view.bills.filter((b) => b.payee === payee),
+    candidate: view.candidates.find((c) => c.payee === payee) || null,
+    notBill: db.cardFeedback.some((f) => f.verdict === 'not_recurring' && f.payee === payee),
+    card: card ? withMessage(card) : null, charges,
+  };
+}
+
 function mockLedger(kind, params) {
   const def = LEDGER_ROWS[kind];
   const all = db.cards.filter((c) => !c.dismissedAt && def.kinds.includes(c.kind)).map(def.row);
@@ -665,6 +752,8 @@ function logEntry(action, messageId, before, after, extra = {}) {
 function brief() {
   const needs = db.streams.people.filter((i) => i.needsYou);
   const reasons = { 'm-anna': 'Due Friday, the board pack prints that morning', 'm-marcus': 'Two options on the table, waiting on you' };
+  // A Done thread leaves Waiting on and takes its deadline cards with it (insights/briefing.js).
+  const live = (threadId) => !threadId || !db.lists.done.includes(threadId);
   return {
     headline: 'Three things need you. Two parcels land today.',
     headlineSource: 'template',
@@ -673,13 +762,13 @@ function brief() {
     waitingOn: [
       { threadId: 't-tom', messageId: 'm-tom', who: 'Tom Ellis', subject: 'the signed contract', reason: 'You asked on 17 Sep. Nothing back yet.', at: daysAgoAt(6, 10, 0), askedAt: daysAgoAt(6, 10, 0), nudgeDraftAvailable: true },
       { threadId: 't-nordlys', messageId: 'm-nordlys', who: 'Nordlys Travel', subject: 'Bergen invoice', reason: 'They promised it within 48 hours.', at: daysAgoAt(2, 10, 0), askedAt: daysAgoAt(2, 10, 0), nudgeDraftAvailable: true },
-    ].filter((c) => c.kind !== 'deadline' || live(c.threadId)),
+    ].filter((w) => live(w.threadId)),
     cards: [
       { kind: 'deadline', figure: 'Today', caption: 'Running shoes · DHL, out for delivery', messageId: 'm-dhl', threadId: 't-dhl', dueAt: todayAt(14, 0) },
       { kind: 'deadline', figure: 'Today', caption: 'Two books · Posten, by 16:00', messageId: 'm-posten', threadId: 't-posten', dueAt: todayAt(16, 0) },
       { kind: 'deadline', figure: 'Fri', caption: 'Electricity, NOK 1,240 · Fjordkraft', messageId: 'm-fjordkraft', threadId: 't-fjordkraft', dueAt: nextWeekday(5) },
       { kind: 'attachment', figure: 'contract.pdf', caption: 'Lease renewal, option B: 24 months', messageId: 'm-marcus' },
-    ].filter((w) => live(w.threadId)),
+    ].filter((c) => c.kind !== 'deadline' || live(c.threadId)),
     reading: db.streams.reading.slice(0, 3).map((i) => ({ title: i.subject, line: i.snippet, messageId: i.messageId, threadId: i.threadId, source: i.from?.name })),
     questions: clone(db.questions),
     // Where today's prose came from: the template stood in because Tier 2 was not answering.
@@ -752,8 +841,6 @@ function route(method, path, body) {
       if (e.undone) { const err = new Error('Already undone'); err.status = 409; throw err; }
       e.undone = true;
       e.undoable = false;
-  // A Done thread leaves Waiting on and takes its deadline cards with it (insights/briefing.js).
-  const live = (threadId) => !threadId || !db.lists.done.includes(threadId);
       return { ok: true };
     }
     if (method === 'GET' && seg[1] === 'bundles') return { bundles: clone(db.bundles) };
@@ -977,6 +1064,35 @@ function route(method, path, body) {
     if (method === 'GET' && seg[1] === 'ledger') {
       if (!LEDGER_ROWS[seg[2]]) throw bad(`ledger must be one of ${Object.keys(LEDGER_ROWS).join(', ')}`);
       return mockLedger(seg[2], params);
+    }
+    if (seg[1] === 'bills') {
+      if (method === 'GET' && !seg[2]) return mockBills();
+      const payee = mockPayee(decodeURIComponent(seg[2] || ''));
+      if (!payee) throw bad('invalid payee');
+      if (method === 'GET' && !seg[3]) return mockBillDetail(payee);
+      if (method === 'POST' && seg[3] === 'track') {
+        const ch = mockCharges().filter((c) => c.payee === payee).sort((a, b) => String(b.date).localeCompare(String(a.date)))[0];
+        const cadence = body?.cadence || 'monthly';
+        const next = ch?.date ? localDay(Date.parse(`${ch.date}T12:00:00Z`) + (cadence === 'yearly' ? 365 : 30) * DAY) : null;
+        db.cardFeedback = db.cardFeedback.filter((f) => !(f.verdict === 'not_recurring' && f.payee === payee));
+        db.cards.push(card(`c-sub-${payee.replace(/\s+/g, '-')}`, 'subscription', ch?.messageId || null,
+          { merchant: ch?.merchant || payee, amount: ch?.amount ?? null, currency: ch?.currency || null, cadence, lastCharged: ch?.date || null, ...(next ? { nextRenewal: next } : {}) },
+          { cadence: { via: 'user', at: new Date().toISOString() } }, { layer: 'user', userEdited: true }));
+        return mockBillDetail(payee);
+      }
+      if (method === 'POST' && seg[3] === 'untrack') {
+        for (const c of db.cards) if (c.kind === 'subscription' && c.layer === 'user' && mockPayee(c.fields.merchant) === payee) c.dismissedAt = new Date().toISOString();
+        return { ok: true, payee };
+      }
+      if (method === 'POST' && seg[3] === 'not-bill') {
+        db.cardFeedback.unshift({ id: `fb-${db.cardFeedback.length + 1}`, cardId: null, kind: 'subscription', merchantKey: payee, payee, verdict: 'not_recurring', createdAt: new Date().toISOString() });
+        return { ok: true, payee, hidden: [] };
+      }
+      if (method === 'POST' && seg[3] === 'restore') {
+        db.cardFeedback = db.cardFeedback.filter((f) => !(f.verdict === 'not_recurring' && f.payee === payee));
+        return { ok: true, payee };
+      }
+      throw notFound();
     }
     if (method === 'GET' && seg[1] === 'messages') {
       const ids = String(params.get('ids') || '').split(',').filter(Boolean);

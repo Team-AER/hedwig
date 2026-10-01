@@ -1,7 +1,9 @@
 // hedwig.ledger { kind }: purchases, subscriptions, travel or deliveries (GET /cards/ledger/:kind)
 // as a sortable table, with the totals by currency as figures (subscriptions also per month).
-// A row opens the message it came from. On a phone the table becomes a list with a sort picker.
-import { useMemo, useState } from 'react';
+// A purchase opens its payee beside the table (the Bills panel: this purchase, whether the payee is
+// a bill, every payment); other rows open the message they came from. On a phone the table becomes
+// a list with a sort picker.
+import { useEffect, useMemo, useState } from 'react';
 import { useV2Resource, isMissing } from './hooks.js';
 import { listOf } from './client.js';
 import { openThread } from './nav.js';
@@ -10,10 +12,11 @@ import { Avatar, Code, ErrorLine, Figure, Hair, Num, Quiet, V, ViewBody, ViewHea
 import { money, shortDate, fullTime } from './format.js';
 import { tv, tvn } from './i18n.js';
 import { CoverageNote } from './CoverageNote.jsx';
+import { PayeePanel } from './Bills.jsx';
 
 export const LEDGER_KINDS = ['purchases', 'subscriptions', 'travel', 'deliveries'];
-// Simple mode keeps the rail short: the two ledgers with money in them.
-export const SIMPLE_LEDGERS = ['purchases', 'subscriptions'];
+// Simple mode keeps the rail short: Bills (its own view, which holds the subscriptions) and Purchases.
+export const SIMPLE_LEDGERS = ['purchases'];
 
 export function ledgerTitle(kind) {
   if (kind === 'subscriptions') return tv('hedwig.v2.ledger.subscriptions', 'Subscriptions');
@@ -23,6 +26,13 @@ export function ledgerTitle(kind) {
 }
 
 const day = (v) => (v ? shortDate(v) : '');
+// Some references Hedwig reads run to 300 characters; one of those used to widen its column until
+// Amount and Status were pushed off the table.
+const MONO_CELL = { maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' };
+function purchaseStatus(r) {
+  if (r.status === 'received' || r.direction === 'in') return tv('hedwig.v2.ledger.received', 'Received');
+  return r.status === 'paid' || !r.dueDate ? statusLabel(r.status) : `${statusLabel(r.status)} ${day(r.dueDate)}`;
+}
 const when = (v) => (v ? fullTime(v) : '');
 const amount = (r) => money(r.amount, r.currency) || '';
 
@@ -61,7 +71,7 @@ export function ledgerColumns(kind) {
         { id: 'merchant', sort: 'merchant', label: tv('hedwig.v2.card.field.merchant', 'Merchant'), render: (r) => r.merchant || '' },
         { id: 'reference', mono: true, label: tv('hedwig.v2.card.field.reference', 'Reference'), render: (r) => r.reference || '' },
         { id: 'amount', sort: 'amount', num: true, label: tv('hedwig.v2.card.field.amount', 'Amount'), render: amount },
-        { id: 'status', sort: 'status', label: tv('hedwig.v2.card.field.status', 'Status'), render: (r) => (r.status === 'paid' || !r.dueDate ? statusLabel(r.status) : `${statusLabel(r.status)} ${day(r.dueDate)}`) },
+        { id: 'status', sort: 'status', label: tv('hedwig.v2.card.field.status', 'Status'), render: purchaseStatus },
       ];
   }
 }
@@ -104,7 +114,8 @@ export function totalFigures(kind, totals, rows = []) {
       key: t.currency || '?',
       figure: money(t.total, t.currency),
       caption: tvn(t.count, ['hedwig.v2.ledger.purchasesOne', '1 purchase'], ['hedwig.v2.ledger.purchasesMany', '{{n}} purchases']),
-      sub: null,
+      // Amounts whose mail names no currency are added up apart, and say so.
+      sub: t.currency ? null : tv('hedwig.v2.ledger.noCurrency', 'currency not stated'),
     };
   });
 }
@@ -137,7 +148,29 @@ export default function Ledger({ props }) {
     setSort({ kind, field, dir: ['merchant', 'provider', 'carrier', 'cadence', 'status', 'nextRenewal', 'expectedDate'].includes(field) ? 'asc' : 'desc' });
   };
 
-  const open = (r) => { if (r.messageId) openThread({ messageId: r.messageId, subject: r.merchant || r.provider || r.item || '' }); };
+  const [picked, setPicked] = useState(null); // { kind, row } of the purchase whose payee is open
+  const openRow = picked?.kind === kind ? picked.row : null;
+  const open = (r) => {
+    if (kind === 'purchases') { setPicked({ kind, row: r }); return; }
+    if (r.messageId) openThread({ messageId: r.messageId, subject: r.merchant || r.provider || r.item || '' });
+  };
+  useEffect(() => {
+    if (!openRow || phone) return undefined;
+    const onKey = (e) => { if (e.key === 'Escape' && !e.defaultPrevented) setPicked(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [openRow, phone]);
+  const panel = openRow && (
+    <PayeePanel
+      key={openRow.id}
+      payee={openRow.payee || null}
+      focusCardId={openRow.id}
+      phone={phone}
+      onClose={() => setPicked(null)}
+      onChanged={() => res.reload({ quiet: true })}
+    />
+  );
+  if (phone && panel) return panel;
 
   const state = (
     <>
@@ -196,7 +229,7 @@ export default function Ledger({ props }) {
                   type="button"
                   className="hw-row"
                   onClick={() => open(r)}
-                  style={{ display: 'grid', gridTemplateColumns: '40px minmax(0, 1fr)', columnGap: 10, alignItems: 'start', width: '100%', boxSizing: 'border-box', padding: '12px 0', minHeight: 64, border: 0, borderRadius: 8, background: 'none', color: V.ink, font: 'inherit', textAlign: 'left', cursor: r.messageId ? 'pointer' : 'default' }}
+                  style={{ display: 'grid', gridTemplateColumns: '40px minmax(0, 1fr)', columnGap: 10, alignItems: 'start', width: '100%', boxSizing: 'border-box', padding: '12px 0', minHeight: 64, border: 0, borderRadius: 8, background: 'none', color: V.ink, font: 'inherit', textAlign: 'left', cursor: kind === 'purchases' || r.messageId ? 'pointer' : 'default' }}
                 >
                   <Avatar name={name || ledgerTitle(kind)} size={40} />
                   <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
@@ -216,7 +249,7 @@ export default function Ledger({ props }) {
   }
 
   const th = { textAlign: 'left', fontWeight: 600, fontSize: 11, lineHeight: '14px', color: V.muted, padding: '0 12px 6px', borderBottom: `1px solid ${V.line}`, whiteSpace: 'nowrap' };
-  return (
+  const table = (
     <ViewBody label={title} padded={false} style={{ padding: '14px 6px 16px' }}>
       <ViewHead title={title} sub={sub} />
       {state}
@@ -246,12 +279,12 @@ export default function Ledger({ props }) {
             </thead>
             <tbody>
               {sorted.map((r) => (
-                <tr key={r.id} className="hw-row" onClick={() => open(r)} style={{ cursor: r.messageId ? 'pointer' : 'default' }}>
+                <tr key={r.id} className="hw-row" aria-selected={openRow?.id === r.id || undefined} onClick={() => open(r)} style={{ cursor: kind === 'purchases' || r.messageId ? 'pointer' : 'default', background: openRow?.id === r.id ? V.select : undefined }}>
                   {columns.map((c, i) => (
-                    <td key={c.id} style={{ padding: '10px 12px', borderBottom: `1px solid ${V.line}`, textAlign: c.num ? 'right' : 'left', color: c.date ? V.muted : V.ink, fontWeight: i === 1 ? 600 : 400, whiteSpace: c.num || c.mono || c.date ? 'nowrap' : undefined }}>
-                      {i === 1 && r.messageId
+                    <td key={c.id} style={{ padding: '10px 12px', borderBottom: `1px solid ${V.line}`, textAlign: c.num ? 'right' : 'left', color: c.date ? V.muted : V.ink, fontWeight: i === 1 ? 600 : 400, whiteSpace: c.num || c.mono || c.date ? 'nowrap' : undefined, ...(c.mono ? MONO_CELL : null) }}>
+                      {i === 1 && (r.messageId || kind === 'purchases')
                         ? <button type="button" onClick={(e) => { e.stopPropagation(); open(r); }} className="hw-link" style={{ padding: 0, border: 0, background: 'none', font: 'inherit', color: V.ink, cursor: 'pointer', textAlign: 'left', textDecorationColor: 'transparent' }}>{c.render(r)}</button>
-                        : c.mono && c.render(r) ? <Code size={12}>{c.render(r)}</Code> : c.render(r)}
+                        : c.mono && c.render(r) ? <Code size={12} title={c.render(r)}>{c.render(r)}</Code> : c.render(r)}
                     </td>
                   ))}
                 </tr>
@@ -261,5 +294,12 @@ export default function Ledger({ props }) {
         </div>
       )}
     </ViewBody>
+  );
+  if (!panel) return table;
+  return (
+    <div style={{ display: 'flex', height: '100%', minHeight: 0, minWidth: 0 }}>
+      <div style={{ flex: '1 1 0', minWidth: 0, display: 'flex' }}>{table}</div>
+      <aside aria-label={tv('hedwig.v2.bills.panel', 'Payee')} style={{ width: 400, flexShrink: 0, borderLeft: `1px solid ${V.line}`, display: 'flex', minHeight: 0 }}>{panel}</aside>
+    </div>
   );
 }

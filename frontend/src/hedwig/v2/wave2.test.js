@@ -81,6 +81,8 @@ const { askedLabel } = await import('./Waiting.jsx');
 const Thread = (await import('./Thread.jsx')).default;
 const StreamView = (await import('./StreamView.jsx')).default;
 const Ledger = (await import('./Ledger.jsx')).default;
+const Bills = (await import('./Bills.jsx')).default;
+const { billStatusLine, billSections, billFigures, candidateReason } = await import('./Bills.jsx');
 const Waiting = (await import('./Waiting.jsx')).default;
 const Brief = (await import('./Brief.jsx')).default;
 const Ask = (await import('../views/Ask.jsx')).default;
@@ -448,6 +450,96 @@ describe('ledgers', () => {
     assert.equal(document.querySelector('tbody tr td').textContent, 'Netflix', 'next renewal first');
     const ids = v2Views().map((v) => v.id);
     assert.ok(ids.includes('hedwig.ledger') && ids.includes('hedwig.waiting'));
+  });
+});
+
+// ── bills ───────────────────────────────────────────────────────────────────
+describe('bills', () => {
+  const section = (id) => document.querySelector(`[data-bills-section="${id}"]`);
+  const row = (payee) => document.querySelector(`[data-bill="${payee}"]`);
+
+  test('a bill says where it stands; sections keep their order and drop empty ones', () => {
+    const now = new Date(2026, 9, 1, 9, 0);
+    assert.deepEqual(billStatusLine({ status: 'late', nextDue: '2026-09-28' }, now).tone, 'attention');
+    assert.match(billStatusLine({ status: 'late', nextDue: '2026-09-28' }, now).text, /^Due (28 Sep|Sep 28), no payment seen yet$/);
+    assert.equal(billStatusLine({ status: 'due_soon', nextDue: '2026-10-02', daysUntil: 1 }, now).text, 'Due tomorrow');
+    assert.match(billStatusLine({ status: 'upcoming', nextDue: '2026-10-28' }, now).text, /^Next/);
+    assert.equal(billStatusLine({ status: 'unknown' }, now).text, 'No date yet');
+    const s = billSections([{ status: 'upcoming' }, { status: 'overdue' }, { status: 'ended' }], [{ payee: 'x' }]);
+    assert.deepEqual(s.map((x) => x.id), ['due', 'upcoming', 'candidates', 'ended']);
+    assert.equal(candidateReason({ reason: 'cadence_unknown', charges: 1 }), 'One payment so far; Hedwig cannot tell how often yet.');
+    const [usd] = billFigures([{ currency: 'USD', monthly: 236, count: 1, due: 0 }]);
+    assert.equal(usd.caption, 'a month');
+    assert.equal(usd.sub, '1 bill');
+  });
+
+  test('Bills lists what is due, what comes next and what might be a bill, with a month of it as figures', async () => {
+    await render(h(Bills, { props: {} }));
+    await settle(60);
+    assert.equal(document.querySelector('h1').textContent, 'Bills');
+    assert.ok(section('due') || section('upcoming'), 'there are bills');
+    assert.ok(row('anthropic'), 'two monthly charges from Anthropic, named two ways, are one bill');
+    assert.ok(row('spotify') && row('netflix') && row('telia'));
+    assert.ok(section('candidates').contains(row('openai')), 'one OpenAI charge is a question, not a bill');
+    assert.match(byLabel('Totals').textContent, /a month/);
+  });
+
+  test('Track moves a payee into the bills at once and Undo takes it back', async () => {
+    await render(h(Bills, { props: {} }));
+    await settle(60);
+    await click(row('openai').querySelector('[data-bill-track]'));
+    assert.ok(!section('candidates') || !section('candidates').contains(row('openai')), 'no longer asked about');
+    assert.ok(row('openai'), 'listed with the bills');
+    assert.ok(requests().includes('POST /cards/bills/openai/track'));
+    await React.act(async () => { assert.equal(undoLayer.undo(), true); });
+    await settle(60);
+    assert.ok(requests().includes('POST /cards/bills/openai/untrack'));
+    assert.ok(section('candidates').contains(row('openai')), 'asked about again');
+  });
+
+  test('Not a bill takes a payee off the list at once; Undo restores it', async () => {
+    await render(h(Bills, { props: {} }));
+    await settle(60);
+    await click(row('openai').querySelector('[data-bill-not]'));
+    assert.equal(Boolean(row('openai')), false, 'gone from the list');
+    assert.ok(requests().includes('POST /cards/bills/openai/not-bill'));
+    await React.act(async () => { assert.equal(undoLayer.undo(), true); });
+    await settle(60);
+    assert.ok(requests().includes('POST /cards/bills/openai/restore'));
+    assert.ok(row('openai'));
+  });
+
+  test('a bill opens its payee beside the list: the bill, and every payment opening its mail', async () => {
+    await render(h(Bills, { props: {} }));
+    await settle(60);
+    await click(row('anthropic'));
+    await settle(60);
+    const panel = byLabel('Payee');
+    assert.ok(panel, 'the payee panel is open');
+    assert.match(panel.querySelector('[data-bill-summary]').textContent, /monthly/i);
+    const payments = all('[data-payment]', panel);
+    assert.equal(payments.length, 2, 'both charges, newest first');
+    assert.equal(payments[0].getAttribute('data-payment'), 'c-anthropic-2');
+  });
+
+  test('Purchases: a row opens what Hedwig read and its payee, also when the mail is gone', async () => {
+    await render(h(Ledger, { props: { kind: 'purchases' } }));
+    await settle(60);
+    const openai = all('tbody tr').find((tr) => tr.textContent.includes('OPENAI'));
+    assert.ok(openai, 'the card alert is listed');
+    assert.match(openai.textContent, /\$40/, 'its currency is read from the sentence');
+    await click(openai);
+    await settle(80);
+    const panel = byLabel('Payee');
+    assert.ok(panel, 'the row opened the payee panel');
+    assert.ok(byLabel('This purchase', panel), 'with the purchase itself');
+    assert.match(panel.textContent, /deleted or moved/);
+    assert.ok(all('[data-bill-track]', panel).length, 'and the question whether it is a bill');
+    // A purchase whose mail is there opens it.
+    const fjell = all('tbody tr').find((tr) => tr.textContent.includes('Fjellsport'));
+    await click(fjell);
+    await settle(80);
+    assert.ok(byText('button', 'Open the mail', byLabel('Payee')));
   });
 });
 

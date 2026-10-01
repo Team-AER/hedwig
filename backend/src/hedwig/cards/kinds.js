@@ -99,6 +99,38 @@ export function merchantKey(name) {
     .replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 }
 
+// Words that name a department or a mail stream of a payee, not the payee: "Zomato Order",
+// "Mouser Order Update", "GoDaddy Renewals", "Anthropic, PBC", "Tata Starbucks Private".
+const PAYEE_NOISE = new Set(['pbc', 'pvt', 'private', 'pte', 'india', 'order', 'orders', 'update', 'updates', 'renewal', 'renewals', 'billing',
+  'payment', 'payments', 'receipt', 'receipts', 'invoice', 'invoices', 'services', 'service', 'support', 'team', 'media', 'technologies', 'the',
+  'electronics', 'labs', 'software', 'systems', 'solutions', 'online', 'retail', 'digital', 'global', 'international', 'ventures', 'enterprises']);
+// One payee under several names (the brand on the receipt, the legal name on the card statement).
+const PAYEE_ALIASES = { goindigo: 'indigo', 'interglobe aviation': 'indigo', 'bigtree entertainment': 'bookmyshow', claude: 'anthropic', chatgpt: 'openai' };
+
+/**
+ * Who a charge is paid to, for grouping charges into bills: 'Anthropic, PBC' and 'ANTHROPIC' are one
+ * payee, so are 'Zomato Order' and 'ZOMATO'. Looser than merchantKey, which names cards and the
+ * owner's feedback and must not change under them. Pure.
+ */
+export function payeeKey(name) {
+  const base = merchantKey(String(name || '').replace(/\.in\b/gi, ''));
+  const words = base.split(' ').filter((w) => w && !PAYEE_NOISE.has(w));
+  const key = (words.length ? words : base.split(' ')).join(' ').trim();
+  return PAYEE_ALIASES[key] || key;
+}
+
+// The currency a sentence states: "USD 23.6 spent at ANTHROPIC", "INR 1,995.8", "Rs.499", "£48.00".
+const CURRENCY_IN_TEXT = /(?:^|[^A-Za-z])(INR|USD|EUR|GBP|SGD|AUD|CAD|NOK|SEK|DKK|JPY|AED|Rs\.?|US\$|S\$|A\$|C\$|₹|£|€|\$)(?=\s?\d|[^A-Za-z]|$)/;
+const CURRENCY_WORD = { 'RS': 'INR', 'RS.': 'INR', 'US$': 'USD', 'S$': 'SGD', 'A$': 'AUD', 'C$': 'CAD', '₹': 'INR', '£': 'GBP', '€': 'EUR', $: 'USD' };
+
+/** The first currency a text names, as a code; null when it names none. Pure. */
+export function currencyFromText(text) {
+  const m = CURRENCY_IN_TEXT.exec(String(text || ''));
+  if (!m) return null;
+  const tok = m[1].toUpperCase();
+  return CURRENCY_WORD[tok] || (/^[A-Z]{3}$/.test(tok) ? tok : null);
+}
+
 /** The key naming the thing a card is about; cards with the same key are one card. */
 export function dedupeKey(card) {
   const f = card.fields || {};
