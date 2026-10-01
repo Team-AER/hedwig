@@ -15,12 +15,12 @@ vi.mock('../../services/db.js', () => ({
     return { rows: [], rowCount: 0 };
   }),
 }));
-vi.mock('../config.js', () => ({ getConfig: vi.fn(async () => ({ 'index.embedBatch': 4 })) }));
+vi.mock('../config.js', () => ({ getConfig: vi.fn(async () => ({ 'index.embedBatch': 4, 'index.embedRetryHours': 24 })) }));
 vi.mock('./recipe.js', () => ({ currentRecipe: async () => ({ vectors: true, version: 'v1', full: 'v1:bge-m3' }) }));
 const embed = vi.hoisted(() => vi.fn());
 vi.mock('../embeddings.js', async (importOriginal) => ({ ...(await importOriginal()), embed }));
 
-const { embedPending, isInputError, embedBackoffMs } = await import('./store.js');
+const { embedPending, isInputError, isModelError, embedBackoffMs, retryEmbedErrors } = await import('./store.js');
 const { EmbeddingError } = await import('../embeddings.js');
 
 const vectors = (n) => ({ model: 'bge-m3', dims: 3, vectors: Array.from({ length: n }, () => [1, 0, 0]) });
@@ -80,6 +80,23 @@ describe('embedPending failures', () => {
     expect(db.state.get('index.embedBackoff')).toBeUndefined();
   });
 
+  it('a 400 naming the model is the gateway, not the input: no split, no marks, a backoff', async () => {
+    // LiteLLM's answer while bge-m3 was missing from llm-proxy (2026-09-25): 7,077 messages were
+    // marked unembeddable for good and coverage stuck at 73%.
+    const litellm = 'embeddings 400: {"error":{"message":"/embeddings: Invalid model name passed in model=bge-m3. Call `/v1/models` to view available models"}}';
+    embed.mockRejectedValue(new EmbeddingError(litellm, { status: 400 }));
+    await expect(embedPending({ messageIds: ids })).rejects.toThrow(/Invalid model name/);
+    expect(embed).toHaveBeenCalledTimes(1);
+    expect(db.calls.some((c) => /UPDATE hedwig_index_msg SET error = LEFT/.test(c.sql))).toBe(false);
+    expect(db.state.get('index.embedBackoff')).toMatchObject({ failures: 1 });
+    expect(isInputError({ status: 400, message: litellm })).toBe(false);
+    expect(isModelError({ message: 'embeddings 404: The model `bge-m3` does not exist' })).toBe(true);
+    expect(isModelError({ message: 'embeddings 400: {"error":{"code":"model_not_found"}}' })).toBe(true);
+    // Input errors that mention the model's limits are still the input.
+    expect(isInputError({ status: 400, message: "embeddings 400: This model's maximum context length is 8192 tokens" })).toBe(true);
+    expect(isInputError({ status: 413, message: 'embeddings 413: Input validation error: inputs must have less than 8192 tokens' })).toBe(true);
+  });
+
   it('an outage met while splitting stops the split and backs off', async () => {
     let n = 0;
     embed.mockImplementation(async () => {
@@ -116,6 +133,24 @@ describe('embedPending vector insert race', () => {
     });
     expect(await embedPending({ messageIds: ids })).toBe(4);
     expect(inserts).toBe(2);
+    query.mockImplementation(real);
+  });
+});
+
+describe('retryEmbedErrors', () => {
+  it('queues messages whose embedding failed more than index.embedRetryHours ago again', async () => {
+    const { query } = await import('../../services/db.js');
+    const real = query.getMockImplementation();
+    let call = null;
+    query.mockImplementation(async (sql, params) => {
+      if (/UPDATE hedwig_index_msg SET error = NULL/.test(sql)) { call = { sql: sql.replace(/\s+/g, ' '), params }; return { rows: [], rowCount: 7077 }; }
+      return real(sql, params);
+    });
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    expect(await retryEmbedErrors()).toBe(7077);
+    expect(call.sql).toMatch(/error LIKE 'embed:%'/);
+    expect(call.sql).toMatch(/updated_at < NOW\(\) - make_interval\(hours => \$1::int\)/);
+    expect(call.params).toEqual([24]);
     query.mockImplementation(real);
   });
 });

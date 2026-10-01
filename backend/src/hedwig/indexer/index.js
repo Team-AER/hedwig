@@ -32,5 +32,6 @@ export default {
     defineSchedule({ name: 'index.acquire', everySec: 10, run: sweeps.acquire });
     defineSchedule({ name: 'index.chunk', everySec: 10, run: sweeps.chunk });
     defineSchedule({ name: 'index.embed', everySec: 5, run: sweeps.embed });
+    defineSchedule({ name: 'index.embedRetry', everySec: 3600, run: sweeps.embedRetry });
   },
 };

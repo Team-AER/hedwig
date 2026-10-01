@@ -2,7 +2,7 @@
 import { query } from '../../services/db.js';
 import { getConfig, saveSystemConfig } from '../config.js';
 import { getState } from '../state.js';
-import { indexMessages, embedPending, drain, chunkPending, repairEmptyBodies } from './store.js';
+import { indexMessages, embedPending, drain, chunkPending, repairEmptyBodies, retryEmbedErrors } from './store.js';
 import { bodyCoverage } from './truth.js';
 import { coverageSummary, refreshCoverage, resetCoverage } from './coverage.js';
 import { applyRecipeChange, currentRecipe } from './recipe.js';
@@ -34,6 +34,7 @@ export const sweeps = {
     const cfg = await getConfig();
     return drain(() => embedPending({ maxChunks: cfg['index.embedBatch'] * 4 }), { budgetMs: 10_000 });
   },
+  embedRetry: () => retryEmbedErrors(),
   acquire: async () => {
     await reconcileBodies();
     const bodies = await requestBodies();

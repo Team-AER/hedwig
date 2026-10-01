@@ -57,7 +57,7 @@ export function coverageError(c) {
   const bits = [];
   if (c.bodyFailed > 0) bits.push(`${c.bodyFailed} bod${c.bodyFailed === 1 ? 'y' : 'ies'} could not be fetched${c.lastBodyError ? ` (last: ${String(c.lastBodyError).slice(0, 200)})` : ''}`);
   if (c.attachFailed > 0) bits.push(`${c.attachFailed} attachment text extraction${c.attachFailed === 1 ? '' : 's'} failed${c.lastAttachError ? ` (last: ${String(c.lastAttachError).slice(0, 200)})` : ''}`);
-  if (c.indexErrors > 0) bits.push(`${c.indexErrors} message${c.indexErrors === 1 ? '' : 's'} could not be chunked${c.lastIndexError ? ` (last: ${String(c.lastIndexError).slice(0, 200)})` : ''}`);
+  if (c.indexErrors > 0) bits.push(`${c.indexErrors} message${c.indexErrors === 1 ? '' : 's'} could not be indexed${c.lastIndexError ? ` (last: ${String(c.lastIndexError).slice(0, 200)})` : ''}`);
   return bits.length ? bits.join('; ') : null;
 }
 

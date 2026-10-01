@@ -214,13 +214,25 @@ function safeNewText(row) {
 
 const EMBED_BACKOFF = 'index.embedBackoff';
 
+// Gateways answer an unknown or unloaded model with a 400 too (LiteLLM: "Invalid model name
+// passed in model=bge-m3", OpenAI: "The model `x` does not exist"). That is the endpoint's
+// configuration, not the text: on 2026-09-25 a gateway reload without bge-m3 marked 7,077
+// messages as unembeddable for good.
+const MODEL_ERROR = /invalid model|unknown model|no such model|model[_ ]not[_ ]found|model (?:\S+ )?(?:not found|does not exist|is not available|is not loaded)/i;
+
+/** An embedding error that names the model (unknown, not loaded): configuration, never the input. */
+export function isModelError(err) {
+  return MODEL_ERROR.test(String(err?.message || ''));
+}
+
 /**
  * An embedding error caused by the input itself: the batch is split to find the bad chunk. Other
- * 4xx (401/403/404: wrong key or URL), 408/429 and 5xx, connection failures and malformed replies
- * are outages or configuration: splitting would only multiply the requests.
+ * 4xx (401/403/404: wrong key or URL), a 4xx about the model, 408/429 and 5xx, connection
+ * failures and malformed replies are outages or configuration: splitting would only multiply the
+ * requests.
  */
 export function isInputError(err) {
-  return [400, 413, 422].includes(Number(err?.status));
+  return [400, 413, 422].includes(Number(err?.status)) && !isModelError(err);
 }
 
 /** How long to leave the embedding endpoint alone after `failures` outages in a row. */
@@ -338,6 +350,25 @@ export async function embedPending({ messageIds = null, maxChunks = 256 } = {}) 
     ).catch(() => {});
   }
   return done;
+}
+
+/**
+ * Give messages whose embedding failed another chance once the failure is `index.embedRetryHours`
+ * old: an error that was really the endpoint's must not keep mail out of the index (and the
+ * coverage share below 100%) for good. A truly bad input fails again and waits another round.
+ * @returns {Promise<number>} messages queued again
+ */
+export async function retryEmbedErrors() {
+  const cfg = await getConfig();
+  const hours = Number(cfg['index.embedRetryHours']);
+  if (!(hours > 0)) return 0;
+  const { rowCount } = await query(
+    `UPDATE hedwig_index_msg SET error = NULL, updated_at = NOW()
+      WHERE error LIKE 'embed:%' AND updated_at < NOW() - make_interval(hours => $1::int)`,
+    [Math.round(hours)],
+  );
+  if (rowCount) console.log(`[hedwig] index: embedding ${rowCount} message(s) again that failed more than ${Math.round(hours)} h ago`);
+  return rowCount || 0;
 }
 
 /**

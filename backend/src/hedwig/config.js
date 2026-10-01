@@ -233,6 +233,7 @@ export const SCHEMA = [
   { key: 'index.minTermCoverage', type: 'number', default: 0.5, min: 0, max: 1, group: 'index', label: 'Evidence gate: share of query words a full-text hit must contain', help: 'A chunk found only by full text needs this share of the question\'s words (stopwords aside), or the rank below. 0 turns this gate off.' },
   { key: 'index.minFtsRank', type: 'number', default: 0.8, min: 0, max: 2, group: 'index', label: 'Evidence gate: full-text rank that passes regardless of word share', help: 'ts_rank_cd normalised to 0–1, plus 0.5 for a phrase match. Above 1.5 never passes.' },
   { key: 'index.embedBatch', type: 'number', default: 32, min: 1, max: 512, group: 'index', label: 'Chunks per embedding call' },
+  { key: 'index.embedRetryHours', type: 'number', default: 24, min: 0, max: 8760, group: 'index', label: 'Retry failed embeddings after (hours)', help: '0 = never. A failure that was the endpoint, not the text, then heals by itself.' },
   // --- end v2 index ---
   // --- v2 frontend ---
   { key: 'ui.powerMode', type: 'boolean', default: false, group: 'ui', label: 'Power mode (rules, routing, prompts and index status in Settings)', scope: 'user' },
