@@ -8707,9 +8707,8 @@ function makeSearchIndex(t) {
     // Integrations
     { label: t('admin.integrations.microsoft.title'), keywords: ['microsoft', 'outlook', '365', 'oauth', 'azure', 'client id', 'tenant', 'ms365', 'office'], tab: 'integrations', breadcrumb: tabLabel('integrations') },
     { label: t('admin.ai.title'), keywords: ['ai', 'artificial intelligence', 'chatgpt', 'ollama', 'llm', 'language model', 'summarize', 'draft', 'compose assistant', 'openai', 'local ai', 'inference', 'gpt'], tab: 'ai', adminOnly: true, breadcrumb: tabLabel('ai') },
-    { label: t('admin.plugins.title'), keywords: ['plugin', 'plugins', 'extension', 'extensions', 'add-on', 'addon', 'gtd', 'activate', 'enable feature', 'modules'], tab: 'plugins', breadcrumb: tabLabel('plugins') },
+    { label: t('admin.plugins.title'), keywords: ['plugin', 'plugins', 'extension', 'extensions', 'add-on', 'addon', 'activate', 'enable feature', 'modules'], tab: 'plugins', breadcrumb: tabLabel('plugins') },
     { label: t('admin.categories.title'), keywords: ['categories', 'categorize', 'newsletter', 'promotion', 'social', 'automated', 'inbox tabs', 'sort emails', 'classify'], tab: 'categories', breadcrumb: tabLabel('categories') },
-    { label: t('admin.categories.gtdReveal'), keywords: ['gtd', 'todo', 'getting things done', 'watch', 'delegated', 'someday', 'reference', 'next action', 'waiting', 'inbox zero', 'pet'], tab: 'categories', subtab: 'gtd', breadcrumb: `${tabLabel('categories')} › ${t('admin.categories.gtdReveal')}` },
     // Security
     { label: t('admin.security.totpTitle'), keywords: ['2fa', 'totp', 'authenticator', 'two factor', 'otp', 'two-factor', 'mfa', 'security code'], tab: 'security', subtab: 'security', breadcrumb: secCrumb },
     { label: t('admin.security.ssoTitle'), keywords: ['sso', 'linked', 'identity', 'provider', 'link', 'unlink', 'oidc', 'connect identity'], tab: 'security', subtab: 'security', breadcrumb: secCrumb },

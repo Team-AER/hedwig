@@ -8,9 +8,15 @@ import { createPluginRegistry } from './registry.js';
 import { loadBundledPlugins } from './loadPlugins.js';
 
 describe('loadBundledPlugins', () => {
-  it('registers the GTD plugin as Tier-1 mounted at /api/gtd', () => {
+  it('leaves GTD out of Hedwig: no routes, no tick, nothing in the plugin list', () => {
     const r = createPluginRegistry();
     loadBundledPlugins(r);
+    expect(r.get('gtd')).toBeFalsy();
+  });
+
+  it('registers the GTD plugin as Tier-1 mounted at /api/gtd when it is not hidden', () => {
+    const r = createPluginRegistry();
+    loadBundledPlugins(r, { hidden: new Set() });
     const gtd = r.get('gtd');
     expect(gtd).toBeTruthy();
     expect(gtd.tier).toBe(1);
