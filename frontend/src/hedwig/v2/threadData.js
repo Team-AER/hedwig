@@ -148,6 +148,13 @@ async function workThread(key, { refresh = false } = {}) {
   return v2Api.get(`/work/thread/${encodeURIComponent(key)}${refresh ? '?refresh=1' : ''}`).catch((err) => ({ __error: err }));
 }
 
+/** The thread key of a message (GET /work/message/:id/thread), or null when it cannot be found. */
+async function threadOfMessage(messageId) {
+  const work = useV2.getState().caps.work === true ? true : await useV2.getState().probeWork();
+  if (work !== true) return null;
+  return v2Api.get(`/work/message/${encodeURIComponent(messageId)}/thread`).then((r) => r?.threadId || null).catch(() => null);
+}
+
 /** `refresh` asks the work route to write the story again instead of using its cached one. */
 export async function loadThread(item, { refresh = false } = {}) {
   if (!item) return null;
@@ -156,14 +163,18 @@ export async function loadThread(item, { refresh = false } = {}) {
     e.status = 404;
     throw e;
   }
-  const key = item.threadId || item.messageId;
   if (isMockMode()) {
+    const key = item.threadId || item.messageId;
     const [t, extras] = await Promise.all([v2Api.get(`/mock/thread/${encodeURIComponent(key)}`), workThread(key, { refresh })]);
     const ex = extras?.__error ? {} : (extras || {});
     return { ...t, messages: (t.messages || []).map(normaliseMessage), ...extrasOf(ex), extrasMissing: Boolean(extras?.__error) };
   }
 
-  const threadRes = item.threadId ? await api.getThread(item.threadId).catch(() => null) : null;
+  // A card, a ledger or a Brief row knows only the message: find its thread first, so the reader
+  // shows the whole conversation and Done marks the thread rather than a key the server lacks.
+  const threadId = item.threadId || (item.messageId ? await threadOfMessage(item.messageId) : null);
+  const key = threadId || item.messageId;
+  const threadRes = threadId ? await api.getThread(threadId).catch(() => null) : null;
   let rows = Array.isArray(threadRes?.messages) ? threadRes.messages : [];
   if (!rows.length && item.messageId) {
     const one = await api.getMessage(item.messageId).catch(() => null);
@@ -188,6 +199,7 @@ export async function loadThread(item, { refresh = false } = {}) {
   const ex = extrasOf(extrasMissing ? {} : (extras || {}));
   const people = participantsOf(messages);
   return {
+    threadId,
     subject: latest.raw?.subject || item.subject || '',
     participants: null,
     people,

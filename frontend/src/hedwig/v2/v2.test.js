@@ -1006,6 +1006,15 @@ describe('Daily Brief', () => {
     assert.deepEqual(mock.mockAnswers().at(-1), { id: 'q-anna', optionId: 'yes', always: true }, 'always only from its own button');
   });
 
+  test('a conversation Done takes away leaves Needs you at once, not after the undo window', async () => {
+    assert.match(text(), /Due Friday, the board pack prints that morning/);
+    // The reader passes the row with the thread it found; the Brief row names the message.
+    await React.act(async () => { useV2.getState().hideRows(['m-anna', 'thread-from-the-reader']); });
+    assert.doesNotMatch(text(), /Due Friday, the board pack prints that morning/);
+    await React.act(async () => { useV2.getState().showRows(['m-anna', 'thread-from-the-reader']); });
+    assert.match(text(), /Due Friday, the board pack prints that morning/, 'Undo brings it back');
+  });
+
   test('Ask falls back to search when the Ask view is not there', async () => {
     const input = byLabel('Ask your mail');
     await React.act(async () => {

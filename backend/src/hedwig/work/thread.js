@@ -12,7 +12,7 @@ import { summariseThreads, saveStory, tldrFor } from './summaries.js';
 import { mapCitations } from '../context/summaries.js';
 import { analyseText, senderKind } from '../triage/signals.js';
 import {
-  httpError, threadKeyOf, loadThreadMessages, ownerOf, attachmentNames, senderLabel, shortDate, clampInt, timeZoneOf,
+  httpError, resolveThreadKey, loadThreadMessages, ownerOf, attachmentNames, senderLabel, shortDate, clampInt, timeZoneOf,
 } from './util.js';
 import { voiceWith } from './voice.js';
 
@@ -200,7 +200,7 @@ export function cacheValid(cached, messages) {
  *             provenance: { story, quickReplies }, cached: boolean, storyError?: string }}
  */
 export async function threadStory(userId, threadId, { refresh = false } = {}) {
-  const threadKey = threadKeyOf(threadId);
+  const threadKey = await resolveThreadKey(userId, threadId);
   const cfg = await getConfig(userId);
   const messages = await loadThreadMessages(userId, threadKey);
   if (!messages.length) throw httpError(404, 'Thread not found');

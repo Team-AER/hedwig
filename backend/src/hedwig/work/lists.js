@@ -13,7 +13,7 @@ import { query } from '../../services/db.js';
 import { getConfig } from '../config.js';
 import { zonedParts, addDays, zonedToUtc } from '../insights/time.js';
 import {
-  httpError, threadKeyOf, latestOfThreads, streamRow, clampInt, parseDate, timeZoneOf, isUuid,
+  httpError, resolveThreadKey, latestOfThreads, streamRow, clampInt, parseDate, timeZoneOf, isUuid,
 } from './util.js';
 import { tldrFor, enqueueForRows } from './summaries.js';
 import { needsFor, resolveReplied, resolveDone, deriveNeeds } from './needs.js';
@@ -149,7 +149,7 @@ export async function addItem(userId, kindIn, body = {}) {
     return { item: { ...reminderRow(rows[0]), ...itemExtras(rows[0]) } };
   }
 
-  const threadKey = threadKeyOf(body.threadId);
+  const threadKey = await resolveThreadKey(userId, body.threadId);
   const latest = await requireThread(userId, threadKey);
   if (kind === 'done') {
     await markDone(userId, [threadKey], { note: note ? note.slice(0, 500) : null });
@@ -188,7 +188,7 @@ export async function removeItem(userId, kindIn, threadId) {
     res = await query(
       `UPDATE hedwig_work_items SET done_at = NOW(), done_reason = 'user'
         WHERE user_id = $1 AND kind = $2 AND thread_key = $3 AND done_at IS NULL`,
-      [userId, kind, threadKeyOf(key)],
+      [userId, kind, await resolveThreadKey(userId, key)],
     );
   }
   if (!res.rowCount) throw httpError(404, 'Not on that list');
@@ -264,7 +264,7 @@ export async function snooze(userId, body = {}, { snoozeMessage = null } = {}) {
   const cfg = await getConfig(userId);
   const until = parseDate(body.until, 'until') || defaultSnoozeUntil(cfg);
   let messageId = body.messageId || null;
-  let threadKey = body.threadId ? threadKeyOf(body.threadId) : null;
+  let threadKey = body.threadId ? await resolveThreadKey(userId, body.threadId) : null;
   if (messageId && !isUuid(messageId)) throw httpError(400, 'messageId must be a message id');
   if (!messageId) {
     if (!threadKey) throw httpError(400, 'threadId or messageId is required');

@@ -4,7 +4,7 @@
 // others with Nudge, "Today, from your Records" as boxed cards with 20/600 tabular figures, Reading
 // picks, the day's question, and the "Hedwig today" line with Review or undo. Section headers are
 // the 11px/600 SectionLabel. No serif, no italic.
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useStore } from '../../store/index.js';
 import { useHedwig } from '../store.js';
 import { getView } from '../registry.js';
@@ -20,6 +20,7 @@ import { tv } from './i18n.js';
 import { TierNote } from './TierNote.jsx';
 import { CoverageNote } from './CoverageNote.jsx';
 import { isLighter } from './tiers.js';
+import { useV2, liveRows } from './state.js';
 
 function Item({ time, children, action }) {
   return (
@@ -121,10 +122,13 @@ export default function Brief() {
   const [undone, setUndone] = useState([]);
   const [undoing, setUndoing] = useState(null);
   const b = res.data || {};
-  const needs = listOf(b.needsYou, 'items');
+  // Done, Delete, Junk and Snooze take a conversation away at once (actions.js), here as in the
+  // streams; the Brief reloads once the call has gone.
+  const hidden = useV2((s) => s.hidden);
+  const needs = useMemo(() => liveRows(listOf(b.needsYou, 'items'), hidden), [b.needsYou, hidden]);
   const waiting = listOf(b.waitingOn, 'items');
   const cards = listOf(b.cards, 'items');
-  const reading = listOf(b.reading, 'items');
+  const reading = useMemo(() => liveRows(listOf(b.reading, 'items'), hidden), [b.reading, hidden]);
   const questions = listOf(b.questions, 'questions').filter((q) => !answered.includes(q.id));
   // D's /insights/brief/today: generatedAt + headlineSource; older drafts of the shape used
   // date / compiledAt / modelCall. Both read the same.

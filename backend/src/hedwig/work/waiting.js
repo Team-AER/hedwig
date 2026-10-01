@@ -10,7 +10,7 @@ import { listTriage, resolveTriage } from '../triage/service.js';
 import { outgoingSql } from '../triage/store.js';
 import { addressesOf } from '../text.js';
 import {
-  httpError, threadKeyOf, loadThreadMessages, ownerOf, todayLine, clampInt, latestOfThreads, DAY_MS,
+  httpError, resolveThreadKey, loadThreadMessages, ownerOf, todayLine, clampInt, latestOfThreads, DAY_MS,
 } from './util.js';
 import { newTextOf } from './thread.js';
 import { voiceWith } from './voice.js';
@@ -90,7 +90,7 @@ function lastMine(messages) {
 
 /** POST /work/waiting { threadId, days } — remind me if no reply in N days. */
 export async function addWatch(userId, body = {}, { now = new Date() } = {}) {
-  const threadKey = threadKeyOf(body.threadId);
+  const threadKey = await resolveThreadKey(userId, body.threadId);
   const cfg = await getConfig(userId);
   const days = clampInt(body.days, clampInt(cfg['work.waitingDefaultDays'], 3, 1, 60), 1, 60);
   const messages = await loadThreadMessages(userId, threadKey);
@@ -113,7 +113,7 @@ export async function addWatch(userId, body = {}, { now = new Date() } = {}) {
 
 /** POST /work/waiting/:threadId/resolve — stop waiting (triage's items in the thread and any watch). */
 export async function resolveWaiting(userId, threadId) {
-  const threadKey = threadKeyOf(threadId);
+  const threadKey = await resolveThreadKey(userId, threadId);
   const { rows } = await query(
     `SELECT t.message_id FROM hedwig_triage t JOIN messages m ON m.id = t.message_id
       WHERE t.user_id = $1 AND m.thread_key = $2 AND t.resolved_at IS NULL AND ${EFFECTIVE} = 'waiting_on'`,
@@ -132,7 +132,7 @@ export async function resolveWaiting(userId, threadId) {
 
 /** POST /work/waiting/:threadId/nudge — a follow-up in the owner's voice, returned (never sent). */
 export async function nudge(userId, threadId, { now = new Date() } = {}) {
-  const threadKey = threadKeyOf(threadId);
+  const threadKey = await resolveThreadKey(userId, threadId);
   const cfg = await getConfig(userId);
   if (cfg['ui.helpMeWrite'] === false) throw httpError(403, 'Help me write is off in your settings');
   const owner = await ownerOf(userId);

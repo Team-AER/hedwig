@@ -9,7 +9,7 @@ import { query } from '../../services/db.js';
 import { getConfig } from '../config.js';
 import { tierStatus } from '../llm.js';
 import { summariseThreads, summariseMessages, saveStory, tldrFor } from './summaries.js';
-import { httpError, threadKeyOf, loadThreadMessages, ownerOf, clampInt } from './util.js';
+import { httpError, resolveThreadKey, loadThreadMessages, ownerOf, clampInt } from './util.js';
 
 export const REGENERATE_LIMIT = 6;
 export const REGENERATE_WINDOW_MS = 60_000;
@@ -92,7 +92,7 @@ async function rewriteStory(userId, threadKey, messages, cfg, owner) {
 
 /** POST /work/thread/:threadId/story/regenerate. 404 for a thread the user does not have. */
 export async function regenerateStory(userId, threadId) {
-  const threadKey = threadKeyOf(threadId);
+  const threadKey = await resolveThreadKey(userId, threadId);
   const cfg = await getConfig(userId);
   const owner = await ownerOf(userId);
   const messages = await loadThreadMessages(userId, threadKey, { addresses: owner.addresses });

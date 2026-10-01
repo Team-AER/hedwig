@@ -861,7 +861,10 @@ export default function Thread({ props }) {
     } finally { setBusy(null); }
   };
 
-  const threadId = item ? (item.threadId || item.messageId) : null;
+  // The row's thread, or the one the reader found for a row that named only its message (a card,
+  // a ledger, the Brief), so Done and Snooze act on the conversation and not on an unknown key.
+  const threadId = item ? (item.threadId || data?.threadId || item.messageId) : null;
+  const actItem = item && !item.threadId && data?.threadId ? { ...item, threadId: data.threadId } : item;
 
   // "Regenerate summary": the sparkles in the summary and in each TL;DR write them again.
   const patchThread = t.patch;
@@ -888,8 +891,8 @@ export default function Thread({ props }) {
   // Inbox actions go through the optimistic layer: the screen changes at once, a toast offers
   // Undo, the call runs behind it. Drafts are never part of Done, Delete, Junk or Move.
   const act = (kind, extra = {}) => {
-    if (!item) return;
-    performAction({ kind, items: [item], messages: messages.filter((m) => m.id && !isDraft(m)), advance: !phone, ...extra });
+    if (!actItem) return;
+    performAction({ kind, items: [actItem], messages: messages.filter((m) => m.id && !isDraft(m)), advance: !phone, ...extra });
     if (phone && TAKES_AWAY.has(kind)) phoneCtx?.back?.();
   };
   const done = () => act('done');

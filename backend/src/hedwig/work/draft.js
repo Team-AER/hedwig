@@ -9,7 +9,7 @@ import { messageParts } from '../indexer/retrieve.js';
 import { addressesOf } from '../text.js';
 import { toneInstruction } from '../prompts/work.draft.js';
 import {
-  httpError, threadKeyOf, loadThreadMessages, ownerOf, todayLine, attachmentNames, senderLabel, shortDate, clampInt,
+  httpError, resolveThreadKey, loadThreadMessages, ownerOf, todayLine, attachmentNames, senderLabel, shortDate, clampInt,
 } from './util.js';
 import { newTextOf } from './thread.js';
 import { voiceWith, profileLines } from './voice.js';
@@ -82,7 +82,7 @@ export async function draft(userId, body = {}) {
   const owner = await ownerOf(userId);
   let messages = [];
   if (body.threadId) {
-    messages = await loadThreadMessages(userId, threadKeyOf(body.threadId), { addresses: owner.addresses });
+    messages = await loadThreadMessages(userId, await resolveThreadKey(userId, body.threadId), { addresses: owner.addresses });
     if (!messages.length) throw httpError(404, 'Thread not found');
   }
   const counterpart = counterpartOf(messages, owner.addresses);

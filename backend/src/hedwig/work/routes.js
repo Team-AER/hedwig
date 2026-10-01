@@ -9,7 +9,7 @@ import { sendGuard } from './sendguard.js';
 import { tldrFor, messageTldr, summaryStatus, SUMMARISE_JOB } from './summaries.js';
 import { needsFor } from './needs.js';
 import { regenerateStory, regenerateTldr, takeRegenerate } from './regenerate.js';
-import { latestOfThreads, streamRow, isUuid, httpError } from './util.js';
+import { latestOfThreads, streamRow, isUuid, httpError, findThreadKey } from './util.js';
 import { enqueue } from '../jobs.js';
 
 function handle(fn) {
@@ -41,6 +41,14 @@ export function mountWorkRoutes(r) {
   r.post('/work/snooze', handle((req, userId) => snooze(userId, req.body || {})));
 
   r.get('/work/thread/:threadId', handle((req, userId) => threadStory(userId, req.params.threadId, { refresh: truthy(req.query.refresh) })));
+  // The thread a message is in, for a reader opened from a card, a ledger or a Brief row (they
+  // know only the message). Cheap, unlike /work/thread, which may write the story first.
+  r.get('/work/message/:id/thread', handle(async (req, userId) => {
+    if (!isUuid(req.params.id)) throw httpError(400, 'invalid message id');
+    const threadId = await findThreadKey(userId, req.params.id);
+    if (!threadId) throw httpError(404, 'Message not found');
+    return { threadId };
+  }));
   r.post('/work/draft', handle((req, userId) => draft(userId, req.body || {})));
   // "Regenerate summary" (the sparkles in the summary): six a minute per user, 429 past that.
   r.post('/work/thread/:threadId/story/regenerate', handle((req, userId) => {

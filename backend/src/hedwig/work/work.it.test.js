@@ -157,6 +157,29 @@ describe.skipIf(!process.env.HEDWIG_IT)('working the seeded demo mailbox', () =>
     expect((await lists.listCounts(userId)).done).toBe(0);
   });
 
+  it('Done by message id (a reader opened from a card, a ledger or the Brief) marks the message\'s thread', async () => {
+    const CARD_THREAD = `<work-it-card-${randomUUID()}@hedwig.test>`;
+    const first = await addMessage({ subject: 'Your itinerary', fromName: 'Air Example', fromEmail: 'trips@air.example', to: ['prakhar.demo@gmail.com'], date: new Date(Date.now() - 3 * DAY), body: 'Your booking is confirmed.', thread: CARD_THREAD, stream: 'records', read: true });
+    await addMessage({ subject: 'Re: Your itinerary', fromName: 'Air Example', fromEmail: 'trips@air.example', to: ['prakhar.demo@gmail.com'], date: new Date(Date.now() - 2 * DAY), body: 'Check-in is open.', thread: CARD_THREAD, stream: 'records', read: true });
+
+    // The reader asks which thread the message is in (only for the message's owner).
+    const res = await fetch(`${base}/work/message/${first}/thread`);
+    expect(await res.json()).toEqual({ threadId: CARD_THREAD });
+    expect((await fetch(`${base}/work/message/${randomUUID()}/thread`)).status).toBe(404);
+    expect((await fetch(`${base}/work/message/${first}/thread`, { headers: { 'x-test-user': randomUUID() } })).status).toBe(404);
+    // Unthreaded mail is its own thread (thread_key = COALESCE(thread_id, id)).
+    const lone = await addMessage({ subject: 'Boarding pass', fromName: 'Air Example', fromEmail: 'trips@air.example', to: ['prakhar.demo@gmail.com'], date: new Date(Date.now() - DAY), body: 'Your boarding pass.', thread: null, stream: 'records', read: true });
+    expect(await (await fetch(`${base}/work/message/${lone}/thread`)).json()).toEqual({ threadId: lone });
+
+    // A message id used to answer 404 "Thread not found", which the client swallows: Done did nothing.
+    await lists.addItem(userId, 'done', { threadId: first });
+    const done = (await lists.listItems(userId, 'done')).items.map((i) => i.threadId);
+    expect(done).toContain(CARD_THREAD);
+    expect(done).not.toContain(first);
+    await lists.removeItem(userId, 'done', first);
+    expect((await lists.listItems(userId, 'done')).items.map((i) => i.threadId)).not.toContain(CARD_THREAD);
+  });
+
   it('sweeps a day into Done and shows due reminders as People rows', async () => {
     const before = (await people()).length;
     expect(before).toBeGreaterThan(1);

@@ -21,6 +21,32 @@ export function threadKeyOf(threadId) {
   return key;
 }
 
+/**
+ * The thread_key a client id names, or null when the user has no such thread or message. A message
+ * id resolves to its message's thread_key: the reader opened from a card, a ledger or a Brief row
+ * knows only the message, and thread_key is the message id only for unthreaded mail
+ * (COALESCE(thread_id, id)). A real thread_key wins when the id is both.
+ */
+export async function findThreadKey(userId, threadId) {
+  const key = threadKeyOf(threadId);
+  const { rows } = await query(
+    isUuid(key)
+      ? `SELECT m.thread_key FROM messages m JOIN email_accounts a ON a.id = m.account_id
+          WHERE a.user_id = $1 AND NOT m.is_deleted AND m.thread_key IS NOT NULL AND (m.thread_key = $2 OR m.id = $2::uuid)
+          ORDER BY (m.thread_key = $2) DESC LIMIT 1`
+      : `SELECT m.thread_key FROM messages m JOIN email_accounts a ON a.id = m.account_id
+          WHERE a.user_id = $1 AND NOT m.is_deleted AND m.thread_key = $2 LIMIT 1`,
+    [userId, key],
+  );
+  return rows[0]?.thread_key || null;
+}
+
+/** threadKeyOf with a message id resolved (findThreadKey); unknown ids come back unchanged, so the caller's own lookup answers 404. */
+export async function resolveThreadKey(userId, threadId) {
+  const key = threadKeyOf(threadId);
+  return isUuid(key) ? (await findThreadKey(userId, key)) || key : key;
+}
+
 export async function ownerOf(userId) {
   const [addrs, { rows }] = await Promise.all([
     userAddresses([userId]),
