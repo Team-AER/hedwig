@@ -44,6 +44,7 @@ export const SCHEMA = [
   { key: 'llm.reasoning.long', type: 'enum', default: 'low', options: ['off', 'low', 'medium', 'high', 'xhigh'], group: 'models', label: 'Long model reasoning effort' },
   { key: 'llm.reasoning.agent', type: 'enum', default: 'low', options: ['off', 'low', 'medium', 'high', 'xhigh'], group: 'models', label: 'Agent reasoning effort' },
   { key: 'llm.offSpelling', type: 'string', default: 'none', group: 'models', label: 'Wire value sent for "off"', help: 'LiteLLM accepts "none"; some servers want "off".' },
+  { key: 'llm.reasoningHeadroomTokens', type: 'number', default: 2048, min: 0, max: 32768, group: 'models', label: 'Extra output tokens while a model reasons', help: 'Added to each call\'s answer budget when reasoning is on: the reasoning trace counts against max_tokens, and a short cap left no room for the answer.' },
   { key: 'llm.timeoutMs', type: 'number', default: 300000, min: 5000, max: 1800000, group: 'models', label: 'Request timeout (ms)' },
   { key: 'llm.concurrency', type: 'number', default: 2, min: 1, max: 64, group: 'models', label: 'Concurrent requests per model' },
   { key: 'llm.dailyBudget.triage', type: 'number', default: 400, min: 0, max: 100000, group: 'budgets', label: 'Triage stage-3 calls per user per day' },

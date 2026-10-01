@@ -730,10 +730,22 @@ function callSignal(explicit) {
   return explicit || ambient || undefined;
 }
 
-function buildBody({ model, effort, messages, tools, toolChoice, json, responseFormat, maxTokens, temperature, stream }) {
+/**
+ * max_tokens for a call: the caller's answer budget, plus `headroom` while the model reasons. The
+ * reasoning trace counts against max_tokens, and Tier 2 summaries capped at 500 spent all of it
+ * reasoning and returned no answer (1,079 of 1,119 in a week). Pure.
+ */
+export function outputBudget(maxTokens, effort, { headroom = 0, offSpelling = 'none' } = {}) {
+  if (!Number.isFinite(maxTokens)) return undefined;
+  const reasons = Boolean(effort) && effort !== offSpelling && effort !== 'none' && effort !== 'off';
+  return reasons && headroom > 0 ? maxTokens + headroom : maxTokens;
+}
+
+function buildBody({ model, effort, messages, tools, toolChoice, json, responseFormat, maxTokens, temperature, stream, cfg = {} }) {
   const body = { model, messages, stream: Boolean(stream) };
   if (effort) body.reasoning_effort = effort;
-  if (Number.isFinite(maxTokens)) body.max_tokens = maxTokens;
+  const budget = outputBudget(maxTokens, effort, { headroom: Number(cfg['llm.reasoningHeadroomTokens']) || 0, offSpelling: cfg['llm.offSpelling'] });
+  if (budget !== undefined) body.max_tokens = budget;
   if (Number.isFinite(temperature)) body.temperature = temperature;
   if (tools && tools.length) {
     body.tools = tools;
@@ -843,7 +855,7 @@ export async function chat(opts) {
     for (let i = 0; i < attempts.length; i++) {
       const attempt = attempts[i];
       const { model, effort } = attempt;
-      const body = buildBody({ model, effort, messages, tools, toolChoice, json, responseFormat, maxTokens, temperature, stream: false });
+      const body = buildBody({ model, effort, messages, tools, toolChoice, json, responseFormat, maxTokens, temperature, stream: false, cfg });
       const releaseSlot = await acquire(model, cfg['llm.concurrency']);
       const started = Date.now();
       let error = null; let usage = {}; let result = null; let more = false; let output = null;
@@ -929,7 +941,7 @@ async function* runStream(opts, ctx, signal) {
       const attempt = attempts[i];
       const { model, effort } = attempt;
       const fellBack = model !== ctx.primary;
-      const body = buildBody({ model, effort, messages, tools, toolChoice, json, responseFormat, maxTokens, temperature, stream: true });
+      const body = buildBody({ model, effort, messages, tools, toolChoice, json, responseFormat, maxTokens, temperature, stream: true, cfg });
       const releaseSlot = await acquire(model, cfg['llm.concurrency']);
       const started = Date.now();
       let res; let firstChunk = () => {}; let timedOut = () => false;
