@@ -5,10 +5,10 @@ import { mockGateway } from '../testing/mockGateway.js';
 const USER = '11111111-1111-4111-8111-111111111111';
 const ACC = '22222222-2222-4222-8222-222222222222';
 const clock = { now: new Date('2026-09-23T12:00:00Z') };
-const db = { calls: [], items: [], stories: new Map(), thread: [], sent: [], parts: null, attach: [], commitments: [], nextId: 1, aiId: 1, jobs: [], tldr: new Map(), failures: [], needs: [] };
+const db = { calls: [], items: [], stories: new Map(), thread: [], sent: [], parts: null, attach: [], commitments: [], nextId: 1, aiId: 1, jobs: [], tldr: new Map(), failures: [], needs: [], waiting: [] };
 
 function resetDb() {
-  Object.assign(db, { calls: [], items: [], stories: new Map(), thread: [], sent: [], parts: null, attach: [], commitments: [], nextId: 1, aiId: 1, jobs: [], tldr: new Map(), failures: [], needs: [] });
+  Object.assign(db, { calls: [], items: [], stories: new Map(), thread: [], sent: [], parts: null, attach: [], commitments: [], nextId: 1, aiId: 1, jobs: [], tldr: new Map(), failures: [], needs: [], waiting: [] });
 }
 
 const openItems = (userId) => db.items.filter((i) => i.user_id === userId && !i.done_at);
@@ -41,6 +41,14 @@ async function fakeQuery(sql, params = []) {
     }) };
   }
   if (/FROM hedwig_work_needs/.test(sql)) return { rows: db.needs.filter((n) => params[1].includes(n.thread_key)) };
+  // Waiting On: triage's waiting_on rows (listTriage), and which of them a Done mark on their
+  // thread takes away (sql.js DONE_ITEMS_SQL: marked at or after the item's date).
+  if (/FROM hedwig_triage t\s+JOIN messages m ON m\.id = t\.message_id\s+JOIN email_accounts a/.test(sql)) return { rows: db.waiting };
+  if (/FROM UNNEST\(\$2::text\[\], \$3::text\[\], \$4::timestamptz\[\]\) AS x\(id, thread_key, at\)/.test(sql)) {
+    const [userId, ids, keys, dates] = params;
+    const done = (i) => openItems(userId).some((w) => w.kind === 'done' && w.thread_key === keys[i] && (!dates[i] || dates[i] <= w.created_at));
+    return { rows: ids.filter((_, i) => done(i)).map((id) => ({ id })) };
+  }
   if (/INSERT INTO hedwig_work_stories/.test(sql) && /"story":null/.test(sql)) {
     db.failures.push({ threadKey: params[1], count: params[3], error: params[5] });
     return { rows: [], rowCount: 1 };
@@ -167,6 +175,7 @@ const lists = await import('./lists.js');
 const thread = await import('./thread.js');
 const summaries = await import('./summaries.js');
 const needsMod = await import('./needs.js');
+const waitingMod = await import('./waiting.js');
 const draftMod = await import('./draft.js');
 const guard = await import('./sendguard.js');
 const voice = await import('./voice.js');
@@ -266,6 +275,34 @@ describe('lists state machine', () => {
     expect(sql).toMatch(/w\.kind = 'snoozed' AND w\.until > NOW\(\)/);
     expect(sql).toMatch(/<> 'Snoozed'/);
     expect(sql).toMatch(/w\.user_id = s\.user_id/);
+  });
+
+  // Regression: Waiting On listed triage's rows as they were, so Done showed its toast and the
+  // thread stayed in Waiting on, also after a reload.
+  it('Waiting On leaves out a thread marked Done after the ask, brings it back on Undo, and shows an ask newer than the mark', async () => {
+    db.thread = [...ANNA];
+    const ask = (id, date) => ({
+      id, account_id: ACC, folder: 'Sent', subject: 'Q3 numbers?', from_name: 'Prakhar', from_email: 'me@prafiles.example', date: at(date),
+      thread_key: 't-anna', category: 'waiting_on', reason_label: 'You asked Anna to do something', reasons: [], overridden: false, thread_count: 1, participants: [],
+    });
+    db.waiting = [ask('a2', '2026-09-16T15:00:00Z')];
+    const listed = async () => (await waitingMod.listWaiting(USER, { now: clock.now })).map((w) => `${w.threadId}/${w.messageId}`);
+    expect(await listed()).toEqual(['t-anna/a2']);
+
+    await lists.addItem(USER, 'done', { threadId: 't-anna' });
+    expect(await listed()).toEqual([]);
+    await lists.removeItem(USER, 'done', 't-anna');
+    expect(await listed()).toEqual(['t-anna/a2']);
+
+    // Asked again after the thread was marked: that one is waited on.
+    await lists.addItem(USER, 'done', { threadId: 't-anna' });
+    db.waiting = [ask('a5', '2026-09-23T13:00:00Z'), ...db.waiting];
+    expect(await listed()).toEqual(['t-anna/a5']);
+
+    // A watch goes by the same predicate, dated when it fell due: Done before that (reply, ask to be
+    // reminded, Done) leaves the reminder to come; Done once it is due takes it away.
+    const watches = db.calls.map((c) => c.sql).find((s) => /FROM hedwig_work_waiting w/.test(s));
+    expect(watches).toMatch(/NOT EXISTS \(SELECT 1 FROM hedwig_work_items dw\s+WHERE dw\.user_id = \$1 AND dw\.kind = 'done' AND dw\.done_at IS NULL AND dw\.thread_key = w\.thread_key\s+AND \(w\.due_at IS NULL OR w\.due_at <= dw\.created_at\)\)/);
   });
 
   it('adds due reminders as synthetic People rows and marks threads back from snooze', async () => {

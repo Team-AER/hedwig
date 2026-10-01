@@ -67,6 +67,13 @@ const UndoToasts = (await import('./UndoToasts.jsx')).default;
 const { isUndoKey } = await import('./UndoToasts.jsx');
 const StreamView = (await import('./StreamView.jsx')).default;
 const Thread = (await import('./Thread.jsx')).default;
+const Waiting = (await import('./Waiting.jsx')).default;
+const Brief = (await import('./Brief.jsx')).default;
+const { registerV2 } = await import('./index.js');
+const nav = await import('./nav.js');
+const { useShell } = await import('../shell/state.js');
+const { buildTemplate } = await import('../shell/templates.js');
+const { ViewHost } = await import('../shell/ViewHost.jsx');
 
 setMockMode(true);
 const notifications = [];
@@ -307,6 +314,89 @@ describe('optimistic actions', () => {
     assert.equal(actions.nextRow(rows, [{ messageId: 'c' }]).messageId, 'b');
     assert.equal(actions.nextRow([{ messageId: 'a' }], [{ messageId: 'a' }]), null);
     assert.equal(actions.nextRow(rows, [{ messageId: 'x' }]), null);
+  });
+});
+
+// Regression: Done showed its toast and the conversation stayed where it was. Waiting on and the
+// Brief's Waiting on and deadline cards did not leave out what an action took away, and the server
+// kept listing a Done thread, so it stayed after the reload too.
+describe('Done leaves every list that shows the conversation', () => {
+  // Event-driven reloads wait REFRESH_DEBOUNCE_MS (300) so one burst is one fetch.
+  const AFTER_EVENT = 420;
+  const SETTLE_MS = 15000;
+  const all = (sel) => [...document.querySelectorAll(sel)];
+  const act = async (fn) => { await React.act(async () => { fn(); }); await settle(); };
+  // Assertions get booleans, never DOM nodes: a failing assert.equal inspects its values with
+  // getters to depth 1000, and on a jsdom node that walks the whole document until memory runs out.
+  const shows = (find) => Boolean(find());
+
+  test('Waiting on: the row leaves at once and the reader goes on, Undo brings it back, and once the call went it stays gone', async () => {
+    await render(h('div', null, h(Waiting), h(Thread, { props: {} })));
+    await settle(60);
+    const lena = () => byLabel('Lena Park · Photos from Saturday, and one question');
+    const bar = () => document.querySelector('[role="toolbar"]');
+    assert.equal(shows(lena), true, 'Lena is waited on');
+    await click(lena());
+    await settle(60);
+    assert.equal(useV2.getState().selected?.threadId, 't-lena');
+    await click(byLabel('Done (E)', bar()));
+    assert.equal(shows(lena), false, 'the row left Waiting on at once');
+    assert.deepEqual(titles(), ['Done']);
+    assert.equal(useV2.getState().selected?.threadId, 't-nordlys', 'the reader went on to the next row');
+    await act(() => assert.equal(actions.undo(), true));
+    assert.equal(shows(lena), true, 'Undo brings it back');
+
+    await click(lena());
+    await settle(60);
+    await click(byLabel('Done (E)', bar()));
+    await clock.tick(actions.UNDO_MS);
+    assert.equal((await mock.mockRequest('GET', '/work/lists/done')).items.some((i) => i.threadId === 't-lena'), true, 'the thread was marked done');
+    await settle(AFTER_EVENT);
+    await clock.tick(SETTLE_MS);
+    assert.equal(shows(lena), false, 'the reloaded list leaves the Done thread out');
+  });
+
+  test('the Brief: Done in the overlay reader closes the sheet and takes the deadline card away, Undo brings it back; a Done thread leaves Waiting on; both stay gone once the calls went', async () => {
+    registerV2();
+    const shell = useShell.getState();
+    useShell.setState({ tree: buildTemplate('streams'), overlay: null, transient: {} });
+    try {
+      nav.showView(nav.VIEW.brief);
+      function Overlay() {
+        const o = useShell((s) => s.overlay);
+        return o ? h('aside', { 'data-overlay': o.id }, h(ViewHost, { key: o.key, paneKey: o.key, viewId: o.id, props: o.props })) : null;
+      }
+      await render(h('div', null, h(Brief), h(Overlay)));
+      await settle(60);
+      const card = () => all('[data-brief-card]').find((b) => /Running shoes/.test(b.textContent)) || null;
+      const nordlys = () => all('span').find((s) => s.textContent === 'Nordlys Travel · Bergen invoice') || null;
+      const sheetDone = () => byLabel('Done (E)', document.querySelector('aside[data-overlay]'));
+      assert.equal(shows(card) && shows(nordlys), true);
+
+      // The wide Brief keeps the thread pane's room, so the reader opens as the overlay sheet.
+      await click(card());
+      await settle(60);
+      assert.equal(useShell.getState().overlay?.id, nav.VIEW.thread);
+      await click(sheetDone());
+      assert.equal(useShell.getState().overlay?.id ?? null, null, 'the sheet closed');
+      assert.equal(shows(card), false, 'the deadline card left the Brief at once');
+      assert.equal(all('[data-brief-card]').some((b) => /contract\.pdf/.test(b.textContent)), true, 'a card that is not a deadline stays');
+      await act(() => assert.equal(actions.undo(), true));
+      assert.equal(shows(card), true, 'Undo brings the card back');
+
+      await click(card());
+      await settle(60);
+      await click(sheetDone());
+      await act(() => actions.performAction({ kind: 'done', items: [{ threadId: 't-nordlys', messageId: 'm-nordlys' }] }));
+      assert.equal(shows(nordlys), false, 'a Done thread left the Brief\'s Waiting on at once');
+      await clock.tick(actions.UNDO_MS);
+      await settle(AFTER_EVENT);
+      await clock.tick(SETTLE_MS);
+      assert.equal(shows(card), false, 'the reloaded Brief leaves the Done thread\'s deadline out');
+      assert.equal(shows(nordlys), false, 'and the Done thread out of Waiting on');
+    } finally {
+      useShell.setState({ tree: shell.tree, overlay: null, transient: shell.transient });
+    }
   });
 });
 

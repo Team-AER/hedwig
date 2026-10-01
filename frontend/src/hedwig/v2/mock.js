@@ -673,13 +673,13 @@ function brief() {
     waitingOn: [
       { threadId: 't-tom', messageId: 'm-tom', who: 'Tom Ellis', subject: 'the signed contract', reason: 'You asked on 17 Sep. Nothing back yet.', at: daysAgoAt(6, 10, 0), askedAt: daysAgoAt(6, 10, 0), nudgeDraftAvailable: true },
       { threadId: 't-nordlys', messageId: 'm-nordlys', who: 'Nordlys Travel', subject: 'Bergen invoice', reason: 'They promised it within 48 hours.', at: daysAgoAt(2, 10, 0), askedAt: daysAgoAt(2, 10, 0), nudgeDraftAvailable: true },
-    ],
+    ].filter((c) => c.kind !== 'deadline' || live(c.threadId)),
     cards: [
-      { kind: 'deadline', figure: 'Today', caption: 'Running shoes · DHL, out for delivery', messageId: 'm-dhl', dueAt: todayAt(14, 0) },
-      { kind: 'deadline', figure: 'Today', caption: 'Two books · Posten, by 16:00', messageId: 'm-posten', dueAt: todayAt(16, 0) },
-      { kind: 'deadline', figure: 'Fri', caption: 'Electricity, NOK 1,240 · Fjordkraft', messageId: 'm-fjordkraft', dueAt: nextWeekday(5) },
+      { kind: 'deadline', figure: 'Today', caption: 'Running shoes · DHL, out for delivery', messageId: 'm-dhl', threadId: 't-dhl', dueAt: todayAt(14, 0) },
+      { kind: 'deadline', figure: 'Today', caption: 'Two books · Posten, by 16:00', messageId: 'm-posten', threadId: 't-posten', dueAt: todayAt(16, 0) },
+      { kind: 'deadline', figure: 'Fri', caption: 'Electricity, NOK 1,240 · Fjordkraft', messageId: 'm-fjordkraft', threadId: 't-fjordkraft', dueAt: nextWeekday(5) },
       { kind: 'attachment', figure: 'contract.pdf', caption: 'Lease renewal, option B: 24 months', messageId: 'm-marcus' },
-    ],
+    ].filter((w) => live(w.threadId)),
     reading: db.streams.reading.slice(0, 3).map((i) => ({ title: i.subject, line: i.snippet, messageId: i.messageId, threadId: i.threadId, source: i.from?.name })),
     questions: clone(db.questions),
     // Where today's prose came from: the template stood in because Tier 2 was not answering.
@@ -752,6 +752,8 @@ function route(method, path, body) {
       if (e.undone) { const err = new Error('Already undone'); err.status = 409; throw err; }
       e.undone = true;
       e.undoable = false;
+  // A Done thread leaves Waiting on and takes its deadline cards with it (insights/briefing.js).
+  const live = (threadId) => !threadId || !db.lists.done.includes(threadId);
       return { ok: true };
     }
     if (method === 'GET' && seg[1] === 'bundles') return { bundles: clone(db.bundles) };
@@ -930,7 +932,8 @@ function route(method, path, body) {
         reply: { inReplyToMessageId: 'm-anna', to: [{ name: 'Anna Berg', email: 'anna.berg@northwind.example' }], subject: 'Re: Q3 report: can you send the final numbers?' },
       };
     }
-    if (method === 'GET' && seg[1] === 'waiting' && !seg[2]) return clone(db.waiting).sort((x, y) => y.days - x.days);
+    // A Done thread is not waited on (work/waiting.js), until Undo takes it off the done list.
+    if (method === 'GET' && seg[1] === 'waiting' && !seg[2]) return clone(db.waiting.filter((w) => !db.lists.done.includes(w.threadId))).sort((x, y) => y.days - x.days);
     if (method === 'POST' && seg[1] === 'waiting' && seg[3] === 'nudge') {
       const w = db.waiting.find((x) => x.threadId === decodeURIComponent(seg[2]));
       if (!w) throw notFound();

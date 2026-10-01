@@ -75,8 +75,8 @@ describe('compileBrief', () => {
   it('assembles every section from stored data and never calls a model', async () => {
     db.routes = [
       [/SELECT to_regclass/, ([name]) => ({ rows: [{ t: name === 'hedwig_sort_log' ? name : null }] })],
-      [/FROM hedwig_commitments WHERE user_id = \$1 AND status = 'open'/, () => ({ rows: [
-        { id: 'c1', direction: 'i_owe', counterparty: 'Priya', what: 'Send the signed form', due_at: '2026-09-23T17:00:00Z', source_message_id: 'm1' },
+      [/FROM hedwig_commitments k LEFT JOIN messages m ON m\.id = k\.source_message_id WHERE k\.user_id = \$1 AND k\.status = 'open'/, () => ({ rows: [
+        { id: 'c1', direction: 'i_owe', counterparty: 'Priya', what: 'Send the signed form', due_at: '2026-09-23T17:00:00Z', source_message_id: 'm1', thread_key: 't1' },
         { id: 'c2', direction: 'they_owe', counterparty: null, what: 'Invoice', due_at: '2026-09-25T17:00:00Z', source_message_id: null },
       ] })],
       [/m\.to_addresses FROM messages m JOIN email_accounts/, () => ({ rows: [{ id: 'm2', to_addresses: [{ name: 'Ola', address: 'ola@y.com' }] }] })],
@@ -91,8 +91,8 @@ describe('compileBrief', () => {
     expect(brief.waitingOn[0]).toMatchObject({ threadId: 't2', messageId: 'm2', who: 'Ola', askedAt: '2026-09-18T08:00:00Z' });
     expect(typeof brief.waitingOn[0].nudgeDraftAvailable).toBe('boolean');
     expect(brief.cards).toEqual([
-      { kind: 'deadline', figure: 'Today', caption: 'Send the signed form · Priya', messageId: 'm1', dueAt: '2026-09-23T17:00:00Z' },
-      { kind: 'deadline', figure: 'Fri 25', caption: 'Invoice', messageId: null, dueAt: '2026-09-25T17:00:00Z' },
+      { kind: 'deadline', figure: 'Today', caption: 'Send the signed form · Priya', messageId: 'm1', threadId: 't1', dueAt: '2026-09-23T17:00:00Z' },
+      { kind: 'deadline', figure: 'Fri 25', caption: 'Invoice', messageId: null, threadId: null, dueAt: '2026-09-25T17:00:00Z' },
     ]);
     expect(brief.reading).toEqual([{ title: 'Weekly notes', line: 'This week we shipped the new search.', messageId: 'r1' }]);
     expect(brief.questions).toHaveLength(1);
@@ -116,10 +116,28 @@ describe('compileBrief', () => {
     expect(brief.headline.startsWith('Two things need you.')).toBe(true);
   });
 
+  // Regression: Done took a thread out of People and Needs you, but the Brief kept it under Waiting
+  // on and kept its deadline cards, so Done in the reader over the Brief seemed to do nothing.
+  it('a thread marked Done leaves Waiting on and takes its deadlines with it, by the Needs You predicate', async () => {
+    const asked = [];
+    db.routes = [
+      [/SELECT to_regclass/, () => ({ rows: [{ t: null }] })],
+      [/FROM UNNEST\(\$2::text\[\], \$3::text\[\], \$4::timestamptz\[\]\) AS x\(id, thread_key, at\)/, ([, ids, keys, dates]) => {
+        asked.push({ ids, keys, dates });
+        return { rows: [{ id: 'm2' }] };
+      }],
+    ];
+    const brief = await compileBrief('u1', { now: NOW });
+    expect(asked).toEqual([{ ids: ['m2'], keys: ['t2'], dates: ['2026-09-18T08:00:00Z'] }]);
+    expect(brief.waitingOn).toEqual([]);
+    const commitments = db.calls.find((s) => /FROM hedwig_commitments k/.test(s));
+    expect(commitments).toContain("AND NOT EXISTS (SELECT 1 FROM hedwig_work_items dw WHERE dw.user_id = $1 AND dw.kind = 'done' AND dw.done_at IS NULL AND dw.thread_key = COALESCE(k.thread_key, m.thread_key))");
+  });
+
   it('falls back to the template headline when no fresh model briefing exists', async () => {
     db.routes = [
       [/SELECT to_regclass/, () => ({ rows: [{ t: null }] })],
-      [/FROM hedwig_commitments WHERE user_id = \$1 AND status = 'open'/, () => ({ rows: [{ id: 'c1', what: 'Pay rent', due_at: '2026-09-23T17:00:00Z', source_message_id: 'm9' }] })],
+      [/FROM hedwig_commitments k LEFT JOIN messages m ON m\.id = k\.source_message_id WHERE k\.user_id = \$1 AND k\.status = 'open'/, () => ({ rows: [{ id: 'c1', what: 'Pay rent', due_at: '2026-09-23T17:00:00Z', source_message_id: 'm9' }] })],
     ];
     const brief = await compileBrief('u1', { now: NOW });
     expect(brief.headline).toBe('One thing needs you. One deadline today.');

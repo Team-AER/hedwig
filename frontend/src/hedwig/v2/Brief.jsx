@@ -126,8 +126,10 @@ export default function Brief() {
   // streams; the Brief reloads once the call has gone.
   const hidden = useV2((s) => s.hidden);
   const needs = useMemo(() => liveRows(listOf(b.needsYou, 'items'), hidden), [b.needsYou, hidden]);
-  const waiting = listOf(b.waitingOn, 'items');
-  const cards = listOf(b.cards, 'items');
+  const waiting = useMemo(() => liveRows(listOf(b.waitingOn, 'items'), hidden), [b.waitingOn, hidden]);
+  // A deadline card goes with its conversation (the server drops a Done thread's deadlines too); a
+  // record card is the parcel or the trip itself and stays.
+  const cards = useMemo(() => listOf(b.cards, 'items').filter((c) => c.kind !== 'deadline' || liveRows([c], hidden).length), [b.cards, hidden]);
   const reading = useMemo(() => liveRows(listOf(b.reading, 'items'), hidden), [b.reading, hidden]);
   const questions = listOf(b.questions, 'questions').filter((q) => !answered.includes(q.id));
   // D's /insights/brief/today: generatedAt + headlineSource; older drafts of the shape used

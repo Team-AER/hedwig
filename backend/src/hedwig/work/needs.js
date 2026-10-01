@@ -13,6 +13,7 @@ import { addressesOf } from '../text.js';
 import { goneSql } from '../triage/store.js';
 import { isPersonRow } from './summaries.js';
 import { ownerOf, clampInt, timeZoneOf, DAY_MS } from './util.js';
+import { doneSql } from './sql.js';
 
 const clip = (s, n) => {
   const t = String(s || '').replace(/\s+/g, ' ').trim();
@@ -37,12 +38,6 @@ export function deadlineReason(what, dueAt, tz) {
   const day = new Intl.DateTimeFormat('en-GB', { timeZone: tz, weekday: 'short', day: 'numeric', month: 'short' }).format(new Date(dueAt));
   return clip(`Due ${day}: ${what}`, 120);
 }
-
-// SQL: the thread is marked Done ($1 is the user id). With `date`, only when that message came
-// before the mark (newer mail shows the thread again even before the pipeline step reopens it).
-const doneSql = (threadKey, date = null) => `EXISTS (SELECT 1 FROM hedwig_work_items w
-   WHERE w.user_id = $1 AND w.kind = 'done' AND w.done_at IS NULL AND w.thread_key = ${threadKey}${date ? `
-     AND (${date} IS NULL OR ${date} <= w.created_at)` : ''})`;
 
 /** Recompute one user's derived reasons. @returns {{ open: number, added: number, resolved: number }} */
 export async function deriveNeeds(userId, { now = new Date() } = {}) {

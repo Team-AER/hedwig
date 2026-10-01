@@ -1,7 +1,9 @@
 // Waiting On: what the owner asked and has not heard back about. The list itself is triage's
 // (hedwig_triage waiting_on rows, found by triage/resolution.js scanWaitingOn); this module adds
 // explicit "remind me if no reply in N days" watches (hedwig_work_waiting), drafted nudges
-// (work.nudge, returned, never sent) and resolving from the work surface.
+// (work.nudge, returned, never sent) and resolving from the work surface. A thread the owner marked
+// Done leaves Waiting On as it leaves People and Needs You (work/sql.js doneSql), until Undo or
+// something newer than the mark.
 import { query } from '../../services/db.js';
 import { getConfig } from '../config.js';
 import { llmAvailable } from '../llm.js';
@@ -14,6 +16,7 @@ import {
 } from './util.js';
 import { newTextOf } from './thread.js';
 import { voiceWith } from './voice.js';
+import { doneSql, DONE_ITEMS_SQL } from './sql.js';
 
 const EFFECTIVE = 'COALESCE(CASE WHEN t.overridden THEN t.override_category END, t.category)';
 
@@ -32,15 +35,21 @@ export async function listWaiting(userId, { now = new Date() } = {}) {
   const nudgeDraftAvailable = Boolean(canDraft) && cfg['ui.helpMeWrite'] !== false;
   const triage = await listTriage(userId, { view: 'waiting_on', limit: 200 });
   const ids = triage.items.map((i) => i.message.id);
-  const { rows: addrRows } = ids.length
-    ? await query('SELECT id, to_addresses, cc_addresses FROM messages WHERE id = ANY($1::uuid[])', [ids])
-    : { rows: [] };
+  const keyOf = (m) => m.thread_key || m.id;
+  const [{ rows: addrRows }, { rows: doneRows }] = ids.length
+    ? await Promise.all([
+      query('SELECT id, to_addresses, cc_addresses FROM messages WHERE id = ANY($1::uuid[])', [ids]),
+      // Triage's list knows nothing of Done: an ask is left out when its thread was marked after it.
+      query(DONE_ITEMS_SQL, [userId, ids, triage.items.map((i) => keyOf(i.message)), triage.items.map((i) => i.message.date || null)]),
+    ])
+    : [{ rows: [] }, { rows: [] }];
   const addrs = new Map(addrRows.map((r) => [r.id, r]));
+  const done = new Set(doneRows.map((r) => r.id));
   const out = new Map();
   for (const { message: m, triage: t } of triage.items) {
     const who = waitingOn(addrs.get(m.id), owner.addresses);
-    const threadId = m.thread_key || m.id;
-    if (out.has(threadId)) continue;
+    const threadId = keyOf(m);
+    if (out.has(threadId) || done.has(m.id)) continue;
     out.set(threadId, {
       threadId, messageId: m.id, who: who?.name || who?.email || 'them', whoEmail: who?.email || null, subject: m.subject,
       askedAt: m.date, days: daysSince(m.date, now), nudgeDraftAvailable, reason: t?.reasons?.[0]?.label || t?.reason_label || null,
@@ -48,11 +57,14 @@ export async function listWaiting(userId, { now = new Date() } = {}) {
     });
   }
 
-  // Explicit watches that came due with nobody else writing since.
+  // Explicit watches that came due with nobody else writing since. One that comes due after the
+  // thread was marked Done shows (reply, ask to be reminded, Done is the usual order); Done on it
+  // once it is here takes it away.
   const { rows: watches } = await query(
     `SELECT w.id, w.thread_key, w.message_id, w.anchor_at, w.days, w.due_at
        FROM hedwig_work_waiting w
       WHERE w.user_id = $1 AND w.resolved_at IS NULL AND w.due_at <= $2
+        AND NOT ${doneSql('w.thread_key', 'w.due_at')}
         AND NOT EXISTS (
           SELECT 1 FROM messages r JOIN email_accounts ra ON ra.id = r.account_id
             LEFT JOIN folders rf ON rf.account_id = r.account_id AND rf.path = r.folder

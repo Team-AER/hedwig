@@ -1,13 +1,14 @@
 // hedwig.waiting: what you asked and have not heard back about (GET /work/waiting). Each row says
 // who, what, and how long ago you asked; Nudge drafts a follow-up in your voice and opens the
 // composer with it (POST /work/waiting/:threadId/nudge), Resolve stops waiting
-// (POST /work/waiting/:threadId/resolve).
-import { useState } from 'react';
+// (POST /work/waiting/:threadId/resolve). Done in the reader takes the row away at once, as in the
+// streams (actions.js), and the server leaves a Done thread out until Undo.
+import { useEffect, useId, useMemo, useState } from 'react';
 import { useStore } from '../../store/index.js';
 import { useV2Resource, useWork, isMissing } from './hooks.js';
 import { v2Api, listOf, announceSortChange } from './client.js';
 import { openThread } from './nav.js';
-import { useV2 } from './state.js';
+import { useV2, liveRows } from './state.js';
 import { nudgeThread } from './mail.js';
 import { Avatar, ErrorLine, Hair, IconButton, Num, Quiet, V, ViewBody, ViewHead, Why, usePhone } from './primitives.jsx';
 import { tv, tvn } from './i18n.js';
@@ -78,7 +79,12 @@ export default function Waiting() {
   const res = useV2Resource(work ? '/work/waiting' : null);
   const [busy, setBusy] = useState({}); // threadId -> 'nudge' | 'resolve'
   const [gone, setGone] = useState([]);
-  const rows = listOf(res.data, 'items').filter((w) => !gone.includes(w.threadId));
+  const hidden = useV2((s) => s.hidden);
+  const rows = useMemo(() => liveRows(listOf(res.data, 'items'), hidden).filter((w) => !gone.includes(w.threadId)), [res.data, hidden, gone]);
+  // The rows in display order, so Done on the open thread goes on to the next one.
+  const orderId = useId();
+  useEffect(() => { useV2.getState().setOrder(orderId, rows); }, [orderId, rows]);
+  useEffect(() => () => useV2.getState().clearOrder(orderId), [orderId]);
   const title = tv('hedwig.v2.waiting.title', 'Waiting on');
 
   const act = async (w, key, fn) => {

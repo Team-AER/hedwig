@@ -380,6 +380,57 @@ describe.skipIf(!process.env.HEDWIG_IT)('working the seeded demo mailbox', () =>
     expect(await inBrief()).toBe(true);
   });
 
+  // Regression: Done showed its toast and the thread stayed in Waiting on (and the Brief kept its
+  // waiting row and deadline card), also after a reload.
+  it('Done takes a thread out of Waiting On, the Brief\'s Waiting on and its deadline cards; Undo brings it back; a due watch follows Done', async () => {
+    const ASKED = `<work-it-asked-${randomUUID()}@hedwig.test>`;
+    const WATCHED = `<work-it-watched-${randomUUID()}@hedwig.test>`;
+    const asked = await addMessage({ folder: 'Sent', subject: 'Assistance requested', fromName: 'Prakhar', fromEmail: 'prakhar.demo@gmail.com', to: ['kyc@courier.example'], date: new Date(Date.now() - 7 * DAY), body: 'Could you confirm my KYC is complete?', read: true, thread: ASKED });
+    await addMessage({ folder: 'Sent', subject: 'Keys', fromName: 'Prakhar', fromEmail: 'prakhar.demo@gmail.com', to: ['mo@example.org'], date: new Date(Date.now() - 5 * DAY), body: 'Could you drop the keys off?', read: true, thread: WATCHED });
+    // Priority and an early due date put both at the head of the Brief's six and ten, whatever the shared database holds.
+    await query(
+      `INSERT INTO hedwig_triage (message_id, user_id, account_id, category, priority, needs_you, confidence, stage, reasons, reason_label, decided_at)
+       VALUES ($1, $2, $3, 'waiting_on', 1000, false, 0.8, 1, '[]', 'You asked kyc@courier.example to do something', NOW())`,
+      [asked, userId, account],
+    );
+    const { rows: [k] } = await query(
+      `INSERT INTO hedwig_commitments (user_id, direction, what, due_at, source_message_id, confidence)
+       VALUES ($1, 'i_owe', 'Send the KYC form', '2001-01-01T09:00:00Z', $2, 1) RETURNING id`,
+      [userId, asked],
+    );
+    const { compileBrief } = await import('../insights/briefing.js');
+    const state = async () => {
+      const [list, brief] = await Promise.all([waiting.listWaiting(userId), compileBrief(userId)]);
+      return {
+        waiting: list.filter((w) => w.threadId === ASKED || w.threadId === WATCHED).map((w) => `${w.threadId === ASKED ? 'asked' : 'watched'}:${w.source}`).sort(),
+        brief: brief.waitingOn.some((w) => w.threadId === ASKED),
+        card: brief.cards.find((c) => c.kind === 'deadline' && c.messageId === asked)?.threadId || null,
+      };
+    };
+    try {
+      await waiting.addWatch(userId, { threadId: WATCHED, days: 2 });
+      expect(await state()).toEqual({ waiting: ['asked:triage', 'watched:watch'], brief: true, card: ASKED });
+
+      await lists.addItem(userId, 'done', { threadId: ASKED });
+      await lists.addItem(userId, 'done', { threadId: WATCHED });
+      expect(await state()).toEqual({ waiting: [], brief: false, card: null });
+
+      // Undo is DELETE /work/lists/done: everything is back at once.
+      await lists.removeItem(userId, 'done', ASKED);
+      await lists.removeItem(userId, 'done', WATCHED);
+      expect(await state()).toEqual({ waiting: ['asked:triage', 'watched:watch'], brief: true, card: ASKED });
+
+      // Done before a watch falls due (reply, ask to be reminded, Done) leaves the reminder to come.
+      await lists.addItem(userId, 'done', { threadId: WATCHED });
+      await query("UPDATE hedwig_work_items SET created_at = NOW() - INTERVAL '4 days' WHERE user_id = $1 AND kind = 'done' AND thread_key = $2 AND done_at IS NULL", [userId, WATCHED]);
+      expect((await state()).waiting).toEqual(['asked:triage', 'watched:watch']);
+    } finally {
+      await query("DELETE FROM hedwig_work_items WHERE user_id = $1 AND kind = 'done' AND thread_key = ANY($2::text[])", [userId, [ASKED, WATCHED]]);
+      await query('DELETE FROM hedwig_commitments WHERE id = $1', [k.id]);
+      await query('DELETE FROM hedwig_triage WHERE message_id = $1', [asked]);
+    }
+  });
+
   it('finds Waiting On from sent mail through the triage sweep', async () => {
     await addMessage({ folder: 'Sent', subject: 'Contract', fromName: 'Prakhar', fromEmail: 'prakhar.demo@gmail.com', to: ['lee@example.org'], date: new Date(Date.now() - 6 * DAY), body: 'Hi Lee, can you send the signed contract?', read: true, thread: ASK_THREAD });
     // The worker's triage.waitingOn schedule (every 15 min) runs this for users with an enabled account;

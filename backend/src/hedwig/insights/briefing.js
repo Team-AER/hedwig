@@ -14,7 +14,7 @@ import { insertInsight, toInsight } from './store.js';
 import { validTimezone, startOfLocalDay, describeNow } from './time.js';
 import { reasoningTier, ranOnLighterModel } from '../labels/tier.js';
 import { goneSql } from '../triage/store.js';
-import { peopleFilterSql } from '../work/sql.js';
+import { peopleFilterSql, doneSql, DONE_ITEMS_SQL } from '../work/sql.js';
 import { createHash } from 'node:crypto';
 
 const DAY = 86400_000;
@@ -95,12 +95,24 @@ async function waitingOnFallback(userId, limit, minDays) {
   });
 }
 
+// What the owner marked Done leaves Waiting on here as on GET /work/waiting (work/sql.js).
+async function withoutDone(userId, rows) {
+  const keyed = rows.filter((r) => r.id && r.thread_key);
+  if (!keyed.length) return rows;
+  const { rows: done } = await query(DONE_ITEMS_SQL, [userId, keyed.map((r) => r.id), keyed.map((r) => r.thread_key), keyed.map((r) => r.date || null)]);
+  const gone = new Set(done.map((d) => d.id));
+  return rows.filter((r) => !gone.has(r.id));
+}
+
+// A Done thread's deadlines stop counting, as in Needs You (work/needs.js).
 async function commitmentsDue(userId, horizonDays, minConfidence) {
   const { rows } = await query(
-    `SELECT id, direction, counterparty, what, due_at, source_message_id FROM hedwig_commitments
-      WHERE user_id = $1 AND status = 'open' AND due_at IS NOT NULL AND due_at < NOW() + make_interval(days => $2::int)
-        AND (user_edited OR confidence IS NULL OR confidence >= $3)
-      ORDER BY due_at LIMIT 10`,
+    `SELECT k.id, k.direction, k.counterparty, k.what, k.due_at, k.source_message_id, COALESCE(k.thread_key, m.thread_key) AS thread_key
+       FROM hedwig_commitments k LEFT JOIN messages m ON m.id = k.source_message_id
+      WHERE k.user_id = $1 AND k.status = 'open' AND k.due_at IS NOT NULL AND k.due_at < NOW() + make_interval(days => $2::int)
+        AND (k.user_edited OR k.confidence IS NULL OR k.confidence >= $3)
+        AND NOT ${doneSql('COALESCE(k.thread_key, m.thread_key)')}
+      ORDER BY k.due_at LIMIT 10`,
     [userId, horizonDays, minConfidence],
   );
   return rows;
@@ -162,7 +174,7 @@ export async function gatherBriefing(userId, { period = 'day', now = Date.now() 
   const [needsYou, waitingOn, commitments, topics, volume, cards] = await Promise.all([
     // The same Needs you list as the Brief screen (sorting's, when installed).
     briefNeedsYou(userId, hasSort),
-    fromTriage(userId, 'waiting_on', 6).then((r) => r ?? waitingOnFallback(userId, 6, cfg['triage.waitingOnDays'])),
+    fromTriage(userId, 'waiting_on', 6).then((r) => r ?? waitingOnFallback(userId, 6, cfg['triage.waitingOnDays'])).then((r) => withoutDone(userId, r)),
     commitmentsDue(userId, period === 'week' ? 14 : 7, minConf),
     newTopics(userId, since),
     volumeSince(userId, since),
@@ -625,7 +637,7 @@ export async function compileBrief(userId, { now = Date.now() } = {}) {
   const [hasSort, hasSortLog, hasAttachments] = await Promise.all(['hedwig_sort', 'hedwig_sort_log', 'hedwig_attachment_text'].map(relationExists));
   const [needs, waiting, commitments, reading, attachments, today, questions, latest, records, coverage] = await Promise.all([
     briefNeedsYou(userId, hasSort),
-    fromTriage(userId, 'waiting_on', 6).then((r) => r ?? waitingOnFallback(userId, 6, cfg['triage.waitingOnDays'])),
+    fromTriage(userId, 'waiting_on', 6).then((r) => r ?? waitingOnFallback(userId, 6, cfg['triage.waitingOnDays'])).then((r) => withoutDone(userId, r)),
     commitmentsDue(userId, 7, cfg['context.extractMinConfidence']),
     briefReading(userId, hasSort),
     hasAttachments ? briefAttachments(userId) : [],
@@ -642,6 +654,7 @@ export async function compileBrief(userId, { now = Date.now() } = {}) {
     figure: dueFigure(c.due_at, tz, now),
     caption: oneLine(`${c.what}${c.counterparty ? ` · ${c.counterparty}` : ''}`, 120),
     messageId: c.source_message_id || null,
+    threadId: c.thread_key || null,
     dueAt: c.due_at,
   }));
   const todayKey = (t) => new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(new Date(t));
