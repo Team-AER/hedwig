@@ -158,6 +158,53 @@ describe('phishing precision', () => {
   });
 });
 
+describe('spear phishing', () => {
+  const people = new Map([['dana reyes', ['dana.reyes@corp.example', 'dana.r@gmail.com']]]);
+
+  it('keys display names as people, and leaves out roles, teams and platform relays', () => {
+    expect(spam.personKey('Dr. Dana Reyes (Corp)')).toBe('dana reyes');
+    expect(spam.personKey('Dana Reyes via LinkedIn')).toBeNull();
+    expect(spam.personKey('The Weekly')).toBeNull();
+    expect(spam.personKey('noreply')).toBeNull();
+    expect(spam.personKey('Support Team')).toBeNull();
+  });
+
+  it('a contact\'s name from a new address alone is a second address, not a verdict', () => {
+    const row = msg({ from_name: 'Dana Reyes', from_email: 'dana.reyes.home@outlook.com', body_text: 'Photos from the offsite are in the album.' });
+    expect(signalNames(row, { knownPeople: people, text: row.body_text })).toEqual(['impersonation']);
+    expect(spam.assessSpam(row, { knownPeople: people, text: row.body_text }).verdict).toBe('clean');
+  });
+
+  it('a contact\'s name from a new address asking for money is phishing, with the contact named in the reason', () => {
+    const text = 'I am in a meeting, can you do me a quick favour and buy gift cards for the client today? Keep this between us.';
+    const row = msg({ from_name: 'Dana Reyes', from_email: 'dana.reyes.office@gmail.com', subject: 'Quick favour', body_text: text });
+    const v = spam.assessSpam(row, { knownPeople: people, text });
+    expect(v.verdict).toBe('phishing');
+    expect(v.reason).toContain('dana.reyes@corp.example');
+    // the same message from her real address is hers
+    expect(signalNames({ ...row, from_email: 'dana.reyes@corp.example' }, { knownPeople: people, text })).not.toContain('impersonation');
+    // and a sender the user already replied to is trusted
+    expect(signalNames(row, { knownPeople: people, text, trustedSender: true })).not.toContain('impersonation');
+  });
+
+  it('a look-alike of a vendor domain with new bank details is phishing', () => {
+    expect(spam.lookalikeOf('vendor-co.example', ['vendorco.example'])).toBe('vendorco.example');
+    const text = 'Please note our bank details have changed. Kindly pay the pending invoice to the new account below.';
+    const row = msg({ from_name: 'Accounts', from_email: 'accounts@vendor-co.example', subject: 'Updated bank details', body_text: text });
+    expect(spam.assessSpam(row, { knownDomains: ['vendorco.example'], text }).verdict).toBe('phishing');
+  });
+
+  it('a display name hiding another address, or a file that runs code, counts as evidence', () => {
+    const row = msg({ from_name: 'dana.reyes@corp.example', from_email: 'x91@mailer.example', attachments: [{ filename: 'Remittance_0921.html' }] });
+    expect(signalNames(row, {})).toEqual(expect.arrayContaining(['displayAddress', 'attachment']));
+    expect(spam.assessSpam(row, {}).verdict).toBe('phishing'); // identity + payload
+    const pdfExe = msg({ attachments: [{ filename: 'Invoice.pdf.exe' }] });
+    expect(spam.phishingSignals(pdfExe, {}).find((s) => s.name === 'attachment').label).toContain('hides its real type');
+    // a plain PDF and inline images are not evidence
+    expect(signalNames(msg({ attachments: [{ filename: 'Invoice.pdf' }, { filename: 'image001.png' }] }), {})).toEqual([]);
+  });
+});
+
 // ── Rescue score ────────────────────────────────────────────────────────────
 
 describe('rescue score', () => {
@@ -209,7 +256,7 @@ function fakeDb({ rows = [], stats = {}, sorts = {}, sentTo = {}, threads = {}, 
     if (/WHERE m\.id = ANY\(\$1::uuid\[\]\) AND a\.user_id = \$2 AND NOT m\.is_deleted/.test(sql)) return { rows: params[0].map((id) => byId.get(id)).filter(Boolean).map((r) => ({ ...r })) };
     if (/s\.in_spam_folder OR s\.spam = 'phishing'/.test(sql)) return { rows: [...sort.keys()].filter((id) => !params[1] || id > params[1]).sort().map((id) => ({ message_id: id })) };
     if (/SELECT message_id, spam FROM hedwig_sort/.test(sql)) return { rows: params[1].filter((id) => sort.has(id)).map((id) => ({ message_id: id, spam: sort.get(id).spam })) };
-    if (/SELECT message_id, layer, stream, spam, pending FROM hedwig_sort/.test(sql)) return { rows: params[1].filter((id) => sort.has(id)).map((id) => ({ message_id: id, ...sort.get(id) })) };
+    if (/SELECT message_id, layer, stream, spam, pending, body_seen, prompt_id FROM hedwig_sort/.test(sql)) return { rows: params[1].filter((id) => sort.has(id)).map((id) => ({ message_id: id, ...sort.get(id) })) };
     if (/FROM hedwig_sender_stats WHERE user_id = \$1 AND sender_email = ANY/.test(sql)) return { rows: Object.entries(stats).map(([e, s]) => ({ sender_email: e, ...s })) };
     if (/UNION\s+SELECT CASE WHEN scope/.test(sql)) return { rows: known.map((d) => ({ domain: d })) };
     if (/AS reply_to_own/.test(sql)) return { rows: Object.entries(threads).map(([id, t]) => ({ id, reply_to_own: Boolean(t.replyToOwn), replied_after: false })) };

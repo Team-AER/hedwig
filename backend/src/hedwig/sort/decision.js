@@ -91,7 +91,7 @@ export async function decideBatch(userId, entries, cfg, { fetchFn } = {}) {
         { userId, feature: 'sort', workflow: 'sort.decision', prompt, timeoutMs: cfg['sort.decision.timeoutMs'], ...(fetchFn ? { fetchFn } : {}) },
       );
       const r = gate(answers, cfg);
-      if (r) out.set(row.id, { ...r, provenance: { ...prompt, model, aiCallId } });
+      if (r) out.set(row.id, { ...r, provenance: { promptId: prompt.id, promptVersion: prompt.version, tier: prompt.tier, model, aiCallId } });
     } catch (err) {
       if (err?.code === 'budget_exceeded' || err?.code === 'llm_disabled') break;
       // The decision model is an accelerator: any failure means Reflex decides, as before.

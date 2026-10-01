@@ -94,7 +94,7 @@ describe('decideBatch', () => {
       { row: { ...ROW, id: 'm-2', subject: 'Something else' }, parts: PARTS, d: {} },
     ], cfg);
     expect([...out.keys()]).toEqual(['m-1']);
-    expect(out.get('m-1').provenance).toMatchObject({ id: 'sort.decision', model: 'aer-laya', aiCallId: 42 });
+    expect(out.get('m-1').provenance).toMatchObject({ promptId: 'sort.decision', promptVersion: expect.any(String), model: 'aer-laya', aiCallId: 42 });
     expect(gw.decisions).toHaveLength(2);
     const { body, headers } = gw.decisions[0];
     expect(body).toMatchObject({ model: 'aer-laya', questions: QUESTIONS });

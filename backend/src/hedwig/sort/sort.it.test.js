@@ -412,6 +412,38 @@ describe.skipIf(!process.env.HEDWIG_IT)('sorting the seeded demo mailbox', () =>
     expect(old[0].status).toBe('resolved');
   });
 
+  it('keeps a threat the guard flagged when a classifier decision races it, and still updates other spam verdicts', async () => {
+    const workAccount = (await query("SELECT id FROM email_accounts WHERE user_id = $1 AND email_address = 'prakhar@vantage.example'", [userId])).rows[0].id;
+    const { getConfig } = await import('../config.js');
+    const mk = async (subject, fromName, fromEmail, body) => {
+      const id = randomUUID();
+      inserted.push(id);
+      await query(
+        `INSERT INTO messages (id, account_id, uid, folder, message_id, subject, from_name, from_email, to_addresses, date, snippet, body_text)
+         VALUES ($1, $2, $3, 'INBOX', $4, $5, $6, $7, $8, NOW() - INTERVAL '2 hours', $9, $9)`,
+        [id, workAccount, 930000 + inserted.length, `<${id}@hedwig.test>`, subject, fromName, fromEmail, JSON.stringify([{ address: 'prakhar@vantage.example' }]), body],
+      );
+      return id;
+    };
+    const stored = async (id, spam, promptId) => query(
+      `INSERT INTO hedwig_sort (message_id, user_id, account_id, stream, spam, spam_reason, confidence, layer, reason, signals, in_spam_folder, decided_at, prompt_id)
+       VALUES ($1, $2, $3, 'spam', $4, 'flagged', 0.9, 'decision', 'flagged', '[]'::jsonb, false, NOW() - INTERVAL '1 hour', $5)`,
+      [id, userId, workAccount, spam, promptId],
+    );
+    const flagged = await mk('Are you free?', 'Dana Reyes', 'dana.reyes.office@gmail.com', 'Are you free for a short call later today?');
+    await stored(flagged, 'phishing', 'sort.guard');
+    const other = await mk('Lunch next week', 'Sam Field', 'sam.field@partner.example', 'Shall we have lunch next week?');
+    await stored(other, 'suspected', null);
+    const rows = await engine.loadRows(userId, [flagged, other]);
+    const ctx = await engine.loadUserContext(userId, rows, await getConfig(userId));
+    for (const row of rows) await engine.finalize(userId, row, engine.decideCheap(row, ctx), ctx);
+    const after = new Map((await query('SELECT message_id, spam, prompt_id, layer FROM hedwig_sort WHERE message_id = ANY($1::uuid[])', [[flagged, other]])).rows.map((r) => [r.message_id, r]));
+    expect(after.get(flagged)).toMatchObject({ spam: 'phishing', prompt_id: 'sort.guard', layer: 'decision' });
+    // prompt_id NULL must not block the update (SQL NULL logic once made NOT (… = 'sort.guard') unknown)
+    expect(after.get(other)).toMatchObject({ prompt_id: null });
+    expect(after.get(other).layer).not.toBe('decision');
+  });
+
   it('re-sorts once per user when the engine version changes, with Reflex for recent mail', async () => {
     await query("UPDATE hedwig_sort SET engine_version = 'old-engine' WHERE user_id = $1 AND layer <> 'user'", [userId]);
     await query("DELETE FROM hedwig_jobs WHERE user_id = $1 AND kind = 'sort.resort'", [userId]);

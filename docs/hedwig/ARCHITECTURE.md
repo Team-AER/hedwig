@@ -114,6 +114,24 @@ message ids it came from.
 Model: `Qwen/Qwen3.8-Flash-Next` supports tools and JSON mode, 262k context, ~2 s for short calls.
 The gateway rejects `reasoning_effort: "off"`; `llm.js` already maps off → `none`.
 
+Decision models (Laya on the Avifors CPU pool) are called with `llm.systemOne` (`POST /v1/systemone`,
+the Ollama/Nimble System One shape). The model's training data is in `llm/decision-models`. The state
+text and question wording must match that training data.
+- `sort/decision.js` (`aer-laya`, layer `decision`): settles stream, spam and needs-you before Reflex
+  when it is confident.
+- `sort/guard.js` (`aer-laya-guard`, job `sort.guard`): checks new mail from senders the user has no
+  history with, once per message, when the body first arrives. The model answers safe, spam, scam,
+  phishing, impersonation or malware.
+  - The input carries identity lines: sender history, a known person's name from a new address, a
+    display name hiding another address, look-alike domains of correspondents, diverted replies,
+    link targets and attachments.
+  - A confident threat goes to Spam as layer `decision` with `prompt_id` `sort.guard`.
+  - Re-sorts leave that verdict alone. Only the user's rules, sender decisions and corrections
+    replace it.
+  - The guard never lowers a verdict.
+  - Spear-phishing evidence is also rule-based, in `sort/spam.js`: `impersonation`, `displayAddress`,
+    `payment` and `attachment` signals. It works without the model.
+
 ### Plugin hooks added by Hedwig
 
 `hooks.js` names them. Dispatch sites: `beforeTriage`/`afterTriage` in triage, `onContextBuilt` in

@@ -12,6 +12,7 @@ import { llmAvailable } from '../llm.js';
 import { messageText, addressesOf, domainOf } from '../text.js';
 import { MESSAGE_COLUMNS, decorate } from '../pipeline.js';
 import { decideBatch } from './decision.js';
+import { guardBatch, guardCandidate, senderHistory } from './guard.js';
 import { HEDWIG_HOOKS, collectHedwigHook, runHedwigHook } from '../hooks.js';
 import { stage1 } from '../triage/signals.js';
 import { loadSenderStats, outgoingSql } from '../triage/store.js';
@@ -19,7 +20,7 @@ import { fnv1a } from '../triage/features.js';
 import { validTimezone, describeNow } from '../insights/time.js';
 import { getState, setState } from '../state.js';
 import { headerLayer, screenerKey, inSpamFolder, listRule } from './headers.js';
-import { assessSpam, rescueScore, SPAM_SIGNALS_VERSION, DEFAULT_TRUSTED_LINK_HOSTS } from './spam.js';
+import { assessSpam, rescueScore, personKey, SPAM_SIGNALS_VERSION, DEFAULT_TRUSTED_LINK_HOSTS } from './spam.js';
 import { applyRules, loadRules, bumpHits, matchDescriptions } from './rules.js';
 import { sortFeatures, priorStream, headsActive, predictHeads, loadHeads } from './classifier.js';
 import { loadBundles, guessBundle, isScheduled, lastSlot } from './bundles.js';
@@ -82,6 +83,39 @@ async function knownDomains(userId) {
   return domains;
 }
 
+const peopleCache = new Map(); // userId -> { at, people }
+/**
+ * People the user writes to, keyed by personKey of their names (hedwig_entities with sent_count > 0):
+ * key → the addresses that person uses. Spear phishing borrows one of these names from a new address.
+ */
+export async function knownPeople(userId) {
+  const c = peopleCache.get(userId);
+  if (c && Date.now() - c.at < 10 * 60_000) return c.people;
+  const { rows } = await query(
+    `SELECT lower(a.email) AS email, a.name, e.display_name
+       FROM hedwig_entity_addresses a JOIN hedwig_entities e ON e.id = a.entity_id
+      WHERE e.user_id = $1 AND e.kind = 'person' AND e.sent_count > 0
+      LIMIT 5000`,
+    [userId],
+  );
+  const people = new Map();
+  for (const r of rows) {
+    for (const key of new Set([personKey(r.name), personKey(r.display_name)])) {
+      if (!key) continue;
+      if (!people.has(key)) people.set(key, []);
+      if (!people.get(key).includes(r.email)) people.get(key).push(r.email);
+    }
+  }
+  peopleCache.set(userId, { at: Date.now(), people });
+  return people;
+}
+
+/** Tests: forget the cached known domains and people. */
+export function _resetSortCaches() {
+  knownCache.clear();
+  peopleCache.clear();
+}
+
 async function userProfile(userId, addresses) {
   const { rows } = await query('SELECT display_name, username FROM users WHERE id = $1', [userId]);
   return { name: rows[0]?.display_name || rows[0]?.username || null, addresses: [...addresses] };
@@ -93,7 +127,7 @@ export async function loadUserContext(userId, rows, cfg) {
   const incoming = rows.filter((r) => !r.is_outgoing);
   const keysList = incoming.map((r) => headerLayer(r, { userAddresses: addresses }).keys);
   const ids = rows.map((r) => r.id);
-  const [bundles, rules, heads, stats, decisions, triage, threads, user, known, existing] = await Promise.all([
+  const [bundles, rules, heads, stats, decisions, triage, threads, user, known, existing, people] = await Promise.all([
     loadBundles(userId),
     loadRules(userId),
     loadHeads(userId),
@@ -107,15 +141,16 @@ export async function loadUserContext(userId, rows, cfg) {
     threadFactsFor(userId, incoming, addresses),
     userProfile(userId, addresses),
     knownDomains(userId).then((d) => [...new Set([...d, ...[...addresses].map(domainOf).filter(Boolean)])]),
-    query('SELECT message_id, layer, stream, spam, pending FROM hedwig_sort WHERE user_id = $1 AND message_id = ANY($2::uuid[])', [userId, ids])
+    query('SELECT message_id, layer, stream, spam, pending, body_seen, prompt_id FROM hedwig_sort WHERE user_id = $1 AND message_id = ANY($2::uuid[])', [userId, ids])
       .then((r) => new Map(r.rows.map((s) => [s.message_id, s]))),
+    knownPeople(userId).catch(() => new Map()),
   ]);
   // When Hedwig first saw each message (the body wait is timed from this, not from the Date header).
   const seenAt = await query('SELECT message_id, seen_at FROM hedwig_msg WHERE user_id = $1 AND message_id = ANY($2::uuid[])', [userId, ids])
     .then((r) => new Map((r?.rows || []).map((s) => [s.message_id, s.seen_at])));
   return {
     userId, cfg, userAddresses: addresses, bundles, rules, heads, stats, decisions, triage, threads, user, knownDomains: known, existing,
-    seenAt, ruleHits: [], now: new Date(),
+    knownPeople: people, seenAt, ruleHits: [], now: new Date(),
   };
 }
 
@@ -177,7 +212,7 @@ export function decideCheap(row, ctx) {
   const trustedSender = Boolean((senderDecision && senderDecision.decision !== 'block' && ['user', 'import'].includes(senderDecision.source))
     || Number(sender?.replied) > 0);
   const spam = assessSpam(row, {
-    text, sender, auth: header.auth, knownDomains: ctx.knownDomains || [], spamFolder: header.spamFolder, trustedSender,
+    text, sender, auth: header.auth, knownDomains: ctx.knownDomains || [], knownPeople: ctx.knownPeople || null, spamFolder: header.spamFolder, trustedSender,
     trustedLinkHosts: Array.isArray(cfg['spam.trustedLinkHosts']) ? cfg['spam.trustedLinkHosts'] : DEFAULT_TRUSTED_LINK_HOSTS,
   });
 
@@ -196,7 +231,7 @@ export function decideCheap(row, ctx) {
     spam: spam.verdict, spamReason: spam.reason, spamConfidence: spam.confidence, phishingScore: spam.phishingScore,
     confidence: 0, layer: 'classifier', reason: null,
     signals: [...header.signals, ...spam.signals.filter((s) => !header.signals.some((h) => h.name === s.name))],
-    features, labels: [], notify: false, ruleId: null, final: false, needsScreen: false,
+    features, labels: [], notify: false, ruleId: null, final: false, needsScreen: false, trustedSender,
     screenKey: screenerKey(keys), own: header.own, inSpamFolder: header.spamFolder, header, s1, text, senderDecision, keys,
     ruleMatches: [], prompt: null, listRule: false, listFloor: list ? list.stream : null, listReason: list ? list.reason : null,
     rowLite: { from_name: row.from_name, from_email: row.from_email, subject: row.subject },
@@ -453,13 +488,16 @@ async function upsertSort(userId, row, d, { pending = null } = {}) {
        prompt_id = EXCLUDED.prompt_id, prompt_version = EXCLUDED.prompt_version, model = EXCLUDED.model, ai_call_id = EXCLUDED.ai_call_id,
        decided_at = NOW(), body_seen = EXCLUDED.body_seen, engine_version = EXCLUDED.engine_version
      WHERE hedwig_sort.user_id = EXCLUDED.user_id AND hedwig_sort.layer <> 'user'
+       -- A threat the guard flagged stays flagged: only the user's own rules and sender decisions
+       -- (or another guard check) replace it, never a later model or classifier re-sort.
+       AND NOT ($32::boolean AND hedwig_sort.prompt_id IS NOT DISTINCT FROM 'sort.guard' AND COALESCE(hedwig_sort.spam, 'clean') <> 'clean')
      RETURNING *`,
     [row.id, userId, row.account_id, d.stream, d.proposed && d.proposed !== 'spam' ? d.proposed : null, d.bundle, Boolean(d.held),
       Boolean(d.needsYou), d.needsYouReason, d.spam, d.spamReason ? cleanReason(d.spamReason, 140) : null, d.confidence, d.layer,
       d.reason, JSON.stringify(d.signals.slice(0, 16)), JSON.stringify(d.features || null), d.labels || [], Boolean(d.notify), d.ruleId,
       JSON.stringify(d.ruleMatches || []), d.screenKey?.key || null, d.screenKey?.scope || null, Boolean(d.own), Boolean(d.inSpamFolder),
       pending, p.promptId || null, p.promptVersion || null, p.model || null, p.aiCallId ?? null, Boolean(row.body_text || row.body_html),
-      engineStamp()],
+      engineStamp(), !userAuthoritative(d) && p.promptId !== 'sort.guard'],
   );
   return rows[0] || null;
 }
@@ -530,6 +568,16 @@ export async function enqueueReflex(userId, ids, cfg) {
   for (let i = 0; i < ids.length; i += size) {
     const chunk = ids.slice(i, i + size);
     await enqueue('sort.reflex', { messageIds: chunk }, { userId, dedupeKey: `sort.reflex:${fnv1a(chunk.join(','))}`, priority: 5, maxAttempts: 3 });
+    n++;
+  }
+  return n;
+}
+
+export async function enqueueGuard(userId, ids) {
+  let n = 0;
+  for (let i = 0; i < ids.length; i += 5) {
+    const chunk = ids.slice(i, i + 5);
+    await enqueue('sort.guard', { messageIds: chunk }, { userId, dedupeKey: `sort.guard:${fnv1a(chunk.join(','))}`, priority: 6, maxAttempts: 2 });
     n++;
   }
   return n;
@@ -629,7 +677,9 @@ export async function sortRows(rows, { historical = false, allowReflex = true, o
     if (!mail.length) continue;
     const ctx = await loadUserContext(userId, mail, cfg);
     const llmOn = allowReflex && !historical && await llmAvailable(userId).catch(() => false);
+    const guardOn = !historical && cfg['sort.guard.enabled'] && Boolean(cfg['sort.guard.model']);
     const toReflex = [];
+    const toGuard = [];
     for (const row of mail) {
       const prev = ctx.existing.get(row.id);
       if (prev?.layer === 'user') continue;
@@ -638,7 +688,17 @@ export async function sortRows(rows, { historical = false, allowReflex = true, o
         const ageDays = row.date ? (ctx.now.getTime() - new Date(row.date).getTime()) / DAY : 0;
         const eligible = llmOn && ageDays <= cfg['sort.reflexMaxAgeDays'];
         const d = decideCheap(row, ctx);
+        // The threat check runs once per message: on recent mail, at the sort that first has its body
+        // (hedwig_sort.body_seen flips then, so later re-sorts and sweeps do not repeat it).
+        if (guardOn && ageDays <= cfg['sort.reflexMaxAgeDays'] && (row.body_text || row.body_html) && !prev?.body_seen
+          && prev?.prompt_id !== 'sort.guard' && guardCandidate(row, d)) toGuard.push(row.id);
         if (!historical && !d.own) await applyPluginVerdict(userId, row, d);
+        // A threat the guard flagged stays until the user decides: re-sorts only mark it current.
+        if (prev?.prompt_id === 'sort.guard' && prev.spam && prev.spam !== 'clean' && !userAuthoritative(d)) {
+          await query(`UPDATE hedwig_sort SET engine_version = $3, pending = NULL WHERE message_id = $1 AND user_id = $2 AND layer <> 'user'`,
+            [row.id, userId, engineStamp()]);
+          continue;
+        }
         // A model decision is only replaced by another model decision, or by the user's own rules
         // and sender decisions, which apply at once.
         if (prev && MODEL_LAYERS.includes(prev.layer) && !userAuthoritative(d) && !headerSettled(d)) {
@@ -662,6 +722,7 @@ export async function sortRows(rows, { historical = false, allowReflex = true, o
       }
     }
     if (toReflex.length) reflexJobs += await enqueueReflex(userId, toReflex, cfg);
+    if (toGuard.length) await enqueueGuard(userId, toGuard);
     await bumpHits(userId, ctx.ruleHits);
   }
   return { sorted, reflex: reflexJobs };
@@ -690,6 +751,52 @@ export async function resortMessages(userId, messageIds, opts = {}) {
 /** Pipeline step `sort`. */
 export async function runSortStep(rows, ctx = {}) {
   return sortRows(rows, { historical: Boolean(ctx.historical) });
+}
+
+/**
+ * Job `sort.guard` { messageIds }: the threat model on new mail from unfamiliar senders. A confident
+ * threat goes to Spam with the model's reason (layer 'decision', prompt 'sort.guard'); everything
+ * else is left exactly as sorted, and a failure leaves the batch alone.
+ */
+export async function runGuardJob({ messageIds }, job = {}) {
+  const userId = job.user_id;
+  if (!userId || !Array.isArray(messageIds) || !messageIds.length) return { skipped: 'bad payload' };
+  const cfg = await getConfig(userId);
+  if (!cfg.enabled || !cfg['sort.enabled'] || !cfg['sort.guard.enabled'] || !cfg['sort.guard.model']) return { skipped: 'guard off' };
+  const rows = (await loadRows(userId, messageIds)).filter((r) => !r.is_outgoing && !inSpamFolder(r));
+  if (!rows.length) return { skipped: 'no messages' };
+  const ctx = await loadUserContext(userId, rows, cfg);
+  const history = await senderHistory(userId, rows);
+  const todo = [];
+  for (const row of rows) {
+    const prev = ctx.existing.get(row.id);
+    if (prev?.layer === 'user' || prev?.prompt_id === 'sort.guard') continue;
+    const d = decideCheap(row, ctx);
+    if (userAuthoritative(d) || !guardCandidate(row, d)) continue;
+    todo.push({ row, d, parts: await messagePartsFor(row.id, row, { userId }), history: history.get(row.id) || {} });
+  }
+  if (!todo.length) return { checked: 0, flagged: 0 };
+  const verdicts = await guardBatch(userId, todo, cfg, ctx);
+  let flagged = 0;
+  for (const { row, d } of todo) {
+    const v = verdicts.get(row.id);
+    if (!v) continue;
+    Object.assign(d, {
+      spam: v.spam, spamReason: v.reason, spamConfidence: v.confidence, stream: 'spam', final: true, layer: 'decision',
+      confidence: v.confidence, reason: cleanReason(v.reason), needsYou: false, needsYouReason: null, needsScreen: false,
+      bundle: null, prompt: v.provenance,
+    });
+    d.signals.unshift({ name: 'guard', label: v.reason, weight: v.confidence });
+    try {
+      await finalize(userId, row, d, ctx);
+      flagged++;
+      console.log(`[hedwig] sort.guard: ${row.id} → ${v.spam} (${v.threat}, ${v.confidence})`);
+    } catch (err) {
+      console.warn(`[hedwig] sort.guard: storing the verdict for ${row.id} failed:`, err.message);
+      await markError(row.id, `guard: ${err.message}`);
+    }
+  }
+  return { checked: todo.length, flagged };
 }
 
 /** Job `sort.reflex` { messageIds }: Reflex over one batch, escalating the unsure. */

@@ -692,7 +692,7 @@ function auditDb({ rows = [], sorts = {}, decisions = [], jobs = [], state = {} 
     if (/INSERT INTO hedwig_state/.test(sql)) { st.set(params[0], JSON.parse(params[1])); return { rows: [], rowCount: 1 }; }
     if (/lower\(a\.email_address\) AS email/.test(sql)) return { rows: [{ user_id: USER, email: 'me@example.com' }] };
     if (/WHERE m\.id = ANY\(\$1::uuid\[\]\) AND a\.user_id = \$2 AND NOT m\.is_deleted/.test(sql)) return { rows: params[0].map((id) => byId.get(id)).filter(Boolean).map((r) => ({ ...r })) };
-    if (/SELECT message_id, layer, stream, spam, pending FROM hedwig_sort/.test(sql)) return { rows: params[1].filter((id) => sort.has(id)).map((id) => ({ message_id: id, ...sort.get(id) })) };
+    if (/SELECT message_id, layer, stream, spam, pending, body_seen, prompt_id FROM hedwig_sort/.test(sql)) return { rows: params[1].filter((id) => sort.has(id)).map((id) => ({ message_id: id, ...sort.get(id) })) };
     if (/JOIN UNNEST\(\$2::text\[\], \$3::text\[\]\)/.test(sql)) return { rows: decisions };
     if (/COUNT\(\*\)::int AS n FROM hedwig_bundles/.test(sql)) return { rows: [{ n: 99 }] };
     if (/FROM hedwig_bundles WHERE user_id/.test(sql) && /ORDER BY/.test(sql)) return { rows: bundles.DEFAULT_BUNDLES.map((b, i) => ({ ...b, id: i + 1, enabled: true, builtin: true, position: i })) };
@@ -701,9 +701,9 @@ function auditDb({ rows = [], sorts = {}, decisions = [], jobs = [], state = {} 
     if (/INSERT INTO hedwig_sort_log/.test(sql)) return { rows: [{ id: 1 }] };
     if (/INSERT INTO hedwig_jobs/.test(sql)) { enqueued.push({ kind: params[0], payload: JSON.parse(params[1]), userId: params[2], dedupeKey: params[3], priority: params[5] }); return { rows: [{ id: enqueued.length }] }; }
     if (/INSERT INTO hedwig_sort\b/.test(sql)) {
-      const row = { layer: params[12], stream: params[3], bundle: params[5], needs_you: params[7], needs_you_reason: params[8], spam: params[9], reason: params[13], signals: JSON.parse(params[14]), pending: params[24], prompt_id: params[25], prompt_version: params[26], model: params[27], engine_version: params[30] };
+      const row = { layer: params[12], stream: params[3], bundle: params[5], needs_you: params[7], needs_you_reason: params[8], spam: params[9], reason: params[13], signals: JSON.parse(params[14]), pending: params[24], prompt_id: params[25], prompt_version: params[26], model: params[27], body_seen: params[29], engine_version: params[30] };
       sort.set(params[0], row);
-      upserts.push({ id: params[0], ...row });
+      upserts.push({ id: params[0], ...row, keepGuard: params[31] });
       return { rows: [{ message_id: params[0], stream: params[3] }] };
     }
     if (/SELECT payload FROM hedwig_jobs WHERE kind = 'sort.reflex'/.test(sql)) return { rows: jobs.filter((j) => j.status === 'failed').map((j) => ({ payload: j.payload })) };
@@ -903,6 +903,85 @@ describe('v2 sort audit: Tier 1 coverage', () => {
     expect(jobKinds().find((j) => j.kind === 'sort.reflex')).toMatchObject({ rebuild: true, needsGateway: true });
     _resetSchedules();
     _resetJobs();
+  });
+});
+
+describe('guard: the threat model on mail from unfamiliar senders', () => {
+  beforeEach(() => {
+    gw.reset().install();
+    gw.decisions.length = 0;
+    gw.systemone = null;
+    _resetPrompts();
+    _resetLlmState();
+    engine._resetSortCaches();
+  });
+  const STRANGER = '00000000-0000-4000-8000-00000000c001';
+  const lure = (over = {}) => msg({ id: STRANGER, from_name: 'Dana Reyes', from_email: 'dana.reyes.office@gmail.com', subject: 'Are you free?', body_text: 'Are you free for a short call later today? I need your help with something.', ...over });
+  const threat = (probabilities) => () => ({ model: 'aer-laya-guard', answers: { threat: { type: 'choice', choice: 'impersonation', probabilities, confidence: 0.6 } }, usage: { input_tokens: 300, output_tokens: 1 } });
+  const IMPERSONATION = { safe: 0.04, spam: 0.01, scam: 0.02, phishing: 0.08, impersonation: 0.84, malware: 0.01 };
+  function withPeople(fake) {
+    const inner = db.handler;
+    db.handler = (sql, params) => (/FROM hedwig_entity_addresses a JOIN hedwig_entities e/.test(sql)
+      ? { rows: [{ email: 'dana.reyes@corp.example', name: 'Dana Reyes', display_name: 'Dana Reyes' }] } : inner(sql, params));
+    return fake;
+  }
+
+  it('moves a confident threat to Spam with the model\'s reason and provenance, and later re-sorts keep it', async () => {
+    gw.systemone = threat(IMPERSONATION);
+    const fake = withPeople(auditDb({ rows: [lure()], sorts: { [STRANGER]: { layer: 'classifier', stream: 'people', spam: 'clean', pending: null, body_seen: true } } }));
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      expect(await engine.runGuardJob({ messageIds: [STRANGER] }, { user_id: USER })).toEqual({ checked: 1, flagged: 1 });
+    } finally {
+      log.mockRestore();
+    }
+    const stored = fake.sort.get(STRANGER);
+    expect(stored).toMatchObject({ stream: 'spam', spam: 'phishing', layer: 'decision', prompt_id: 'sort.guard', model: 'aer-laya-guard', needs_you: false });
+    // the rules saw a contact's name from a new address (one sign); the model made it a verdict
+    expect(stored.reason).toMatch(/^Looks like impersonation of someone you know \(threat model, 95% sure\); Named "Dana/);
+    expect(stored.signals[0].label).toBe('Looks like impersonation of someone you know (threat model, 95% sure); Named "Dana Reyes" like your contact at dana.reyes@corp.example, but sent from dana.reyes.office@gmail.com');
+    expect(stored.signals[0]).toMatchObject({ name: 'guard' });
+    expect(gw.decisions[0].body.state).toContain('Known name: "Dana Reyes" is someone you write to at dana.reyes@corp.example; this address is not one of them');
+    expect(fake.upserts.at(-1).keepGuard).toBe(false);
+    // the verdict is a model decision, so re-sorts leave it alone
+    const n = fake.upserts.length;
+    await engine.resortMessages(USER, [STRANGER], { allowReflex: false });
+    expect(fake.upserts).toHaveLength(n);
+    // and a decision that raced the guard (read before it wrote) asks the upsert to keep its verdict
+    const ctx = await engine.loadUserContext(USER, [lure()], cfg);
+    await engine.finalize(USER, lure(), engine.decideCheap(lure(), ctx), ctx);
+    expect(fake.upserts.at(-1).keepGuard).toBe(true);
+  });
+
+  it('leaves safe mail, the user\'s corrections and the user\'s sender decisions alone', async () => {
+    gw.systemone = threat({ safe: 0.95, spam: 0.03, scam: 0, phishing: 0.01, impersonation: 0.01, malware: 0 });
+    let fake = withPeople(auditDb({ rows: [lure()], sorts: { [STRANGER]: { layer: 'classifier', stream: 'people', spam: 'clean', pending: null } } }));
+    expect(await engine.runGuardJob({ messageIds: [STRANGER] }, { user_id: USER })).toEqual({ checked: 1, flagged: 0 });
+    expect(fake.upserts).toHaveLength(0);
+
+    gw.systemone = threat(IMPERSONATION);
+    gw.decisions.length = 0;
+    withPeople(auditDb({ rows: [lure()], sorts: { [STRANGER]: { layer: 'user', stream: 'people', spam: 'clean', pending: null } } }));
+    await engine.runGuardJob({ messageIds: [STRANGER] }, { user_id: USER });
+    const mine = { key: 'dana.reyes.office@gmail.com', scope: 'address', decision: 'people', source: 'user', confidence: 1, reason: 'You put this sender in People' };
+    fake = withPeople(auditDb({ rows: [lure()], sorts: {}, decisions: [mine] }));
+    await engine.runGuardJob({ messageIds: [STRANGER] }, { user_id: USER });
+    expect(gw.decisions).toHaveLength(0);
+    expect(fake.upserts).toHaveLength(0);
+  });
+
+  it('sorting queues the check once, at the sort that first has the body', async () => {
+    const fake = withPeople(auditDb({ rows: [lure()], sorts: {} }));
+    await engine.resortMessages(USER, [STRANGER], { allowReflex: false });
+    expect(fake.enqueued.filter((j) => j.kind === 'sort.guard')).toEqual([expect.objectContaining({ payload: { messageIds: [STRANGER] }, userId: USER })]);
+    expect(fake.sort.get(STRANGER).body_seen).toBe(true);
+    await engine.resortMessages(USER, [STRANGER], { allowReflex: false });
+    expect(fake.enqueued.filter((j) => j.kind === 'sort.guard')).toHaveLength(1);
+    // no model configured: no check
+    resetConfig({ 'sort.guard.model': '' });
+    const off = withPeople(auditDb({ rows: [lure()], sorts: {} }));
+    await engine.resortMessages(USER, [STRANGER], { allowReflex: false });
+    expect(off.enqueued.filter((j) => j.kind === 'sort.guard')).toHaveLength(0);
   });
 });
 

@@ -5,7 +5,8 @@ import { addressesOf, domainOf } from '../text.js';
 
 const round = (n, p = 3) => Math.round(n * 10 ** p) / 10 ** p;
 
-const SECOND_LEVEL = new Set(['co', 'com', 'org', 'net', 'ac', 'gov', 'edu', 'ltd', 'plc', 'me', 'nhs', 'police']);
+// 'bank' is India's restricted second level (hdfcbank.bank.in, kotak.bank.in are different banks).
+const SECOND_LEVEL = new Set(['co', 'com', 'org', 'net', 'ac', 'gov', 'edu', 'ltd', 'plc', 'me', 'nhs', 'police', 'bank']);
 
 /** Registrable domain: the last two labels, or three for co.uk-style suffixes. */
 export function registrable(domain) {
@@ -166,12 +167,42 @@ export function trustedLinkHost(domain, hosts = DEFAULT_TRUSTED_LINK_HOSTS) {
 }
 
 const CREDENTIAL_RE = /\b(?:verify (?:your )?(?:account|identity|password|payment|wallet)|confirm (?:your )?(?:password|identity|account|payment details)|log ?in to (?:avoid|restore|keep)|update (?:your )?(?:payment|billing) (?:details|information)|unusual (?:sign-?in|activity)|account (?:will be |has been )?(?:suspended|locked|limited|closed))\b/i;
+// Business-email-compromise asks: money or a private channel, usually under time pressure.
+const PAYMENT_RE = /\b(?:(?:new|updated|changed?) (?:bank|account|remittance|payment|beneficiary) (?:details|information|account)|bank (?:details|account) (?:has|have) (?:changed|been (?:changed|updated))|(?:wire|bank|urgent) (?:transfer|payment) (?:today|now|urgently)|gift ?cards?|(?:whats ?app|text) me\b|my (?:new|personal) (?:number|phone|mobile)|keep (?:this|it) (?:confidential|between us)|(?:urgent|quick|small) favou?r)\b/i;
 const LINK_SHORTENERS = new Set(['bit.ly', 'tinyurl.com', 't.co', 'goo.gl', 'is.gd', 'ow.ly', 'rebrand.ly', 'cutt.ly', 'shorturl.at']);
+// Attachments that run or render code when opened (HTML smuggling, disk images, scripts, macros).
+const RISKY_ATTACHMENT_RE = /\.(?:html?|shtml|xhtml|svg|iso|img|vhdx?|lnk|js|jse|vbs|vbe|wsf|hta|exe|scr|bat|cmd|ps1|msi|jar|one|xll|docm|xlsm|pptm)$/i;
+const DOUBLE_EXTENSION_RE = /\.(?:pdf|docx?|xlsx?|pptx?|jpe?g|png|txt)\.(?:exe|scr|js|vbs|html?|zip|rar|iso|lnk|bat|cmd)$/i;
 
 // Independent kinds of evidence. Phishing needs two of them, or a failed authentication and one.
 const SIGNAL_GROUP = {
-  lookalike: 'identity', brandName: 'identity', replyTo: 'replyTo', credential: 'lure', linkDomain: 'links', shortener: 'links',
+  lookalike: 'identity', brandName: 'identity', impersonation: 'identity', displayAddress: 'identity', replyTo: 'replyTo',
+  credential: 'lure', payment: 'lure', linkDomain: 'links', shortener: 'links', attachment: 'payload',
 };
+
+const NOT_A_PERSON = new Set(['the', 'team', 'support', 'info', 'noreply', 'no', 'reply', 'newsletter', 'news', 'notifications',
+  'notification', 'service', 'customer', 'care', 'admin', 'billing', 'sales', 'help', 'alerts', 'updates', 'mailer', 'daemon']);
+const NAME_TITLES = new Set(['dr', 'mr', 'mrs', 'ms', 'prof', 'sir', 'dame', 'engr', 'er']);
+
+/**
+ * A display name as a person key ("Dr. Dana Reyes (Acme)" → "dana reyes"), or null when it does
+ * not look like a person: fewer than two words, a role or team word, or a platform relay ("… via
+ * LinkedIn", which really is sent by the platform on the person's behalf).
+ */
+export function personKey(name) {
+  const raw = String(name || '').normalize('NFKC').toLowerCase();
+  if (!raw || /\bvia\b/.test(raw) || /@/.test(raw)) return null;
+  const toks = raw.replace(/\(.*?\)/g, ' ').match(/[\p{L}]+/gu)?.filter((t) => !NAME_TITLES.has(t)) || [];
+  if (toks.length < 2 || toks.some((t) => t.length < 2 || NOT_A_PERSON.has(t))) return null;
+  return toks.join(' ');
+}
+
+/** File names of a message's attachments (inline signature images left out). */
+function attachmentNames(row) {
+  let list = row?.attachments;
+  if (typeof list === 'string') { try { list = JSON.parse(list); } catch { list = []; } }
+  return (Array.isArray(list) ? list : []).map((a) => String(a?.filename || a?.name || '')).filter(Boolean);
+}
 
 /** Authentication passed on a trusted result (DMARC, or SPF and DKIM together). */
 export function authPassed(auth = {}) {
@@ -186,10 +217,12 @@ export function authFailed(auth = {}) {
 /**
  * Phishing signals for one message.
  * @param {object} row
- * @param {{ auth?: object, knownDomains?: string[], text?: string, links?: string[], trustedSender?: boolean,
- *   trustedLinkHosts?: string[] }} ctx
+ * @param {{ auth?: object, knownDomains?: string[], knownPeople?: Map<string, string[]>, text?: string, links?: string[],
+ *   trustedSender?: boolean, trustedLinkHosts?: string[] }} ctx
+ *   knownPeople: personKey of a name the user writes to → the addresses that person uses (spear phishing
+ *   borrows a colleague's or contact's name from an address they never used).
  */
-export function phishingSignals(row, { auth = {}, knownDomains = [], text = '', links = null, trustedSender = false, trustedLinkHosts = DEFAULT_TRUSTED_LINK_HOSTS } = {}) {
+export function phishingSignals(row, { auth = {}, knownDomains = [], knownPeople = null, text = '', links = null, trustedSender = false, trustedLinkHosts = DEFAULT_TRUSTED_LINK_HOSTS } = {}) {
   const signals = [];
   const add = (name, label, weight) => signals.push({ name, label, weight: round(weight) });
   const from = String(row?.from_email || '').toLowerCase();
@@ -212,6 +245,17 @@ export function phishingSignals(row, { auth = {}, knownDomains = [], text = '', 
     break;
   }
 
+  // A person the user writes to, from an address that person never used. On its own this is often
+  // a second personal address (weight below the 0.45 "worth a look" line); with a lure, a payload or
+  // a diverted reply it is the spear-phishing shape.
+  const who = trustedSender ? null : personKey(row?.from_name);
+  const theirs = who && knownPeople?.get(who);
+  if (theirs?.length && !theirs.includes(from)) {
+    add('impersonation', `Named "${String(row.from_name).trim()}" like your contact at ${theirs.slice(0, 2).join(', ')}, but sent from ${from}`, 0.4);
+  }
+  const inner = String(row?.from_name || '').match(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/);
+  if (inner && inner[0].toLowerCase() !== from) add('displayAddress', `The display name shows ${inner[0].toLowerCase()} but it was sent from ${from}`, 0.35);
+
   const replyTo = addressesOf(row?.reply_to).map((a) => registrable(domainOf(a.email))).filter(Boolean);
   const otherReply = replyTo.find((d) => !sameFamily(d, fromReg) && !knownRegs.includes(d) && !trustedLinkHost(d, trustedLinkHosts));
   if (otherReply) add('replyTo', `Replies go to ${otherReply}, not ${fromReg}`, 0.25);
@@ -220,6 +264,11 @@ export function phishingSignals(row, { auth = {}, knownDomains = [], text = '', 
   const foreign = linked.filter((d) => !sameFamily(d, fromReg) && !knownRegs.includes(d) && !trustedLinkHost(d, trustedLinkHosts));
   const credential = CREDENTIAL_RE.test(`${row?.subject || ''}\n${text}`);
   if (credential) add('credential', 'Asks you to verify an account, password or payment', trustedSender ? 0.05 : 0.25);
+  if (PAYMENT_RE.test(`${row?.subject || ''}\n${text}`)) add('payment', 'Asks for a payment, new bank details, gift cards or a private channel', trustedSender ? 0.05 : 0.25);
+  const files = attachmentNames(row);
+  const doubled = files.find((f) => DOUBLE_EXTENSION_RE.test(f));
+  const risky = doubled || files.find((f) => RISKY_ATTACHMENT_RE.test(f));
+  if (risky) add('attachment', doubled ? `Attachment ${risky} hides its real type` : `Attachment ${risky} can run code when opened`, doubled ? 0.45 : (trustedSender ? 0.05 : 0.3));
   if (linked.some((d) => LINK_SHORTENERS.has(d))) add('shortener', 'Links through a URL shortener', 0.15);
   if (credential && foreign.length && !linked.some((d) => sameFamily(d, fromReg))) {
     add('linkDomain', `Links go to ${foreign.slice(0, 2).join(', ')}, not ${fromReg}${passed ? ' (sender passed DMARC)' : ''}`, passed ? 0.1 : 0.3);
@@ -253,8 +302,8 @@ function phishingReason(signals) {
  * Spam verdict from triage's evidence, phishing signals and the folder.
  * @returns {{ verdict: 'clean'|'suspected'|'phishing', confidence: number, reason: string|null, signals: Array, phishingScore: number }}
  */
-export function assessSpam(row, { text = '', sender = null, auth = {}, knownDomains = [], spamFolder = false, trustedSender = false, links = null, trustedLinkHosts = DEFAULT_TRUSTED_LINK_HOSTS } = {}) {
-  const phishing = phishingSignals(row, { auth, knownDomains, text, links, trustedSender, trustedLinkHosts });
+export function assessSpam(row, { text = '', sender = null, auth = {}, knownDomains = [], knownPeople = null, spamFolder = false, trustedSender = false, links = null, trustedLinkHosts = DEFAULT_TRUSTED_LINK_HOSTS } = {}) {
+  const phishing = phishingSignals(row, { auth, knownDomains, knownPeople, text, links, trustedSender, trustedLinkHosts });
   const decision = phishingDecision(phishing, auth);
   const phishingScore = decision.score;
   const evidence = spamEvidence(row, { text, sender });

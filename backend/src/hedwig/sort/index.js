@@ -5,7 +5,7 @@ import { defineJob } from '../jobs.js';
 import { defineSchedule } from '../schedule.js';
 import { getConfig } from '../config.js';
 import {
-  runSortStep, runReflexJob, runResortJob, pendingSweep, backfillSweep, rescueSweep, sortUsers, runRescueJob, runReevaluateSpamJob,
+  runSortStep, runReflexJob, runGuardJob, runResortJob, pendingSweep, backfillSweep, rescueSweep, sortUsers, runRescueJob, runReevaluateSpamJob,
   ensureSpamSignalsCurrent, ensureSortEngineCurrent, reflexSweep, reflexPayloads,
 } from './engine.js';
 import { releaseDueBundles } from './bundles.js';
@@ -63,6 +63,7 @@ export default {
     // After triage (30) so its needs-you decision and sender stats (15) are in place.
     defineStep({ name: 'sort', order: 32, backfill: true, run: (rows, ctx) => runSortStep(rows, ctx) });
     defineJob('sort.reflex', (payload, job) => runReflexJob(payload, job), { timeoutMs: 5 * 60_000, needsGateway: true, rebuild: reflexRebuild });
+    defineJob('sort.guard', (payload, job) => runGuardJob(payload, job), { timeoutMs: 6 * 60_000, needsGateway: true });
     // Corrections D queued before this module existed (labels/runtime.js applySortCorrection).
     defineJob('sort.applyCorrection', (payload, job) => {
       const body = { ...payload };
