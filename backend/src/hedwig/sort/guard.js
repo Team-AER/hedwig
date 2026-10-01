@@ -116,20 +116,28 @@ export function guardState(row, parts, ctx = {}, { inSpamFolder = false } = {}) 
   return lines.join('\n');
 }
 
+/** Rule evidence the guard needs before it asks the model (one sign of phishing from spam.js). */
+export function hasRuleEvidence(d) {
+  return Number(d?.phishingScore) >= 0.25;
+}
+
 /**
  * Gate one model answer: { spam, confidence, reason, threat } to apply, or null to leave the message.
- * A threat needs `sort.guard.flagAbove` of the probability on the malicious options; it is 'phishing'
- * (a credential, impersonation or malware threat with rule evidence or at `sort.guard.phishingAbove`)
- * or 'suspected' (a scam, or a threat on the model's word alone below that).
+ * The rules suspect and the model confirms: with `sort.guard.requireRuleEvidence` (default) a verdict needs
+ * one sign of phishing from spam.js, because the model trained on one mailbox also scores some genuine
+ * notices high (an Adobe cancellation reached 0.97). A threat needs `sort.guard.flagAbove` of the
+ * probability on the malicious options; it is 'phishing' (credential, impersonation or malware with rule
+ * evidence, or at `sort.guard.phishingAbove` when evidence is not required) or 'suspected' (a scam).
  */
 export function guardVerdict(answers, d, cfg) {
   const p = answers?.threat?.probabilities;
   if (!p) return null;
+  const ruleEvidence = hasRuleEvidence(d);
+  if (!ruleEvidence && cfg['sort.guard.requireRuleEvidence'] !== false) return null;
   const bad = Object.keys(LABEL).map((k) => [k, Number(p[k]) || 0]).sort((a, b) => b[1] - a[1]);
   const total = bad.reduce((s, [, v]) => s + v, 0);
-  if (!(total >= (cfg['sort.guard.flagAbove'] ?? 0.95))) return null;
+  if (!(total >= (cfg['sort.guard.flagAbove'] ?? 0.9))) return null;
   const [threat] = bad[0];
-  const ruleEvidence = Number(d?.phishingScore) >= 0.25;
   const strong = threat !== 'scam' && (ruleEvidence || total >= (cfg['sort.guard.phishingAbove'] ?? 0.97));
   const pct = Math.round(total * 100);
   const evidence = (d?.signals || []).filter((x) => RULE_SIGNALS.has(x.name)).sort((a, b) => b.weight - a.weight).slice(0, 2);
@@ -158,9 +166,13 @@ export async function senderHistory(userId, rows) {
   return new Map(found.map((r) => [r.id, { written: Number(r.written) || 0, received: Number(r.received) || 0 }]));
 }
 
-/** Is this row worth a guard check? New incoming mail from a sender the user has no standing with. */
-export function guardCandidate(row, d) {
+/**
+ * Is this row worth a guard check? New incoming mail from a sender the user has no standing with, and
+ * (unless `sort.guard.requireRuleEvidence` is off) at least one sign of phishing for the model to confirm.
+ */
+export function guardCandidate(row, d, cfg = {}) {
   if (!d || d.own || row.is_outgoing || d.trustedSender || d.inSpamFolder) return false;
+  if (cfg['sort.guard.requireRuleEvidence'] !== false && !hasRuleEvidence(d)) return false;
   if (d.layer === 'rule' && (d.ruleId || d.senderDecision?.source === 'user')) return false;
   if (d.spam === 'phishing' && Number(d.spamConfidence) >= 0.9) return false; // the rules are already sure
   return Boolean(row.body_text || row.body_html || row.snippet);

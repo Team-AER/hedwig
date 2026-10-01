@@ -99,24 +99,37 @@ describe('guard verdict', () => {
     expect(guardVerdict({}, {}, DEFAULTS)).toBeNull();
   });
 
-  it('calls it phishing with rule evidence or very high confidence, suspected otherwise; a scam is suspected', () => {
+  it('the rules suspect and the model confirms: no rule evidence, no verdict', () => {
     const p = answers({ impersonation: 0.66, phishing: 0.3, safe: 0.04 }).answers;
-    expect(guardVerdict(p, { phishingScore: 0 }, DEFAULTS)).toMatchObject({ spam: 'suspected', threat: 'impersonation' });
+    // a genuine Adobe cancellation scored 0.97 on the model alone; without a rule sign it is never flagged
+    expect(guardVerdict(answers({ phishing: 0.97, safe: 0.03 }).answers, { phishingScore: 0 }, DEFAULTS)).toBeNull();
+    expect(guardVerdict(p, { phishingScore: 0.1 }, DEFAULTS)).toBeNull();
     const signals = [{ name: 'dmarc', label: 'DMARC passed', weight: 0.5 }, { name: 'impersonation', label: 'Named "Dana Reyes" like your contact at dana.reyes@corp.example', weight: 0.4 }];
     const withRules = guardVerdict(p, { phishingScore: 0.4, signals }, DEFAULTS);
     expect(withRules).toMatchObject({ spam: 'phishing', threat: 'impersonation' });
     expect(withRules.reason).toBe('Looks like impersonation of someone you know (threat model, 96% sure); Named "Dana Reyes" like your contact at dana.reyes@corp.example');
-    expect(guardVerdict(answers({ malware: 0.97 }).answers, {}, DEFAULTS).spam).toBe('phishing');
+    // with rule evidence the confirmation bar is sort.guard.flagAbove (0.9)
+    expect(guardVerdict(answers({ phishing: 0.91, safe: 0.09 }).answers, { phishingScore: 0.55 }, DEFAULTS).spam).toBe('phishing');
+    expect(guardVerdict(answers({ phishing: 0.85, safe: 0.15 }).answers, { phishingScore: 0.55 }, DEFAULTS)).toBeNull();
     expect(guardVerdict(answers({ scam: 0.99 }).answers, { phishingScore: 0.5 }, DEFAULTS).spam).toBe('suspected');
   });
 
-  it('checks unfamiliar senders only', () => {
-    expect(guardCandidate(ROW, { layer: 'classifier' })).toBe(true);
-    expect(guardCandidate(ROW, { trustedSender: true })).toBe(false);
-    expect(guardCandidate(ROW, { own: true })).toBe(false);
-    expect(guardCandidate(ROW, { inSpamFolder: true })).toBe(false);
-    expect(guardCandidate(ROW, { layer: 'rule', ruleId: 'r1' })).toBe(false);
-    expect(guardCandidate({ ...ROW, body_text: null, body_html: null, snippet: null }, {})).toBe(false);
+  it('can flag on the model alone when rule evidence is not required (above the phishing bar for phishing)', () => {
+    const solo = { ...DEFAULTS, 'sort.guard.requireRuleEvidence': false };
+    expect(guardVerdict(answers({ malware: 0.98, safe: 0.02 }).answers, {}, solo).spam).toBe('phishing');
+    expect(guardVerdict(answers({ impersonation: 0.93, safe: 0.07 }).answers, {}, solo).spam).toBe('suspected');
+  });
+
+  it('checks unfamiliar senders the rules already suspect', () => {
+    const sign = { layer: 'classifier', phishingScore: 0.4 };
+    expect(guardCandidate(ROW, sign, DEFAULTS)).toBe(true);
+    expect(guardCandidate(ROW, { layer: 'classifier', phishingScore: 0 }, DEFAULTS)).toBe(false);
+    expect(guardCandidate(ROW, { layer: 'classifier', phishingScore: 0 }, { ...DEFAULTS, 'sort.guard.requireRuleEvidence': false })).toBe(true);
+    expect(guardCandidate(ROW, { ...sign, trustedSender: true }, DEFAULTS)).toBe(false);
+    expect(guardCandidate(ROW, { ...sign, own: true }, DEFAULTS)).toBe(false);
+    expect(guardCandidate(ROW, { ...sign, inSpamFolder: true }, DEFAULTS)).toBe(false);
+    expect(guardCandidate(ROW, { ...sign, layer: 'rule', ruleId: 'r1' }, DEFAULTS)).toBe(false);
+    expect(guardCandidate({ ...ROW, body_text: null, body_html: null, snippet: null }, sign, DEFAULTS)).toBe(false);
   });
 });
 

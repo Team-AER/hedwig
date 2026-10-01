@@ -691,7 +691,7 @@ export async function sortRows(rows, { historical = false, allowReflex = true, o
         // The threat check runs once per message: on recent mail, at the sort that first has its body
         // (hedwig_sort.body_seen flips then, so later re-sorts and sweeps do not repeat it).
         if (guardOn && ageDays <= cfg['sort.reflexMaxAgeDays'] && (row.body_text || row.body_html) && !prev?.body_seen
-          && prev?.prompt_id !== 'sort.guard' && guardCandidate(row, d)) toGuard.push(row.id);
+          && prev?.prompt_id !== 'sort.guard' && guardCandidate(row, d, cfg)) toGuard.push(row.id);
         if (!historical && !d.own) await applyPluginVerdict(userId, row, d);
         // A threat the guard flagged stays until the user decides: re-sorts only mark it current.
         if (prev?.prompt_id === 'sort.guard' && prev.spam && prev.spam !== 'clean' && !userAuthoritative(d)) {
@@ -772,7 +772,7 @@ export async function runGuardJob({ messageIds }, job = {}) {
     const prev = ctx.existing.get(row.id);
     if (prev?.layer === 'user' || prev?.prompt_id === 'sort.guard') continue;
     const d = decideCheap(row, ctx);
-    if (userAuthoritative(d) || !guardCandidate(row, d)) continue;
+    if (userAuthoritative(d) || !guardCandidate(row, d, cfg)) continue;
     todo.push({ row, d, parts: await messagePartsFor(row.id, row, { userId }), history: history.get(row.id) || {} });
   }
   if (!todo.length) return { checked: 0, flagged: 0 };

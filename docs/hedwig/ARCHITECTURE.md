@@ -119,9 +119,14 @@ the Ollama/Nimble System One shape). The model's training data is in `llm/decisi
 text and question wording must match that training data.
 - `sort/decision.js` (`aer-laya`, layer `decision`): settles stream, spam and needs-you before Reflex
   when it is confident.
-- `sort/guard.js` (`aer-laya-guard`, job `sort.guard`): checks new mail from senders the user has no
-  history with, once per message, when the body first arrives. The model answers safe, spam, scam,
-  phishing, impersonation or malware.
+- `sort/guard.js` (`aer-laya-guard`, job `sort.guard`): the rules suspect and the model confirms.
+  - It checks new mail from senders the user has no history with, once per message, when the body
+    first arrives.
+  - It only runs when `sort/spam.js` already sees at least one sign of phishing
+    (`sort.guard.requireRuleEvidence`).
+  - The model answers safe, spam, scam, phishing, impersonation or malware.
+  - A model trained on one mailbox also scores some genuine notices high, so it never acts alone by
+    default.
   - The input carries identity lines: sender history, a known person's name from a new address, a
     display name hiding another address, look-alike domains of correspondents, diverted replies,
     link targets and attachments.
