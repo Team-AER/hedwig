@@ -142,7 +142,7 @@ function seed() {
       { id: 'b-receipts', key: 'receipts', name: 'Receipts', stream: 'records', schedule: { mode: 'weekly', day: 6, at: '09:00' }, builtin: true, position: 5 },
     ],
     // Work lists hold thread ids (t-…), as hedwig_work_items does.
-    lists: { reply_later: ['t-priya', 't-jonas', 't-lena'], set_aside: ['t-stratechery', 't-hn'], snoozed: ['t-telia'], done: [] },
+    lists: { reply_later: ['t-priya', 't-jonas', 't-lena'], set_aside: ['t-stratechery', 't-hn'], snoozed: ['t-telia'], done: [], delegated: [], reference: [] },
     // Already due whatever the time of day (08:00 today is still ahead just after midnight).
     reminders: [{ id: 7, note: 'Call the dentist about the crown', until: at(HOUR) }],
     answers: [],
@@ -607,7 +607,8 @@ const findThread = (threadId) => ALL_ITEMS().find((i) => i.threadId === threadId
 const LIST_ALIASES = { replyLater: 'reply_later', setAside: 'set_aside', snooze: 'snoozed' };
 const listKind = (k) => LIST_ALIASES[k] || String(k || '').replace(/-/g, '_');
 function listCounts() {
-  const c = { reply_later: db.lists.reply_later.length, set_aside: db.lists.set_aside.length, pin: 0, reminder: db.reminders.length, done: db.lists.done.length, snoozed: db.lists.snoozed.length };
+  const c = { reply_later: db.lists.reply_later.length, set_aside: db.lists.set_aside.length, pin: 0, reminder: db.reminders.length, done: db.lists.done.length, snoozed: db.lists.snoozed.length,
+    delegated: db.lists.delegated.length, reference: db.lists.reference.length };
   return { ...c, replyLater: c.reply_later, setAside: c.set_aside };
 }
 function reminderRow(r) {
@@ -944,7 +945,7 @@ function route(method, path, body) {
         db.reminders.push(r);
         return { item: { ...clone(findThread(body.threadId)), note: r.note, until: r.until }, counts: listCounts() };
       }
-      if (!db.lists[kind]) throw bad('list must be one of reply_later, set_aside, pin, reminder, done, snoozed');
+      if (!db.lists[kind]) throw bad('list must be one of reply_later, set_aside, pin, reminder, done, snoozed, delegated, reference');
       if (method === 'GET') {
         const items = db.lists[kind].map((t, i) => {
           const it = findThread(t);
@@ -957,6 +958,8 @@ function route(method, path, body) {
         if (!body?.threadId) throw bad('threadId is required');
         if (!findThread(body.threadId)) throw notFound();
         db.lists[kind] = [...new Set([...db.lists[kind], body.threadId])];
+        // work/lists.js: Done closes Delegated (Reference stays, like a pin).
+        if (kind === 'done') db.lists.delegated = db.lists.delegated.filter((t) => t !== body.threadId);
         return { item: clone(findThread(body.threadId)), counts: listCounts() };
       }
       if (method === 'DELETE' && seg[3]) {

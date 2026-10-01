@@ -530,4 +530,19 @@ describe.skipIf(!process.env.HEDWIG_IT)('working the seeded demo mailbox', () =>
     expect(slow).toEqual({ status: 429, body: { error: 'Slow down: six rewrites a minute' } });
     _resetRegenerate();
   });
+
+  // Delegated and Reference are Hedwig's own lists (never folders or labels on the mail server):
+  // Done closes Delegated like Set Aside, and leaves Reference like a pin.
+  it('Delegated closes when the thread is done; Reference stays', async () => {
+    await lists.addItem(userId, 'delegated', { threadId: THREAD, note: 'Jo is on it' });
+    await lists.addItem(userId, 'reference', { threadId: THREAD });
+    expect(await lists.listCounts(userId)).toMatchObject({ delegated: 1, reference: 1 });
+    expect((await lists.listItems(userId, 'delegated')).items).toEqual([expect.objectContaining({ threadId: THREAD, note: 'Jo is on it' })]);
+    await lists.addItem(userId, 'done', { threadId: THREAD });
+    expect(await lists.listCounts(userId)).toMatchObject({ delegated: 0, reference: 1 });
+    expect((await lists.listItems(userId, 'reference')).items.map((i) => i.threadId)).toEqual([THREAD]);
+    await lists.removeItem(userId, 'reference', THREAD);
+    await lists.removeItem(userId, 'done', THREAD);
+    expect(await lists.listCounts(userId)).toMatchObject({ delegated: 0, reference: 0 });
+  });
 });

@@ -1,4 +1,4 @@
-// hedwig.list: Reply Later, Set Aside or Snoozed, as a message list (DESIGN-AUDIT-2026-09-24 §b):
+// hedwig.list: Reply Later, Set Aside, Delegated, Reference or Snoozed, as a message list (DESIGN-AUDIT-2026-09-24 §b):
 // the search field, the title with its count, then the rows. "Focus and Reply" opens the oldest
 // thread in Reply Later so replies can be worked through one after another.
 import { useV2Resource } from './hooks.js';
@@ -9,14 +9,18 @@ import { ListSearch } from './rows.jsx';
 import { LinkBtn, V, ViewBody, ViewHead, usePhone } from './primitives.jsx';
 import { tv } from './i18n.js';
 
+export const LIST_VIEWS = ['replyLater', 'setAside', 'delegated', 'reference', 'snoozed'];
+
 export function listTitle(list) {
   if (list === 'setAside') return tv('hedwig.v2.rail.setAside', 'Set Aside');
+  if (list === 'delegated') return tv('hedwig.v2.rail.delegated', 'Delegated');
+  if (list === 'reference') return tv('hedwig.v2.rail.reference', 'Reference');
   if (list === 'snoozed') return tv('hedwig.v2.rail.snoozed', 'Snoozed');
   return tv('hedwig.v2.rail.replyLater', 'Reply Later');
 }
 
 export default function ListView({ props }) {
-  const list = ['replyLater', 'setAside', 'snoozed'].includes(props?.list) ? props.list : 'replyLater';
+  const list = LIST_VIEWS.includes(props?.list) ? props.list : 'replyLater';
   const phone = Boolean(usePhone()?.phone);
   const res = useV2Resource(listPath(list));
   const items = listOf(res.data, 'items');

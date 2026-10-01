@@ -90,7 +90,7 @@ export function countText(counts, more, key) {
   return more?.[key] ? `${n}+` : String(n);
 }
 
-const EMPTY_COUNTS = { screener: null, people: null, reading: null, records: null, replyLater: null, setAside: null, snoozed: null, drafts: null };
+const EMPTY_COUNTS = { screener: null, people: null, reading: null, records: null, replyLater: null, setAside: null, delegated: null, reference: null, snoozed: null, drafts: null };
 const EMPTY_DRAFTS = { items: null, error: null, loading: false };
 let draftsSeq = 0;
 
@@ -214,7 +214,7 @@ export const useV2 = create((set, get) => ({
   applyListCounts(d) {
     if (!d || typeof d !== 'object') return;
     const pick = (camel, snake) => (typeof d[camel] === 'number' ? d[camel] : typeof d[snake] === 'number' ? d[snake] : null);
-    set({ counts: { ...get().counts, replyLater: pick('replyLater', 'reply_later'), setAside: pick('setAside', 'set_aside'), snoozed: pick('snoozed', 'snoozed') } });
+    set({ counts: { ...get().counts, replyLater: pick('replyLater', 'reply_later'), setAside: pick('setAside', 'set_aside'), delegated: pick('delegated', 'delegated'), reference: pick('reference', 'reference'), snoozed: pick('snoozed', 'snoozed') } });
   },
 
   async loadPrefs() {
@@ -336,6 +336,8 @@ export const useV2 = create((set, get) => ({
       records: val(records, unread, prev.records),
       replyLater: val(lists, listN('replyLater', 'reply_later'), prev.replyLater),
       setAside: val(lists, listN('setAside', 'set_aside'), prev.setAside),
+      delegated: val(lists, listN('delegated', 'delegated'), prev.delegated),
+      reference: val(lists, listN('reference', 'reference'), prev.reference),
       snoozed: val(lists, listN('snoozed', 'snoozed'), prev.snoozed),
       drafts: get().counts.drafts,
     };

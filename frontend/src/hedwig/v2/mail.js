@@ -57,17 +57,18 @@ export async function snooze(messageId, until, threadId, { quiet = false } = {})
 }
 
 // The work routes' list kinds (they also accept the camelCase names).
-export const LIST_KIND = { replyLater: 'reply_later', setAside: 'set_aside', snoozed: 'snoozed' };
+export const LIST_KIND = { replyLater: 'reply_later', setAside: 'set_aside', snoozed: 'snoozed', delegated: 'delegated', reference: 'reference' };
 const kindOf = (list) => LIST_KIND[list] || list;
 
-/** Reply Later / Set Aside: POST /work/lists/:kind { threadId }. */
+/** Reply Later / Set Aside / Delegated / Reference: POST /work/lists/:kind { threadId }. */
 export async function addToList(list, threadId, extra = {}, { quiet = false } = {}) {
   if (!threadId) return;
   const res = await v2Api.post(`/work/lists/${encodeURIComponent(kindOf(list))}`, { threadId, ...extra });
   if (res?.counts) useV2.getState().applyListCounts(res.counts);
-  if (!quiet) notify('success', list === 'replyLater'
-    ? tv('hedwig.v2.list.addedReplyLater', 'Added to Reply Later.')
-    : tv('hedwig.v2.list.addedSetAside', 'Set aside.'));
+  if (!quiet) notify('success', list === 'replyLater' ? tv('hedwig.v2.list.addedReplyLater', 'Added to Reply Later.')
+    : list === 'delegated' ? tv('hedwig.v2.list.addedDelegated', 'Marked as delegated.')
+      : list === 'reference' ? tv('hedwig.v2.list.addedReference', 'Kept for reference.')
+        : tv('hedwig.v2.list.addedSetAside', 'Set aside.'));
   announceSortChange({ list, threadId });
 }
 

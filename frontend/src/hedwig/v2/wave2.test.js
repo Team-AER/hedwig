@@ -82,6 +82,8 @@ const Thread = (await import('./Thread.jsx')).default;
 const StreamView = (await import('./StreamView.jsx')).default;
 const Ledger = (await import('./Ledger.jsx')).default;
 const Bills = (await import('./Bills.jsx')).default;
+const ListView = (await import('./ListView.jsx')).default;
+const Rail = (await import('./Rail.jsx')).default;
 const { billStatusLine, billSections, billFigures, candidateReason } = await import('./Bills.jsx');
 const Waiting = (await import('./Waiting.jsx')).default;
 const Brief = (await import('./Brief.jsx')).default;
@@ -540,6 +542,46 @@ describe('bills', () => {
     await click(fjell);
     await settle(80);
     assert.ok(byText('button', 'Open the mail', byLabel('Payee')));
+  });
+});
+
+// ── Delegated and Reference ─────────────────────────────────────────────────
+// Hedwig's own lists (work/lists.js): kept in Hedwig, never as folders or labels on the mail server.
+describe('Delegated and Reference', () => {
+  const firstPeople = async () => (await mock.mockRequest('GET', '/sort/stream/people?limit=100')).items.find((i) => i.threadId && i.messageId);
+
+  test('the reader\'s More menu adds a thread to Delegated or Reference, and the rail lists both', async () => {
+    const item = await firstPeople();
+    await render(h('div', null, h(Rail), h(Thread, { props: { item } })));
+    await settle(60);
+    assert.ok(byText('button span', 'Delegated') || all('button').some((b) => b.textContent.startsWith('Delegated')), 'Delegated in the rail');
+    assert.ok(all('button').some((b) => b.textContent.startsWith('Reference')), 'Reference in the rail');
+    await click(byLabel('More', document.querySelector('[role="toolbar"]')));
+    const delegate = all('[role="menuitem"]').find((b) => b.textContent === 'Delegated');
+    assert.ok(delegate, 'Delegated in More');
+    assert.ok(all('[role="menuitem"]').some((b) => b.textContent === 'Keep for reference'), 'Keep for reference in More');
+    await click(delegate);
+    await settle(60);
+    assert.ok(requests().includes('POST /work/lists/delegated'));
+    const listed = await mock.mockRequest('GET', '/work/lists/delegated');
+    assert.deepEqual(listed.items.map((i) => i.threadId), [item.threadId]);
+  });
+
+  test('a Reference row comes off the list at once; Undo puts it back', async () => {
+    const item = await firstPeople();
+    await mock.mockRequest('POST', '/work/lists/reference', { threadId: item.threadId });
+    await render(h(ListView, { props: { list: 'reference' } }));
+    await settle(60);
+    assert.equal(document.querySelector('h1').textContent, 'Reference');
+    const unlist = document.querySelector('[data-row-unlist]');
+    assert.ok(unlist, 'the row offers Remove from Reference');
+    assert.equal(unlist.getAttribute('aria-label'), 'Remove from Reference');
+    await click(unlist);
+    assert.equal(Boolean(document.querySelector('[data-row-unlist]')), false, 'the row left the list at once');
+    assert.ok(requests().some((r) => r.startsWith('DELETE /work/lists/reference/')));
+    await React.act(async () => { assert.equal(undoLayer.undo(), true); });
+    await settle(400);
+    assert.ok((await mock.mockRequest('GET', '/work/lists/reference')).items.some((i) => i.threadId === item.threadId), 'Undo put it back');
   });
 });
 

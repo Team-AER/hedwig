@@ -1,6 +1,6 @@
 // The desktop rail (DESIGN-AUDIT-2026-09-24 §a): the owl and "Hedwig" with New message, then only
 // places: the streams with glyphs and counts (Bills and the Records ledgers under Records), "Later" (Reply
-// Later, Set Aside, Snoozed, Waiting on when the work routes are there; Drafts always, with its
+// Later, Set Aside, Delegated, Reference, Snoozed, Waiting on when the work routes are there; Drafts always, with its
 // count) and "Hedwig" (Daily Brief, Today, Settings). The footer is the account line and one
 // quiet status line: sync, or the tier note while a model tier is degraded. Search lives in the
 // list header, what Hedwig did today at the top of Today, and Power in Settings and the palette.
@@ -30,7 +30,7 @@ const COUNT_HINTS = {
   conversations: [['hedwig.v2.rail.countConversationsOne', '1 conversation'], ['hedwig.v2.rail.countConversationsMany', '{{n}} conversations']],
   drafts: [['hedwig.v2.rail.countDraftsOne', '1 draft'], ['hedwig.v2.rail.countDraftsMany', '{{n}} drafts']],
 };
-const HINT_OF = { records: 'reading', replyLater: 'conversations', setAside: 'conversations', snoozed: 'conversations' };
+const HINT_OF = { records: 'reading', replyLater: 'conversations', setAside: 'conversations', delegated: 'conversations', reference: 'conversations', snoozed: 'conversations' };
 
 /** "3 unread", "12+ need you": what the rail's count for `key` means. Pure. */
 export function countHint(key, text) {
@@ -202,6 +202,8 @@ export default function Rail() {
           <>
             <NavItem icon="reply" label={tv('hedwig.v2.rail.replyLater', 'Reply Later')} count={countText(counts, more, 'replyLater')} hint={countHint('replyLater', countText(counts, more, 'replyLater'))} on={on(VIEW.list, 'replyLater')} onClick={() => showView(VIEW.list, { list: 'replyLater' })} />
             <NavItem icon="bookmark" label={tv('hedwig.v2.rail.setAside', 'Set Aside')} count={countText(counts, more, 'setAside')} hint={countHint('setAside', countText(counts, more, 'setAside'))} on={on(VIEW.list, 'setAside')} onClick={() => showView(VIEW.list, { list: 'setAside' })} />
+            <NavItem icon="user" label={tv('hedwig.v2.rail.delegated', 'Delegated')} count={countText(counts, more, 'delegated')} hint={countHint('delegated', countText(counts, more, 'delegated'))} on={on(VIEW.list, 'delegated')} onClick={() => showView(VIEW.list, { list: 'delegated' })} />
+            <NavItem icon="archive" label={tv('hedwig.v2.rail.reference', 'Reference')} count={countText(counts, more, 'reference')} hint={countHint('reference', countText(counts, more, 'reference'))} on={on(VIEW.list, 'reference')} onClick={() => showView(VIEW.list, { list: 'reference' })} />
             <NavItem icon="alarm-clock" label={tv('hedwig.v2.rail.snoozed', 'Snoozed')} count={countText(counts, more, 'snoozed')} hint={countHint('snoozed', countText(counts, more, 'snoozed'))} on={on(VIEW.list, 'snoozed')} onClick={() => showView(VIEW.list, { list: 'snoozed' })} />
             <NavItem icon="hourglass" label={tv('hedwig.v2.waiting.title', 'Waiting on')} on={on(VIEW.waiting)} onClick={() => showView(VIEW.waiting)} />
           </>

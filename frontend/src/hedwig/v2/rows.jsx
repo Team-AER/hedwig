@@ -74,7 +74,9 @@ export function rowPreview(item) {
 }
 
 // The four hover buttons that take the date's place on line 1: Done, Snooze, Reply Later (with
-// the work routes, and not in Reply Later itself) and Delete, 24px each.
+// the work routes, and not in Reply Later itself) and Delete, 24px each. In Delegated and Reference
+// a fifth takes the thread off that list (Done closes Delegated, but never Reference).
+const UNLISTABLE = { delegated: ['hedwig.v2.row.unlistDelegated', 'Not delegated any more'], reference: ['hedwig.v2.row.unlistReference', 'Remove from Reference'] };
 function RowActions({ item, visible, work, list, stream }) {
   const act = (kind, extra = {}) => () => performAction({ kind, items: [item], stream: item.stream || stream, ...extra });
   const snoozeItems = () => snoozeTimes().map((s) => ({ id: s.id, label: s.label, icon: 'alarm-clock', onSelect: act('snooze', { until: s.until }) }));
@@ -97,6 +99,9 @@ function RowActions({ item, visible, work, list, stream }) {
       </MenuButton>
       {work && list !== 'replyLater' && (
         <IconButton icon="reply" size={24} label={tv('hedwig.v2.rail.replyLater', 'Reply Later')} kbd="L" onClick={act('replyLater')} />
+      )}
+      {work && UNLISTABLE[list] && (
+        <IconButton icon="x" size={24} data-row-unlist="" label={tv(UNLISTABLE[list][0], UNLISTABLE[list][1])} onClick={act('unlist', { list })} />
       )}
       <IconButton icon="trash" size={24} label={tv('hedwig.v2.thread.delete', 'Delete')} kbd="⌫" onClick={act('delete')} />
     </div>

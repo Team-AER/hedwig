@@ -905,6 +905,13 @@ export default function Thread({ props }) {
   const junk = () => act('junk');
   const later = () => act('replyLater');
   const aside = () => act('setAside');
+  const delegate = () => act('delegated');
+  const keepForReference = () => act('reference');
+  // Hedwig's own lists beyond the toolbar's (kept here, never as folders on the mail server).
+  const keepItems = () => (work ? [
+    { id: 'delegated', label: tv('hedwig.v2.thread.delegate', 'Delegated'), icon: 'user', onSelect: delegate },
+    { id: 'reference', label: tv('hedwig.v2.thread.reference', 'Keep for reference'), icon: 'archive', onSelect: keepForReference },
+  ] : []);
   const snoozeItems = () => snoozeTimes().map((s) => ({ id: s.id, label: s.label, icon: 'alarm-clock', onSelect: () => act('snooze', { until: s.until }) }));
   const showOriginal = async () => {
     const row = await openMessage(latestId);
@@ -1107,6 +1114,7 @@ export default function Thread({ props }) {
     ...(withGroup2 && work ? [{ id: 'later', label: tv('hedwig.v2.rail.replyLater', 'Reply Later'), icon: 'clock', hint: 'L', onSelect: later }] : []),
     ...(withGroup2 ? snoozeItems().map((s) => ({ ...s, label: `${tv('hedwig.v2.thread.snooze', 'Snooze')}: ${s.label}` })) : []),
     ...(withGroup2 && work ? [{ id: 'aside', label: tv('hedwig.v2.thread.setAside', 'Set Aside'), icon: 'bookmark', hint: 'S', onSelect: aside }] : []),
+    ...keepItems(),
     ...(withReply ? [
       { id: 'replyAll', label: tv('hedwig.v2.thread.replyAll', 'Reply all'), icon: 'reply-all', hint: 'A', onSelect: replyAll },
       { id: 'forward', label: tv('hedwig.v2.thread.forward', 'Forward'), icon: 'forward', hint: 'F', onSelect: forward },
@@ -1436,6 +1444,7 @@ export default function Thread({ props }) {
             ...(work ? [
               { id: 'later', label: tv('hedwig.v2.rail.replyLater', 'Reply Later'), icon: 'clock', onSelect: later },
               { id: 'aside', label: tv('hedwig.v2.thread.setAside', 'Set Aside'), icon: 'bookmark', onSelect: aside },
+              ...keepItems(),
             ] : []),
             { id: 'junk', label: junkLabel, icon: 'alert-octagon', onSelect: junk },
             ...moreItems({ withReply: true }),

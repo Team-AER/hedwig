@@ -1,5 +1,6 @@
-// Lists a thread can be on (Reply Later, Set Aside, Pinned, reminders, Done, Snoozed) and the Done
-// state machine:
+// Lists a thread can be on (Reply Later, Set Aside, Delegated, Reference, Pinned, reminders, Done,
+// Snoozed), all kept here and never as folders or labels on the mail server, and the Done state
+// machine:
 //
 //   open ──mark done──▶ done ──new mail from someone else──▶ open again (done_reason 'new_mail')
 //        ◀──DELETE /work/lists/done/:id (undo)───
@@ -7,8 +8,8 @@
 // A done thread leaves People: C's stream query adds peopleFilterSql() (messages dated before the
 // thread was marked done are hidden, so a newer one shows the thread again even before the
 // pipeline step below closes the done item). Marking done also closes the thread's Reply Later,
-// Set Aside and reminder items and its Needs You reasons (work/needs.js keeps them away while the
-// thread is done). The user's own reply closes Reply Later.
+// Set Aside, Delegated and reminder items and its Needs You reasons (work/needs.js keeps them away
+// while the thread is done); Reference stays, like a pin. The user's own reply closes Reply Later.
 import { query } from '../../services/db.js';
 import { getConfig } from '../config.js';
 import { zonedParts, addDays, zonedToUtc } from '../insights/time.js';
@@ -18,11 +19,11 @@ import {
 import { tldrFor, enqueueForRows } from './summaries.js';
 import { needsFor, resolveReplied, resolveDone, deriveNeeds } from './needs.js';
 
-export const KINDS = Object.freeze(['reply_later', 'set_aside', 'pin', 'reminder', 'done', 'snoozed']);
-const POSTABLE = new Set(['reply_later', 'set_aside', 'pin', 'reminder', 'done']);
+export const KINDS = Object.freeze(['reply_later', 'set_aside', 'pin', 'reminder', 'done', 'snoozed', 'delegated', 'reference']);
+const POSTABLE = new Set(['reply_later', 'set_aside', 'pin', 'reminder', 'done', 'delegated', 'reference']);
 const ALIASES = { replyLater: 'reply_later', setAside: 'set_aside', pinned: 'pin', pins: 'pin', reminders: 'reminder', snooze: 'snoozed' };
-// Items marking a thread done closes (pins stay: a pinned thread can be done and still pinned).
-const CLOSED_BY_DONE = ['reply_later', 'set_aside', 'reminder'];
+// Items marking a thread done closes (pins and Reference stay: a thread can be done and still kept).
+const CLOSED_BY_DONE = ['reply_later', 'set_aside', 'reminder', 'delegated'];
 
 export function normalizeKind(kind) {
   const k = ALIASES[kind] || String(kind || '').replace(/-/g, '_');
@@ -50,6 +51,7 @@ export async function listCounts(userId) {
 const ORDER = {
   reply_later: 'position, created_at', set_aside: 'position, created_at', pin: 'position, created_at',
   reminder: 'until ASC NULLS LAST, created_at', done: 'created_at DESC', snoozed: 'until ASC',
+  delegated: 'created_at', reference: 'created_at DESC',
 };
 
 function reminderRow(it) {

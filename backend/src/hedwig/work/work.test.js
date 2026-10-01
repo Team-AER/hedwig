@@ -217,6 +217,8 @@ describe('lists state machine', () => {
     expect(lists.normalizeKind('replyLater')).toBe('reply_later');
     expect(lists.normalizeKind('set-aside')).toBe('set_aside');
     expect(lists.normalizeKind('done')).toBe('done');
+    expect(lists.normalizeKind('delegated')).toBe('delegated');
+    expect(lists.normalizeKind('reference')).toBe('reference');
     expect(() => lists.normalizeKind('archive')).toThrow(/list must be one of/);
   });
 

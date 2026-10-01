@@ -292,14 +292,30 @@ function planFor(spec, items) {
       };
     }
     case 'replyLater':
-    case 'setAside': {
+    case 'setAside':
+    case 'delegated':
+    case 'reference': {
       const list = spec.kind;
       return {
         listCount: list,
-        title: list === 'replyLater' ? tv('hedwig.v2.act.replyLater', 'Added to Reply Later') : tv('hedwig.v2.act.setAside', 'Set aside'),
-        failTitle: list === 'replyLater' ? tv('hedwig.v2.act.replyLaterFailed', 'Could not add it to Reply Later.') : tv('hedwig.v2.act.setAsideFailed', 'Could not set it aside.'),
+        title: LIST_TITLES[list][0](),
+        failTitle: LIST_TITLES[list][1](),
         async commit(e) { for (const item of e.items) await ops.addToList(list, threadOf(item)); },
         async inverse(e) { for (const item of e.items) await ops.removeFromList(list, threadOf(item)); },
+      };
+    }
+    case 'unlist': {
+      // Off one of the user's own lists (Delegated, Reference): the row leaves that list at once.
+      const list = spec.list;
+      if (!LIST_TITLES[list]) return null;
+      return {
+        removes: true,
+        listCount: list,
+        listDelta: -1,
+        title: tv('hedwig.v2.act.unlisted', 'Removed from {{list}}', { list: LIST_TITLES[list][2]() }),
+        failTitle: tv('hedwig.v2.act.unlistFailed', 'Could not take it off {{list}}.', { list: LIST_TITLES[list][2]() }),
+        async commit(e) { for (const item of e.items) await ops.removeFromList(list, threadOf(item)); },
+        async inverse(e) { for (const item of e.items) await ops.addToList(list, threadOf(item)); },
       };
     }
     case 'custom':
@@ -318,6 +334,14 @@ function planFor(spec, items) {
       return null;
   }
 }
+
+// The lists an action adds a thread to: [toast, failure, list name].
+const LIST_TITLES = {
+  replyLater: [() => tv('hedwig.v2.act.replyLater', 'Added to Reply Later'), () => tv('hedwig.v2.act.replyLaterFailed', 'Could not add it to Reply Later.'), () => tv('hedwig.v2.rail.replyLater', 'Reply Later')],
+  setAside: [() => tv('hedwig.v2.act.setAside', 'Set aside'), () => tv('hedwig.v2.act.setAsideFailed', 'Could not set it aside.'), () => tv('hedwig.v2.rail.setAside', 'Set Aside')],
+  delegated: [() => tv('hedwig.v2.act.delegated', 'Marked as delegated'), () => tv('hedwig.v2.act.delegatedFailed', 'Could not mark it as delegated.'), () => tv('hedwig.v2.rail.delegated', 'Delegated')],
+  reference: [() => tv('hedwig.v2.act.reference', 'Kept for reference'), () => tv('hedwig.v2.act.referenceFailed', 'Could not keep it for reference.'), () => tv('hedwig.v2.rail.reference', 'Reference')],
+};
 
 // ── Local changes ──────────────────────────────────────────────────────────────
 /**
@@ -378,7 +402,7 @@ function apply(e, { advance = true } = {}) {
     e.local.patchBefore = useV2.getState().patchRows(ids, plan.patch);
     for (const id of ids) patchOwner.set(id, e.id);
   }
-  if (plan.listCount) bump(e, plan.listCount, 1);
+  if (plan.listCount) bump(e, plan.listCount, plan.listDelta ?? 1);
   plan.onApply?.(e);
 }
 
@@ -484,7 +508,7 @@ function commit(e) {
 
 /**
  * Do something to one or more stream items, at once on screen, with Undo.
- * spec: { kind: 'done' | 'delete' | 'junk' | 'flag' | 'read' | 'snooze' | 'replyLater' | 'setAside' | 'move' | 'custom',
+ * spec: { kind: 'done' | 'delete' | 'junk' | 'flag' | 'read' | 'snooze' | 'replyLater' | 'setAside' | 'delegated' | 'reference' | 'unlist' | 'move' | 'custom',
  *   items: stream items, stream?, messages? (the reader's thread messages, drafts included or not),
  *   messageIds? (flag / read), on? (flag), read? (read), until?, untilLabel? (snooze),
  *   folder?, label? (move), advance? (false: leave the selection alone, as on a phone), immediate?,
