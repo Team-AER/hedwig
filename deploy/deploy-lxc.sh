@@ -11,8 +11,9 @@ cd "$(git rev-parse --show-toplevel)"
 SHA="$(git rev-parse --short HEAD)"
 TARBALL="/tmp/hedwig-${SHA}.tar.gz"
 git archive --format=tar.gz -o "$TARBALL" HEAD
-scp -q "$TARBALL" "$HOST:/tmp/"
-ssh "$HOST" "pct push $CTID /tmp/hedwig-${SHA}.tar.gz /tmp/hedwig.tar.gz && rm -f /tmp/hedwig-${SHA}.tar.gz"
+# Streamed straight into the container: nothing is staged on the Proxmox host.
+ssh "$HOST" "pct exec $CTID -- sh -c 'umask 077; cat > /tmp/hedwig.tar.gz'" < "$TARBALL"
+rm -f "$TARBALL"
 ssh "$HOST" "pct exec $CTID -- bash -s" <<REMOTE
 set -euo pipefail
 export LC_ALL=C
