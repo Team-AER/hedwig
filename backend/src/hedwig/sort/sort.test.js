@@ -918,7 +918,7 @@ describe('guard: the threat model on mail from unfamiliar senders', () => {
   const STRANGER = '00000000-0000-4000-8000-00000000c001';
   const lure = (over = {}) => msg({ id: STRANGER, from_name: 'Dana Reyes', from_email: 'dana.reyes.office@gmail.com', subject: 'Are you free?', body_text: 'Are you free for a short call later today? I need your help with something.', ...over });
   const threat = (probabilities) => () => ({ model: 'aer-laya-guard', answers: { threat: { type: 'choice', choice: 'impersonation', probabilities, confidence: 0.6 } }, usage: { input_tokens: 300, output_tokens: 1 } });
-  const IMPERSONATION = { safe: 0.04, spam: 0.01, scam: 0.02, phishing: 0.08, impersonation: 0.84, malware: 0.01 };
+  const IMPERSONATION = { safe: 0.02, spam: 0.01, scam: 0.02, phishing: 0.08, impersonation: 0.86, malware: 0.01 };
   function withPeople(fake) {
     const inner = db.handler;
     db.handler = (sql, params) => (/FROM hedwig_entity_addresses a JOIN hedwig_entities e/.test(sql)
@@ -938,8 +938,8 @@ describe('guard: the threat model on mail from unfamiliar senders', () => {
     const stored = fake.sort.get(STRANGER);
     expect(stored).toMatchObject({ stream: 'spam', spam: 'phishing', layer: 'decision', prompt_id: 'sort.guard', model: 'aer-laya-guard', needs_you: false });
     // the rules saw a contact's name from a new address (one sign); the model made it a verdict
-    expect(stored.reason).toMatch(/^Looks like impersonation of someone you know \(threat model, 95% sure\); Named "Dana/);
-    expect(stored.signals[0].label).toBe('Looks like impersonation of someone you know (threat model, 95% sure); Named "Dana Reyes" like your contact at dana.reyes@corp.example, but sent from dana.reyes.office@gmail.com');
+    expect(stored.reason).toMatch(/^Looks like impersonation of someone you know \(threat model, 97% sure\); Named "Dana/);
+    expect(stored.signals[0].label).toBe('Looks like impersonation of someone you know (threat model, 97% sure); Named "Dana Reyes" like your contact at dana.reyes@corp.example, but sent from dana.reyes.office@gmail.com');
     expect(stored.signals[0]).toMatchObject({ name: 'guard' });
     expect(gw.decisions[0].body.state).toContain('Known name: "Dana Reyes" is someone you write to at dana.reyes@corp.example; this address is not one of them');
     expect(fake.upserts.at(-1).keepGuard).toBe(false);

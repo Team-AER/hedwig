@@ -94,16 +94,18 @@ describe('guard verdict', () => {
   it('leaves mail alone unless the malicious options are confident together', () => {
     expect(guardVerdict(answers({ safe: 0.9, phishing: 0.1 }).answers, {}, DEFAULTS)).toBeNull();
     expect(guardVerdict(answers({ spam: 0.6, scam: 0.4 }).answers, {}, DEFAULTS)).toBeNull();
+    // the deployed model's real mail tops out near 0.73; its phishing sits at 0.98
+    expect(guardVerdict(answers({ safe: 0.27, phishing: 0.73 }).answers, { phishingScore: 0.5 }, DEFAULTS)).toBeNull();
     expect(guardVerdict({}, {}, DEFAULTS)).toBeNull();
   });
 
   it('calls it phishing with rule evidence or very high confidence, suspected otherwise; a scam is suspected', () => {
-    const p = answers({ impersonation: 0.6, phishing: 0.3, safe: 0.1 }).answers;
+    const p = answers({ impersonation: 0.66, phishing: 0.3, safe: 0.04 }).answers;
     expect(guardVerdict(p, { phishingScore: 0 }, DEFAULTS)).toMatchObject({ spam: 'suspected', threat: 'impersonation' });
     const signals = [{ name: 'dmarc', label: 'DMARC passed', weight: 0.5 }, { name: 'impersonation', label: 'Named "Dana Reyes" like your contact at dana.reyes@corp.example', weight: 0.4 }];
     const withRules = guardVerdict(p, { phishingScore: 0.4, signals }, DEFAULTS);
     expect(withRules).toMatchObject({ spam: 'phishing', threat: 'impersonation' });
-    expect(withRules.reason).toBe('Looks like impersonation of someone you know (threat model, 90% sure); Named "Dana Reyes" like your contact at dana.reyes@corp.example');
+    expect(withRules.reason).toBe('Looks like impersonation of someone you know (threat model, 96% sure); Named "Dana Reyes" like your contact at dana.reyes@corp.example');
     expect(guardVerdict(answers({ malware: 0.97 }).answers, {}, DEFAULTS).spam).toBe('phishing');
     expect(guardVerdict(answers({ scam: 0.99 }).answers, { phishingScore: 0.5 }, DEFAULTS).spam).toBe('suspected');
   });
@@ -120,7 +122,7 @@ describe('guard verdict', () => {
 
 describe('guardBatch', () => {
   it('posts one System One request per message and returns the flagged ones with provenance', async () => {
-    gw.systemone = (body) => (body.state.includes('Quick favour') ? answers({ impersonation: 0.92, safe: 0.08 }) : answers({ safe: 0.97 }));
+    gw.systemone = (body) => (body.state.includes('Quick favour') ? answers({ impersonation: 0.96, safe: 0.04 }) : answers({ safe: 0.97 }));
     const out = await guardBatch('user-1', [
       { row: ROW, d: { phishingScore: 0.4, signals: [{ name: 'impersonation', label: 'Named "Dana Reyes" like your contact', weight: 0.4 }] }, history: {} },
       { row: { ...ROW, id: 'g-2', subject: 'Lunch?' }, d: {}, history: { written: 4 } },

@@ -127,10 +127,10 @@ export function guardVerdict(answers, d, cfg) {
   if (!p) return null;
   const bad = Object.keys(LABEL).map((k) => [k, Number(p[k]) || 0]).sort((a, b) => b[1] - a[1]);
   const total = bad.reduce((s, [, v]) => s + v, 0);
-  if (!(total >= (cfg['sort.guard.flagAbove'] ?? 0.85))) return null;
+  if (!(total >= (cfg['sort.guard.flagAbove'] ?? 0.95))) return null;
   const [threat] = bad[0];
   const ruleEvidence = Number(d?.phishingScore) >= 0.25;
-  const strong = threat !== 'scam' && (ruleEvidence || total >= (cfg['sort.guard.phishingAbove'] ?? 0.95));
+  const strong = threat !== 'scam' && (ruleEvidence || total >= (cfg['sort.guard.phishingAbove'] ?? 0.97));
   const pct = Math.round(total * 100);
   const evidence = (d?.signals || []).filter((x) => RULE_SIGNALS.has(x.name)).sort((a, b) => b.weight - a.weight).slice(0, 2);
   const why = ruleEvidence && evidence.length ? `; ${evidence.map((x) => x.label).join('; ')}` : '';
