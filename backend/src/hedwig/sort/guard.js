@@ -30,7 +30,8 @@ export const QUESTIONS = Object.freeze({
 });
 const LABEL = { scam: 'a scam', phishing: 'phishing', impersonation: 'impersonation of someone you know', malware: 'malware delivery' };
 // spam.js phishing signals quoted as supporting evidence in the guard's reason.
-const RULE_SIGNALS = new Set(['lookalike', 'brandName', 'impersonation', 'displayAddress', 'replyTo', 'credential', 'payment', 'linkDomain', 'shortener', 'attachment']);
+const RULE_SIGNALS = new Set(['lookalike', 'brandName', 'impersonation', 'displayAddress', 'replyTo', 'credential', 'accountThreat', 'prize', 'payment', 'document',
+  'linkDomain', 'riskyHost', 'shortener', 'attachment', 'selfAddressed']);
 const INLINE_IMAGE_RE = /^(image|logo|outlook)\d*\.(png|jpe?g|gif)$/i;
 
 const capped = (n) => `${Math.min(n, 10)}${n > 10 ? '+' : ''}`;

@@ -144,6 +144,36 @@ export function lookalikeOf(domain, known = [], { knownTargets = true } = {}) {
 
 const URL_RE = /https?:\/\/([a-z0-9.-]+\.[a-z]{2,})(?::\d+)?[^\s"'<>)]*/gi;
 
+const HREF_RE = /href\s*=\s*["']?https?:\/\/([a-z0-9.-]+\.[a-z]{2,})/gi;
+
+/** Hosts a reader can click through to: HTML hrefs and URLs in the text (at most 40), lower-cased. Images are left out. */
+export function linkHosts({ text = '', html = '' } = {}) {
+  const out = new Set();
+  for (const [re, src] of [[HREF_RE, String(html || '')], [URL_RE, String(text || '')]]) {
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(src)) && out.size < 40) out.add(m[1].toLowerCase().replace(/\.$/, ''));
+  }
+  return [...out];
+}
+
+// Free page, form and storage hosts that phishing pages live on. Matched by host, not registrable domain:
+// fonts.googleapis.com is a stylesheet, storage.googleapis.com is where the cloud-storage campaigns land.
+export const RISKY_LINK_HOSTS = Object.freeze([
+  'storage.googleapis.com', 'firebasestorage.googleapis.com', 'storage.cloud.google.com', 'web.app', 'firebaseapp.com', 'appspot.com',
+  'pages.dev', 'workers.dev', 'r2.dev', 'netlify.app', 'vercel.app', 'glitch.me', 'replit.app', 'repl.co', 'onrender.com',
+  'blob.core.windows.net', 'web.core.windows.net', 'ipfs.io', 'dweb.link', 'w3s.link', 'cloudflare-ipfs.com', 'fleek.co',
+  'weebly.com', 'wixsite.com', 'square.site', 'godaddysites.com', 'webflow.io', 'mystrikingly.com', 'carrd.co', 'notion.site',
+  'sites.google.com', 'forms.gle', 'forms.office.com', 'jotform.com', 'typeform.com', 'formstack.com', 'wufoo.com', '123formbuilder.com',
+  'porsline.com', 'porsline.ir', 'forms.zohopublic.com', 'formsite.com', 'cognitoforms.com', 'tally.so', '000webhostapp.com',
+  'ngrok.io', 'ngrok-free.app', 'ngrok.app', 'trycloudflare.com', 'surge.sh', 'tiiny.site',
+]);
+
+/** The first linked host that is a free page, form or storage host (RISKY_LINK_HOSTS), or null. */
+export function riskyLinkHost(hosts, hostsList = RISKY_LINK_HOSTS) {
+  return (hosts || []).find((h) => hostsList.some((x) => h === x || h.endsWith(`.${x}`))) || null;
+}
+
 /** Registrable domains linked from the text and HTML of a message (at most 20). */
 export function linkDomains({ text = '', html = '' } = {}) {
   const out = new Set();
@@ -169,15 +199,27 @@ export function trustedLinkHost(domain, hosts = DEFAULT_TRUSTED_LINK_HOSTS) {
 const CREDENTIAL_RE = /\b(?:verify (?:your )?(?:account|identity|password|payment|wallet)|confirm (?:your )?(?:password|identity|account|payment details)|log ?in to (?:avoid|restore|keep)|update (?:your )?(?:payment|billing) (?:details|information)|unusual (?:sign-?in|activity)|account (?:will be |has been )?(?:suspended|locked|limited|closed))\b/i;
 // Business-email-compromise asks: money or a private channel, usually under time pressure.
 const PAYMENT_RE = /\b(?:(?:new|updated|changed?) (?:bank|account|remittance|payment|beneficiary) (?:details|information|account)|bank (?:details|account) (?:has|have) (?:changed|been (?:changed|updated))|(?:wire|bank|urgent) (?:transfer|payment) (?:today|now|urgently)|gift ?cards?|(?:whats ?app|text) me\b|my (?:new|personal) (?:number|phone|mobile)|keep (?:this|it) (?:confidential|between us)|(?:urgent|quick|small) favou?r)\b/i;
+// Threats to an account, storage or subscription, the cloud-storage campaigns' lure: "We've blocked your account",
+// "Your photos and videos will be deleted", "storage full", "3 failed payments". Read in the subject and opening
+// only (LURE_CHARS): newsletters and security advice mention locked accounts further down.
+const ACCOUNT_THREAT_RE = /\b(?:(?:account|mailbox|e-?mail|storage|cloud|photos?|videos?|files?|subscription|membership|password|access)\b[^!?\n]{0,40}?\b(?:will be|has been|have been|is being|are being|is|are|was|were|gets?|got)\s+(?:permanently |temporarily |now )?(?:blocked|suspended|locked|disabled|deactivated|terminated|closed|deleted|removed|erased|lost|gone|restricted|frozen|expired|on hold)|we(?:'ve|’ve| have)\s+(?:temporarily |permanently )?(?:blocked|suspended|locked|disabled|deactivated|restricted|frozen|closed)\s+(?:your|the)\s+(?:account|mailbox|storage|access|card|subscription)|(?:storage|mailbox|cloud|inbox)\s+(?:is\s+)?(?:full|almost full|exceeded|over (?:quota|limit))|all (?:your )?storage (?:is )?used|storage (?:limit|quota) (?:reached|exceeded)|\d+ failed (?:payments?|charges?|attempts?)|unauthori[sz]ed (?:login|log-in|sign-?in))\b/i;
+// Prize and reward bait: "Your Medicare Kit is waiting", "You have won a bundle", "claim your reward".
+const PRIZE_RE = /\b(?:you(?:'ve|’ve| have)? (?:won|been selected)|(?:reward|prize|gift|bundle|kit|voucher|giveaway|bonus)\b[^!?\n]{0,30}?\b(?:is waiting|awaits|waiting for you|is ready to claim|to claim|unclaimed|reserved for you)|claim (?:your|the|a) (?:free )?(?:reward|prize|gift|voucher|bonus|refund|bundle))\b/i;
+const LURE_CHARS = 400;
+// Shared-document, invoice and tender lures. Common in genuine mail too, so on its own this only adds to the
+// score; with a link to a free page or form host it is evidence (the fake-tender and "shared a file" shapes).
+const DOCUMENT_RE = /\b(?:shared (?:a |an |the |some |\d+ )?(?:file|document|folder|spreadsheet|pdf|invoice|item)s? with you|(?:has|have) shared (?:a |an |the )?(?:file|document|folder)|sent you (?:a |an |the )?(?:document|file|invoice|secure (?:message|document)|fax|voice ?mail)|(?:view|preview|review|open|download|access|retrieve) (?:the |your |all |our )?(?:shared |secure |attached |encrypted |pending |new )?(?:documents?|files?|invoices?|proposals?|contracts?|purchase orders?|tender(?: documents?)?|bid documents?|rfq|rfp|remittance|voice ?mail|fax)|invit(?:ed|ation|ing you) to (?:participate|bid|submit|tender|quote)|bidding process|request for (?:quotation|quote|proposal)|(?:awaiting|pending|ready for|requires) your (?:e-?)?signature|review and (?:e-?)?sign)\b/i;
 const LINK_SHORTENERS = new Set(['bit.ly', 'tinyurl.com', 't.co', 'goo.gl', 'is.gd', 'ow.ly', 'rebrand.ly', 'cutt.ly', 'shorturl.at']);
 // Attachments that run or render code when opened (HTML smuggling, disk images, scripts, macros).
 const RISKY_ATTACHMENT_RE = /\.(?:html?|shtml|xhtml|svg|iso|img|vhdx?|lnk|js|jse|vbs|vbe|wsf|hta|exe|scr|bat|cmd|ps1|msi|jar|one|xll|docm|xlsm|pptm)$/i;
 const DOUBLE_EXTENSION_RE = /\.(?:pdf|docx?|xlsx?|pptx?|jpe?g|png|txt)\.(?:exe|scr|js|vbs|html?|zip|rar|iso|lnk|bat|cmd)$/i;
 
 // Independent kinds of evidence. Phishing needs two of them, or a failed authentication and one.
+// 'document' has no group: it adds to the score but is not evidence on its own.
 const SIGNAL_GROUP = {
   lookalike: 'identity', brandName: 'identity', impersonation: 'identity', displayAddress: 'identity', replyTo: 'replyTo',
-  credential: 'lure', payment: 'lure', linkDomain: 'links', shortener: 'links', attachment: 'payload',
+  credential: 'lure', accountThreat: 'lure', prize: 'lure', payment: 'lure', linkDomain: 'links', riskyHost: 'links', shortener: 'links',
+  attachment: 'payload', selfAddressed: 'delivery',
 };
 
 const NOT_A_PERSON = new Set(['the', 'team', 'support', 'info', 'noreply', 'no', 'reply', 'newsletter', 'news', 'notifications',
@@ -218,11 +260,14 @@ export function authFailed(auth = {}) {
  * Phishing signals for one message.
  * @param {object} row
  * @param {{ auth?: object, knownDomains?: string[], knownPeople?: Map<string, string[]>, text?: string, links?: string[],
- *   trustedSender?: boolean, trustedLinkHosts?: string[] }} ctx
+ *   trustedSender?: boolean, trustedLinkHosts?: string[], riskyLinkHosts?: string[] }} ctx
  *   knownPeople: personKey of a name the user writes to → the addresses that person uses (spear phishing
  *   borrows a colleague's or contact's name from an address they never used).
  */
-export function phishingSignals(row, { auth = {}, knownDomains = [], knownPeople = null, text = '', links = null, trustedSender = false, trustedLinkHosts = DEFAULT_TRUSTED_LINK_HOSTS } = {}) {
+export function phishingSignals(row, {
+  auth = {}, knownDomains = [], knownPeople = null, text = '', links = null, trustedSender = false, trustedLinkHosts = DEFAULT_TRUSTED_LINK_HOSTS,
+  riskyLinkHosts = RISKY_LINK_HOSTS,
+} = {}) {
   const signals = [];
   const add = (name, label, weight) => signals.push({ name, label, weight: round(weight) });
   const from = String(row?.from_email || '').toLowerCase();
@@ -260,19 +305,41 @@ export function phishingSignals(row, { auth = {}, knownDomains = [], knownPeople
   const otherReply = replyTo.find((d) => !sameFamily(d, fromReg) && !knownRegs.includes(d) && !trustedLinkHost(d, trustedLinkHosts));
   if (otherReply) add('replyTo', `Replies go to ${otherReply}, not ${fromReg}`, 0.25);
 
+  // Blind-copied mass mail: addressed to the sender's own address so the recipient list stays hidden.
+  const to = addressesOf(row?.to_addresses);
+  if (to.length === 1 && to[0].email === from && !addressesOf(row?.cc_addresses).length) {
+    add('selfAddressed', 'Sent to the sender\'s own address with you blind-copied', 0.15);
+  }
+
   const linked = links || linkDomains({ text, html: row?.body_html });
   const foreign = linked.filter((d) => !sameFamily(d, fromReg) && !knownRegs.includes(d) && !trustedLinkHost(d, trustedLinkHosts));
-  const credential = CREDENTIAL_RE.test(`${row?.subject || ''}\n${text}`);
-  if (credential) add('credential', 'Asks you to verify an account, password or payment', trustedSender ? 0.05 : 0.25);
-  if (PAYMENT_RE.test(`${row?.subject || ''}\n${text}`)) add('payment', 'Asks for a payment, new bank details, gift cards or a private channel', trustedSender ? 0.05 : 0.25);
+  // A genuine service's notice links back to its own site; a lure's links go somewhere else.
+  const homeLinked = linked.some((d) => sameFamily(d, fromReg));
+  const lureWeight = trustedSender ? 0.05 : homeLinked ? 0.1 : 0.25;
+  const body = `${row?.subject || ''}\n${text}`;
+  const credential = CREDENTIAL_RE.test(body);
+  if (credential) add('credential', 'Asks you to verify an account, password or payment', lureWeight);
+  const opening = `${row?.subject || ''}\n${String(text).slice(0, LURE_CHARS)}`;
+  const threat = !credential && ACCOUNT_THREAT_RE.test(opening);
+  if (threat) add('accountThreat', 'Threatens to block, delete or close an account, storage or files', lureWeight);
+  const prize = PRIZE_RE.test(opening);
+  if (prize) add('prize', 'Offers a prize, reward or gift to claim', lureWeight);
+  const payment = PAYMENT_RE.test(body);
+  if (payment) add('payment', 'Asks for a payment, new bank details, gift cards or a private channel', trustedSender ? 0.05 : 0.25);
+  const docLure = DOCUMENT_RE.test(body);
+  if (docLure) add('document', 'Asks you to open a shared document, invoice or tender', trustedSender || homeLinked ? 0.05 : 0.1);
   const files = attachmentNames(row);
   const doubled = files.find((f) => DOUBLE_EXTENSION_RE.test(f));
   const risky = doubled || files.find((f) => RISKY_ATTACHMENT_RE.test(f));
   if (risky) add('attachment', doubled ? `Attachment ${risky} hides its real type` : `Attachment ${risky} can run code when opened`, doubled ? 0.45 : (trustedSender ? 0.05 : 0.3));
   if (linked.some((d) => LINK_SHORTENERS.has(d))) add('shortener', 'Links through a URL shortener', 0.15);
-  if (credential && foreign.length && !linked.some((d) => sameFamily(d, fromReg))) {
+  const linkLure = (credential || threat) && foreign.length && !homeLinked;
+  if (linkLure) {
     add('linkDomain', `Links go to ${foreign.slice(0, 2).join(', ')}, not ${fromReg}${passed ? ' (sender passed DMARC)' : ''}`, passed ? 0.1 : 0.3);
   }
+  const page = !linkLure && (credential || threat || prize || payment || docLure)
+    ? riskyLinkHost(linkHosts({ text, html: row?.body_html }).filter((h) => !sameFamily(h, fromReg)), riskyLinkHosts) : null;
+  if (page) add('riskyHost', `Links to a page on ${page}, a free hosting or form service phishers use`, trustedSender ? 0.05 : 0.25);
 
   if (auth.dmarc === 'fail') add('authDmarc', `DMARC failed${auth.trusted ? '' : ' (unverified header)'}`, auth.trusted ? 0.35 : 0.1);
   if (auth.spf === 'fail') add('authSpf', `SPF failed${auth.trusted ? '' : ' (unverified header)'}`, auth.trusted ? 0.15 : 0.05);

@@ -136,6 +136,16 @@ text and question wording must match that training data.
   - The guard never lowers a verdict.
   - Spear-phishing evidence is also rule-based, in `sort/spam.js`: `impersonation`, `displayAddress`,
     `payment` and `attachment` signals. It works without the model.
+  - Lures that decide whether the model is asked:
+    - `credential` and `accountThreat` (block, delete or close an account, storage or files; read in the
+      subject and opening only);
+    - `prize` bait;
+    - `document` (shared-document, invoice and tender wording; adds to the score but is not evidence alone).
+  - A lure from a sender whose links go back to its own site weighs little. Genuine service notices
+    link home, so they stay below the guard's line.
+  - Link evidence: `linkDomain` (a lure whose links all go elsewhere) and `riskyHost` (a lure linking to a
+    free page, form or storage host such as storage.googleapis.com or porsline.com, matched by host).
+  - `selfAddressed` is delivery evidence: the sender's own address in To, with the user blind-copied.
 
 ### Plugin hooks added by Hedwig
 

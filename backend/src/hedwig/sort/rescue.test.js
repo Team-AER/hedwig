@@ -205,6 +205,73 @@ describe('spear phishing', () => {
   });
 });
 
+describe('lures the guard is asked about', () => {
+  it('a threat to delete your photos, linking to a storage bucket, is phishing (the cloud-storage campaigns)', () => {
+    const text = "We've blocked your account! Your photos and videos will be deleted on 09-28. Upgrade your storage to keep them.";
+    const row = msg({
+      from_name: 'Cloud', from_email: 'nooreply@qxzvbrt.example', subject: "We've blocked your account! 🚫 Your photos and videos will be deleted",
+      body_html: '<a href="https://storage.googleapis.com/qxz/index.html#upgrade">Upgrade now</a>', body_text: text,
+    });
+    const v = spam.assessSpam(row, { text });
+    expect(v.signals.map((s) => s.name)).toEqual(expect.arrayContaining(['accountThreat', 'linkDomain']));
+    expect(v.verdict).toBe('phishing');
+    expect(v.reason).toMatch(/Links go to googleapis\.com, not qxzvbrt\.example/);
+  });
+
+  it("a genuine service's notice links home, so its lure words stay below the guard's line", () => {
+    const text = 'Your subscription has been cancelled. Update your payment details to keep your plan.';
+    const row = msg({
+      from_email: 'no-reply@studio.example', subject: 'Subscription cancellation', body_text: text,
+      body_html: '<a href="https://account.studio.example/plans">Manage plan</a>',
+    });
+    const v = spam.assessSpam(row, { text });
+    expect(v.signals.find((s) => s.name === 'credential').weight).toBe(0.1);
+    expect(v.phishingScore).toBeLessThan(0.25); // below guard.hasRuleEvidence
+    expect(v.verdict).toBe('clean');
+  });
+
+  it('account-threat words further down a newsletter are not a lure', () => {
+    const text = `${'This week in security research. '.repeat(15)}Their files have been encrypted and the contents will be lost forever.`;
+    const row = msg({ from_email: 'digest@weekly.example', subject: 'Tracking ransomware end to end', body_html: '<a href="https://blog.other.example/post">Read</a>', body_text: text });
+    expect(signalNames(row, { text })).toEqual([]);
+  });
+
+  it('a fake tender is phishing: blind-copied, a document lure and a form host; the lure alone is nothing', () => {
+    const text = 'You are invited to participate in the bidding process. PREVIEW DOCUMENTS HERE';
+    const row = msg({
+      from_name: 'Tenders', from_email: 'tenders@bidding-portal.example', to_addresses: [{ address: 'tenders@bidding-portal.example' }],
+      subject: 'Invitation to bid', body_html: '<a href="https://survey.porsline.com/s/abc">PREVIEW DOCUMENTS HERE</a>', body_text: text,
+    });
+    const v = spam.assessSpam(row, { text });
+    expect(v.signals.map((s) => s.name)).toEqual(expect.arrayContaining(['document', 'riskyHost', 'selfAddressed']));
+    expect(v.verdict).toBe('phishing');
+    expect(v.reason).toMatch(/survey\.porsline\.com, a free hosting or form service/);
+    // A receipt's "Download invoice" on the shop's own site is no evidence at all.
+    const receipt = msg({ from_email: 'billing@shop.example', subject: 'Your receipt', body_html: '<a href="https://shop.example/invoice/1">Download invoice</a>', body_text: 'Download invoice' });
+    const r = spam.assessSpam(receipt, { text: 'Download invoice' });
+    expect(r.verdict).toBe('clean');
+    expect(r.phishingScore).toBeLessThan(0.25);
+  });
+
+  it('risky hosts are matched by host, and only on links a reader can click', () => {
+    expect(spam.riskyLinkHost(['fonts.googleapis.com'])).toBeNull();
+    expect(spam.riskyLinkHost(['storage.googleapis.com'])).toBe('storage.googleapis.com');
+    expect(spam.riskyLinkHost(['login-help.pages.dev'])).toBe('login-help.pages.dev');
+    const html = '<img src="https://assets.blob.core.windows.net/logo.png"><a href="https://shop.example/x">Shop</a>';
+    expect(spam.linkHosts({ html, text: 'or visit https://help.shop.example/y' })).toEqual(['shop.example', 'help.shop.example']);
+    const row = msg({ from_email: 'news@kaggle.example', subject: 'Win a $500 gift card', body_html: html, body_text: 'Prizes include a $500 gift card' });
+    expect(signalNames(row, { text: row.body_text })).not.toContain('riskyHost');
+  });
+
+  it('prize bait reaches the guard but is not a verdict on its own', () => {
+    const row = msg({ from_email: 'info@xdw284vu.example', subject: 'You have won a bundle 🎁', body_text: 'Claim your reward today.' });
+    const v = spam.assessSpam(row, { text: row.body_text });
+    expect(v.signals.map((s) => s.name)).toEqual(['prize']);
+    expect(v.phishingScore).toBeGreaterThanOrEqual(0.25);
+    expect(v.verdict).toBe('clean');
+  });
+});
+
 // ── Rescue score ────────────────────────────────────────────────────────────
 
 describe('rescue score', () => {
@@ -292,7 +359,7 @@ describe('rescue sweep', () => {
   it('re-judges spam-folder mail the classifier already sorted, rescues replied-to senders, records its state and logs a line', async () => {
     const rows = [
       junk({ id: REPLIED, from_name: 'Dana Kim', from_email: 'dana@studio.example', subject: 'Contract draft' }),
-      junk({ id: STRANGER, from_name: 'Deals', from_email: 'win@prize-now.example', subject: 'You won', body_text: 'Claim your prize today', to_addresses: [] }),
+      junk({ id: STRANGER, from_name: 'Deals', from_email: 'win@prize-now.example', subject: 'Weekend deals', body_text: 'Up to 40% off everything this weekend', to_addresses: [] }),
     ];
     const fake = fakeDb({
       rows,
