@@ -211,6 +211,34 @@ describe.skipIf(!process.env.HEDWIG_IT)('sorting the seeded demo mailbox', () =>
     expect(reading.items.some((i) => i.bundle === 'updates')).toBe(true);
   });
 
+  it('does not take a saved draft for the user writing in the thread', async () => {
+    // The seed keeps an unsent reply to the clinic in Drafts; the user never wrote to them.
+    const doc = await sortOf('Re: Follow-up appointment options');
+    expect(doc.signals.map((s) => s.name)).not.toContain('replied');
+    const id = randomUUID();
+    inserted.push(id);
+    await query(
+      `INSERT INTO messages (id, account_id, uid, folder, message_id, subject, from_name, from_email, to_addresses, date, snippet, body_text, thread_id, in_reply_to)
+       VALUES ($1, $2, 930002, 'INBOX', $3, 'Re: Follow-up appointment options', 'Dr Anand', 'reception@anandclinic.example', $4, NOW(), 'We have released', 'We have released the slots.', '<doc-root@hedwig.test>', '<doc-2@hedwig.test>')`,
+      [id, personalAccount, `<${id}@hedwig.test>`, JSON.stringify([{ address: 'prakhar.demo@gmail.com' }])],
+    );
+    await engine.sortRows(await loadRows('m.id = $2', [id]));
+    await drainReflexJobs();
+    const { rows: [s] } = await query('SELECT reason, signals FROM hedwig_sort WHERE message_id = $1', [id]);
+    expect(s.signals.map((x) => x.name)).not.toContain('replyToOwn');
+    expect(s.reason).not.toBe('A reply in a thread you wrote in');
+  });
+
+  it('lets in everyone the user sent mail to, but not whoever a saved draft is addressed to', async () => {
+    const reasons = async (key) => (await query(
+      'SELECT reason FROM hedwig_senders WHERE user_id = $1 AND key = $2 AND undone_at IS NULL', [userId, key])).rows.map((r) => r.reason);
+    expect(await reasons('priya.nair@vantage.example')).toContain('You have written to them');
+    // The seed's only mail to the clinic is an unsent draft reply.
+    const clinic = await reasons('reception@anandclinic.example');
+    expect(clinic).not.toContain('You have written to them');
+    expect(clinic).not.toContain('You wrote to them');
+  });
+
   it('turns an "always" correction into a rule, dry-runs it, and undo reverses all of it', async () => {
     const id = bySubject.get('Money Stuff: Everything is securities fraud');
     const res = await service.correct(userId, { messageId: id, stream: 'records', bundle: 'finance', always: 'sender', note: 'I file these' });
@@ -330,13 +358,14 @@ describe.skipIf(!process.env.HEDWIG_IT)('sorting the seeded demo mailbox', () =>
     console.warn = (...a) => { warned.push(a.join(' ')); };
     let ev;
     try {
-      ev = await engine.rescueEvidence(userId, ['priya.nair@vantage.example', 'nobody@nowhere.example'], new Set(['prakhar@vantage.example', 'me@prafiles.example', 'prakhar.demo@gmail.com']));
+      ev = await engine.rescueEvidence(userId, ['priya.nair@vantage.example', 'nobody@nowhere.example', 'reception@anandclinic.example'], new Set(['prakhar@vantage.example', 'me@prafiles.example', 'prakhar.demo@gmail.com']));
     } finally {
       console.warn = warn;
     }
     expect(warned).toEqual([]);
     expect(ev.get('priya.nair@vantage.example').wroteTo).toBeGreaterThanOrEqual(1);
     expect(ev.get('nobody@nowhere.example')).toEqual({ wroteTo: 0, notSpam: 0 });
+    expect(ev.get('reception@anandclinic.example').wroteTo).toBe(0); // only a saved draft is addressed to the clinic
 
     const res = await engine.rescueSweep({ userIds: [userId] });
     expect(res.scanned).toBeGreaterThanOrEqual(1);

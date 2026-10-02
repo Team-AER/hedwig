@@ -30,7 +30,7 @@
 import { query } from '../../services/db.js';
 import { getConfig, analysisDays } from '../config.js';
 import { getState, setState } from '../state.js';
-import { outgoingSql, userAddresses } from '../triage/store.js';
+import { outgoingSql, draftSql, userAddresses } from '../triage/store.js';
 import { upsertLabels } from './store.js';
 import { proposeQuestions, WHY_PRIORITY } from './questions.js';
 
@@ -191,7 +191,7 @@ async function fetchReplies(userId, addrs, days, hours) {
           WHERE o.account_id = m.account_id AND o.id <> m.id AND NOT o.is_deleted
             AND o.date > m.date AND o.date <= m.date + make_interval(hours => $4::int)
             AND ((m.message_id IS NOT NULL AND o.in_reply_to = m.message_id) OR (m.thread_key IS NOT NULL AND o.thread_key = m.thread_key))
-            AND ${outgoingSql('o', 'ofo', '$2')}
+            AND ${outgoingSql('o', 'ofo', '$2')} AND NOT ${draftSql('o', 'ofo')}
           ORDER BY 2 DESC, o.date LIMIT 1) r ON true
       WHERE NOT m.is_deleted AND ($3::int = 0 OR m.date > NOW() - make_interval(days => $3::int))
         AND NOT ${outgoingSql('m', 'f', '$2')} AND ${NOT_BIN}`,
@@ -272,7 +272,7 @@ async function fetchSentTo(userId, addrs, days) {
          JOIN email_accounts a ON a.id = m.account_id AND a.user_id = $1
          LEFT JOIN folders f ON f.account_id = m.account_id AND f.path = m.folder
          CROSS JOIN LATERAL jsonb_array_elements(COALESCE(m.to_addresses, '[]'::jsonb) || COALESCE(m.cc_addresses, '[]'::jsonb)) t
-        WHERE ${outgoingSql('m', 'f', '$2')} AND NOT m.is_deleted AND ($3::int = 0 OR m.date > NOW() - make_interval(days => $3::int))
+        WHERE ${outgoingSql('m', 'f', '$2')} AND NOT ${draftSql('m', 'f')} AND NOT m.is_deleted AND ($3::int = 0 OR m.date > NOW() - make_interval(days => $3::int))
         GROUP BY 1)
      SELECT m.id, m.message_id AS mid, lower(m.from_email) AS sender, m.date, s.n AS sent_count, s.last_sent
        FROM messages m

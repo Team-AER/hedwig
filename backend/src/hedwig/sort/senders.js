@@ -6,7 +6,7 @@ import { query } from '../../services/db.js';
 import { getConfig } from '../config.js';
 import { getState, setState } from '../state.js';
 import { addressesOf } from '../text.js';
-import { outgoingSql } from '../triage/store.js';
+import { outgoingSql, draftSql } from '../triage/store.js';
 import { runSortPrompt } from './deps.js';
 import { writeLog } from './log.js';
 import { historyLine } from './reflex.js';
@@ -226,7 +226,7 @@ export async function ensureSeeded(userId, accountIds, userAddresses) {
          CROSS JOIN LATERAL jsonb_array_elements(
            CASE WHEN jsonb_typeof(m.to_addresses) = 'array' THEN m.to_addresses ELSE '[]'::jsonb END
            || CASE WHEN jsonb_typeof(m.cc_addresses) = 'array' THEN m.cc_addresses ELSE '[]'::jsonb END) AS r
-        WHERE m.account_id = $1 AND NOT m.is_deleted AND ${outgoingSql('m', 'f', '$2')}
+        WHERE m.account_id = $1 AND NOT m.is_deleted AND ${outgoingSql('m', 'f', '$2')} AND NOT ${draftSql('m', 'f')}
         LIMIT 20000`,
       [accountId, [...userAddresses]],
     );

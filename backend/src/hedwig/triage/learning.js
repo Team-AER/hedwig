@@ -4,7 +4,7 @@ import { query } from '../../services/db.js';
 import { getConfig } from '../config.js';
 import { deriveImplicitLabel, feedbackToSamples } from './labels.js';
 import { trainWithHoldout } from './model.js';
-import { outgoingSql, isGone, userAddresses } from './store.js';
+import { outgoingSql, draftSql, isGone, userAddresses } from './store.js';
 import { behaviourDeltas, addBehaviour } from './senderStats.js';
 
 // Behaviour older than this is not relabelled: a reply a month later says little about triage.
@@ -56,7 +56,7 @@ export async function implicitFeedbackForUser(userId, addresses, { hours } = {})
               SELECT 1 FROM messages o LEFT JOIN folders ofo ON ofo.account_id = o.account_id AND ofo.path = o.folder
                WHERE o.account_id = m.account_id AND o.id <> m.id AND NOT o.is_deleted AND o.date > m.date
                  AND ((m.thread_id IS NOT NULL AND o.thread_key = m.thread_key) OR (m.message_id IS NOT NULL AND o.in_reply_to = m.message_id))
-                 AND ${outgoingSql('o', 'ofo', '$2')}
+                 AND ${outgoingSql('o', 'ofo', '$2')} AND NOT ${draftSql('o', 'ofo')}
             ) AS replied
        FROM hedwig_triage t
        JOIN messages m ON m.id = t.message_id

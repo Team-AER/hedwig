@@ -15,7 +15,7 @@ import { decideBatch } from './decision.js';
 import { guardBatch, guardCandidate, senderHistory } from './guard.js';
 import { HEDWIG_HOOKS, collectHedwigHook, runHedwigHook } from '../hooks.js';
 import { stage1 } from '../triage/signals.js';
-import { loadSenderStats, outgoingSql } from '../triage/store.js';
+import { loadSenderStats, outgoingSql, draftSql, isDraft } from '../triage/store.js';
 import { fnv1a } from '../triage/features.js';
 import { validTimezone, describeNow } from '../insights/time.js';
 import { getState, setState } from '../state.js';
@@ -48,11 +48,11 @@ async function threadFactsFor(userId, rows, addresses) {
             EXISTS (SELECT 1 FROM messages o LEFT JOIN folders ofo ON ofo.account_id = o.account_id AND ofo.path = o.folder
                      WHERE o.account_id = m.account_id AND o.id <> m.id AND NOT o.is_deleted AND o.date <= m.date
                        AND ((m.thread_key IS NOT NULL AND o.thread_key = m.thread_key) OR (m.in_reply_to IS NOT NULL AND o.message_id = m.in_reply_to))
-                       AND ${outgoingSql('o', 'ofo', '$3')}) AS reply_to_own,
+                       AND ${outgoingSql('o', 'ofo', '$3')} AND NOT ${draftSql('o', 'ofo')}) AS reply_to_own,
             EXISTS (SELECT 1 FROM messages o LEFT JOIN folders ofo ON ofo.account_id = o.account_id AND ofo.path = o.folder
                      WHERE o.account_id = m.account_id AND o.id <> m.id AND NOT o.is_deleted AND o.date > m.date
                        AND ((m.thread_key IS NOT NULL AND o.thread_key = m.thread_key) OR (m.message_id IS NOT NULL AND o.in_reply_to = m.message_id))
-                       AND ${outgoingSql('o', 'ofo', '$3')}) AS replied_after
+                       AND ${outgoingSql('o', 'ofo', '$3')} AND NOT ${draftSql('o', 'ofo')}) AS replied_after
        FROM messages m JOIN email_accounts a ON a.id = m.account_id
       WHERE m.id = ANY($1::uuid[]) AND a.user_id = $2`,
     [ids, userId, [...addresses]],
@@ -657,7 +657,7 @@ export async function sortRows(rows, { historical = false, allowReflex = true, o
     } catch (err) {
       console.warn(`[hedwig] sort: seeding sender decisions failed for ${userId}:`, err.message);
     }
-    const outgoing = list.filter((r) => r.is_outgoing);
+    const outgoing = list.filter((r) => r.is_outgoing && !isDraft(r));
     if (outgoing.length && !historical) {
       await recordWrittenTo(userId, outgoing, addresses);
       await clearNeedsYouAfterReply(userId, outgoing);
@@ -1224,7 +1224,7 @@ export async function rescueEvidence(userId, emails, addresses) {
          CROSS JOIN LATERAL jsonb_array_elements(
            CASE WHEN jsonb_typeof(m.to_addresses) = 'array' THEN m.to_addresses ELSE '[]'::jsonb END
            || CASE WHEN jsonb_typeof(m.cc_addresses) = 'array' THEN m.cc_addresses ELSE '[]'::jsonb END) AS r
-        WHERE a.user_id = $1 AND NOT m.is_deleted AND ${outgoingSql('m', 'f', '$2')}
+        WHERE a.user_id = $1 AND NOT m.is_deleted AND ${outgoingSql('m', 'f', '$2')} AND NOT ${draftSql('m', 'f')}
           AND lower(COALESCE(r->>'address', r->>'email', r #>> '{}')) = ANY($3::text[])
         GROUP BY 1`,
       [userId, [...addresses], list],

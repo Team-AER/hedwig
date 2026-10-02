@@ -1,11 +1,12 @@
 // Items leave the lists on their own: needs-you when the user replies in the thread or archives or
-// deletes the message; waiting-on when anyone writes in the thread after the user. The pipeline
-// step resolves immediately for the messages it sees; the 15-minute sweep catches everything else
-// (sent copies that sync late, archives done in another client). Waiting-on detection lives here too.
+// deletes the message; waiting-on when anyone writes in the thread after the user. A saved draft
+// counts for neither: it was never sent. The pipeline step resolves immediately for the messages
+// it sees; the 15-minute sweep catches everything else (sent copies that sync late, archives done
+// in another client). Waiting-on detection lives here too.
 import { query } from '../../services/db.js';
 import { getConfig } from '../config.js';
 import { messageText } from '../text.js';
-import { outgoingSql, goneSql } from './store.js';
+import { outgoingSql, goneSql, draftSql, isDraft } from './store.js';
 import { waitingOnDecision } from './labels.js';
 
 // How far back an unanswered question still counts as something the user is waiting on.
@@ -15,7 +16,7 @@ const EFFECTIVE = "COALESCE(CASE WHEN t.overridden THEN t.override_category END,
 
 /** The user's new outgoing messages resolve needs-you (and older waiting-on) items they answer. */
 export async function resolveByOutgoing(userId, rows) {
-  const list = rows.filter((r) => r.date);
+  const list = rows.filter((r) => r.date && !isDraft(r));
   if (!list.length) return 0;
   const { rowCount } = await query(
     `UPDATE hedwig_triage t SET resolved_at = x.at
@@ -65,7 +66,7 @@ export async function sweepResolution(userId, addresses) {
            LEFT JOIN folders ofo ON ofo.account_id = o.account_id AND ofo.path = o.folder
           WHERE o.account_id = m.account_id AND o.id <> m.id AND NOT o.is_deleted AND o.date > m.date
             AND ((m.thread_id IS NOT NULL AND o.thread_key = m.thread_key) OR (m.message_id IS NOT NULL AND o.in_reply_to = m.message_id))
-            AND ${outgoingSql('o', 'ofo', '$2')}
+            AND ${outgoingSql('o', 'ofo', '$2')} AND NOT ${draftSql('o', 'ofo')}
        ) r
       WHERE t.message_id = m.id AND t.user_id = $1 AND t.resolved_at IS NULL
         AND ${EFFECTIVE} = 'needs_you' AND r.at IS NOT NULL`,
@@ -77,7 +78,8 @@ export async function sweepResolution(userId, addresses) {
       WHERE t.message_id = m.id AND t.user_id = $1 AND t.resolved_at IS NULL AND ${EFFECTIVE} = 'waiting_on'
         AND EXISTS (
           SELECT 1 FROM messages r
-           WHERE r.account_id = m.account_id AND r.id <> m.id AND NOT r.is_deleted AND r.date > m.date
+            LEFT JOIN folders rf ON rf.account_id = r.account_id AND rf.path = r.folder
+           WHERE r.account_id = m.account_id AND r.id <> m.id AND NOT r.is_deleted AND r.date > m.date AND NOT ${draftSql('r', 'rf')}
              AND ((m.thread_id IS NOT NULL AND r.thread_key = m.thread_key) OR (m.message_id IS NOT NULL AND r.in_reply_to = m.message_id)))`,
     [userId],
   );
@@ -107,7 +109,8 @@ export async function scanWaitingOn(userId, addresses, { now = new Date(), waiti
         AND m.date >= $3::timestamptz - ($5 || ' days')::interval
         AND NOT EXISTS (
           SELECT 1 FROM messages r
-           WHERE r.account_id = m.account_id AND r.id <> m.id AND NOT r.is_deleted AND r.date > m.date
+            LEFT JOIN folders rf ON rf.account_id = r.account_id AND rf.path = r.folder
+           WHERE r.account_id = m.account_id AND r.id <> m.id AND NOT r.is_deleted AND r.date > m.date AND NOT ${draftSql('r', 'rf')}
              AND ((m.thread_id IS NOT NULL AND r.thread_key = m.thread_key) OR (m.message_id IS NOT NULL AND r.in_reply_to = m.message_id)))
         AND NOT EXISTS (
           SELECT 1 FROM hedwig_triage t WHERE t.message_id = m.id AND (t.overridden OR t.resolved_at IS NOT NULL OR t.category <> 'waiting_on'))

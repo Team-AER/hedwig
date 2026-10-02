@@ -5,7 +5,7 @@
 // queries.
 import { query } from '../../services/db.js';
 import { CORRECTION_KINDS, recentCorrections } from '../ledger/corrections.js';
-import { outgoingSql } from '../triage/store.js';
+import { outgoingSql, draftSql } from '../triage/store.js';
 import { userAddresses } from '../pipeline.js';
 import { splitBody } from '../indexer/parse.js';
 import { voiceFeatures } from '../work/voice.js';
@@ -231,7 +231,7 @@ export async function gatherEvidence(userId, cfg, { days: windowDays = null } = 
            FROM messages m
            JOIN email_accounts a ON a.id = m.account_id
            LEFT JOIN folders f ON f.account_id = m.account_id AND f.path = m.folder
-          WHERE a.user_id = $1 AND NOT m.is_deleted AND ${outgoingSql('m', 'f', '$2')}
+          WHERE a.user_id = $1 AND NOT m.is_deleted AND ${outgoingSql('m', 'f', '$2')} AND NOT ${draftSql('m', 'f')}
             AND m.date > NOW() - make_interval(days => $3)
           ORDER BY m.date DESC NULLS LAST LIMIT $4`,
         [userId, addresses, days, cfg['profile.sentSamples']],

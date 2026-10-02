@@ -15,7 +15,7 @@ const { train, predict, contributions, evaluate, trainWithHoldout, mulberry32 } 
 const { deriveImplicitLabel, labelTarget, feedbackToSamples, waitingOnDecision } = await import('./labels.js');
 const { decide, mergePluginResults } = await import('./classify.js');
 const { parseVerdict, applyVerdict } = await import('./stage3.js');
-const { toTriageInfo, isGone } = await import('./store.js');
+const { toTriageInfo, isGone, isDraft } = await import('./store.js');
 const { behaviourDeltas } = await import('./senderStats.js');
 const service = await import('./service.js');
 const { makePushJunkHandler } = await import('./junk.js');
@@ -291,6 +291,12 @@ describe('decide (stages combined)', () => {
     expect(decide({ ...base, row: msg({ folder: 'Archive' }), text: 'Can you call?' }).resolved).toBe(true);
     expect(isGone({ folder: 'INBOX', special_use: '\\Trash' })).toBe(true);
     expect(isGone({ folder: 'INBOX' })).toBe(false);
+  });
+  it('tells saved drafts from sent mail', () => {
+    expect(isDraft({ folder: 'Entwürfe', special_use: '\\Drafts' })).toBe(true);
+    expect(isDraft({ folder: '[Gmail]/Drafts' })).toBe(true);
+    expect(isDraft({ folder: 'Sent', special_use: '\\Sent' })).toBe(false);
+    expect(isDraft({ folder: 'Projects/Draftsmanship' })).toBe(false);
   });
 });
 

@@ -7,7 +7,7 @@
 import { query } from '../../services/db.js';
 import { getConfig } from '../config.js';
 import { domainOf } from '../text.js';
-import { outgoingSql, isGone } from './store.js';
+import { outgoingSql, draftSql, isGone, isDraft } from './store.js';
 
 /** Aggregate behaviour increments per sender from message rows. Exported for the sweep and tests. */
 export function behaviourDeltas(rows) {
@@ -109,7 +109,7 @@ async function creditReplies(userId, rows, addresses) {
                 SELECT MAX(x.date) FROM messages x
                   LEFT JOIN folders xf ON xf.account_id = x.account_id AND xf.path = x.folder
                  WHERE x.account_id = o.account_id AND x.thread_key = o.thread_key AND x.date < o.date
-                   AND x.id <> o.id AND NOT x.is_deleted AND ${outgoingSql('x', 'xf', '$3')}
+                   AND x.id <> o.id AND NOT x.is_deleted AND ${outgoingSql('x', 'xf', '$3')} AND NOT ${draftSql('x', 'xf')}
               ), '-infinity'::timestamptz))
         )`,
     [userId, fresh.map((r) => r.message_id), [...addresses]],
@@ -148,7 +148,7 @@ export async function runSenderStats(rows) {
   for (const [userId, list] of byUser) {
     const addresses = list[0].user_addresses || new Set();
     const incoming = list.filter((r) => !r.is_outgoing && r.from_email && /@/.test(r.from_email));
-    const outgoing = list.filter((r) => r.is_outgoing);
+    const outgoing = list.filter((r) => r.is_outgoing && !isDraft(r));
     if (incoming.length) await countIncoming(userId, incoming, { behaviourBefore });
     if (outgoing.length) await creditReplies(userId, outgoing, addresses);
   }

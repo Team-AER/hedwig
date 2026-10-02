@@ -35,6 +35,21 @@ describe.skipIf(!process.env.HEDWIG_IT)('labels against the dev database', () =>
     expect(afterFirst).toBeGreaterThan(0);
   });
 
+  it('takes neither a reply nor a recipient from a saved draft', async () => {
+    // The seed keeps an unsent reply to the clinic in Drafts; the user never wrote to them.
+    const { behaviourForUser } = await import('./behaviour.js');
+    const { getConfig } = await import('../config.js');
+    const { userAddresses } = await import('../pipeline.js');
+    await behaviourForUser(userId, (await userAddresses([userId])).get(userId), { ...(await getConfig(userId)), 'labels.windowDays': 3650 });
+    const { rows } = await query(
+      `SELECT l.evidence->>'rule' AS rule FROM hedwig_labels l JOIN messages m ON l.target_id = m.id::text
+        WHERE l.user_id = $1 AND l.source = 'behaviour' AND m.thread_key = '<doc-root@hedwig.test>'`,
+      [userId],
+    );
+    expect(rows.map((r) => r.rule)).not.toContain('reply');
+    expect(rows.map((r) => r.rule)).not.toContain('sent_to');
+  });
+
   it('computes question evidence from real counts', async () => {
     const { gatherEvidence, templateQuestion } = await import('./questions.js');
     const { rows: [m] } = await query(

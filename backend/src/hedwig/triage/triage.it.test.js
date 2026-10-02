@@ -92,7 +92,8 @@ describe.skipIf(!process.env.HEDWIG_IT)('triage on the seeded demo mailbox', () 
         WHERE t.user_id = $1 AND t.category <> 'waiting_on'`,
       [userId],
     );
-    const incoming = rows.filter((r) => r.special_use !== '\\Sent').length;
+    // Saved drafts are the user's own unsent mail, not incoming.
+    const incoming = rows.filter((r) => r.special_use !== '\\Sent' && r.special_use !== '\\Drafts').length;
     expect(counts[0]).toEqual({ sent_triaged: 0, total: incoming });
   });
 
@@ -102,8 +103,34 @@ describe.skipIf(!process.env.HEDWIG_IT)('triage on the seeded demo mailbox', () 
     expect(before.received).toBe(15);
     expect(before.replied).toBe(1);
     expect((await get('marta@kowalski-design.example')).replied).toBe(1);
+    expect((await get('reception@anandclinic.example')).replied).toBe(0); // only a saved draft answers the clinic
     await pipeline.runSteps(await loadRows());
     expect(await get('priya.nair@vantage.example')).toEqual(before);
+  });
+
+  it('credits everyone who wrote since the user last sent, not since a saved draft', async () => {
+    const { rows: [{ id: account }] } = await query("SELECT id FROM email_accounts WHERE user_id = $1 AND email_address = 'prakhar@vantage.example'", [userId]);
+    const thread = `<${randomUUID()}@hedwig.test>`;
+    const ids = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
+    const [first, draft, second, sent] = ids;
+    const add = (id, uid, folder, from, minsAgo, replyTo) => query(
+      `INSERT INTO messages (id, account_id, uid, folder, message_id, subject, from_email, to_addresses, cc_addresses, date, snippet, thread_id, in_reply_to)
+       VALUES ($1, $2, $3, $4, $5, 'Offsite catering', $6, '[]', '[]', NOW() - make_interval(mins => $7), 'Catering', $8, $9)`,
+      [id, account, uid, folder, `<${id}@hedwig.test>`, from, minsAgo, thread, replyTo],
+    );
+    await add(first, 999990, 'INBOX', 'alex@caterer.example', 180, null);
+    await add(draft, 999991, 'Drafts', 'prakhar@vantage.example', 120, `<${first}@hedwig.test>`);
+    await add(second, 999992, 'INBOX', 'bea@caterer.example', 60, `<${first}@hedwig.test>`);
+    await add(sent, 999993, 'Sent Items', 'prakhar@vantage.example', 1, `<${second}@hedwig.test>`);
+    try {
+      await pipeline.runSteps(await loadRows('m.id = $2', [sent]));
+      const { rows: stats } = await query(
+        "SELECT sender_email, replied FROM hedwig_sender_stats WHERE user_id = $1 AND sender_email LIKE '%@caterer.example' ORDER BY 1", [userId]);
+      expect(stats).toEqual([{ sender_email: 'alex@caterer.example', replied: 1 }, { sender_email: 'bea@caterer.example', replied: 1 }]);
+    } finally {
+      await query('DELETE FROM messages WHERE id = ANY($1::uuid[])', [ids]);
+      await query("DELETE FROM hedwig_sender_stats WHERE user_id = $1 AND sender_email LIKE '%@caterer.example'", [userId]);
+    }
   });
 
   it('finds what the user is waiting on', async () => {
@@ -113,6 +140,29 @@ describe.skipIf(!process.env.HEDWIG_IT)('triage on the seeded demo mailbox', () 
     expect(counts.waiting_on).toBe(1);
     expect(items[0].message.subject).toBe('Laptop replacement request');
     expect(items[0].triage.reason_label).toMatch(/^Waiting \d+ d$/);
+  });
+
+  it('keeps and finds waiting-on while the user has only drafted a follow-up', async () => {
+    const laptopId = bySubject.get('Laptop replacement request');
+    const { rows: [laptop] } = await query('SELECT account_id, thread_id FROM messages WHERE id = $1', [laptopId]);
+    const draftId = randomUUID();
+    await query(
+      `INSERT INTO messages (id, account_id, uid, folder, message_id, subject, from_email, to_addresses, cc_addresses, date, snippet, thread_id, in_reply_to)
+       VALUES ($1, $2, 999997, 'Drafts', $3, 'Re: Laptop replacement request', 'prakhar@vantage.example', '[]', '[]', NOW(), 'Any news on', $4, '<laptop-1@hedwig.test>')`,
+      [draftId, laptop.account_id, `<${draftId}@hedwig.test>`, laptop.thread_id],
+    );
+    try {
+      await pipeline.runSteps(await loadRows('m.id = $2', [draftId]));
+      await resolution.sweepResolution(userId, addrs);
+      expect((await service.listTriage(userId, { view: 'waiting_on' })).counts.waiting_on).toBe(1);
+      // Nor does the draft stop the question being found in the first place.
+      await query('DELETE FROM hedwig_triage WHERE message_id = $1', [laptopId]);
+      expect(await resolution.scanWaitingOn(userId, addrs, { waitingDays: 3 })).toBe(1);
+    } finally {
+      await query('DELETE FROM messages WHERE id = $1', [draftId]);
+      await query('UPDATE hedwig_triage SET resolved_at = NULL WHERE message_id = $1', [laptopId]);
+      await resolution.scanWaitingOn(userId, addrs, { waitingDays: 3 });
+    }
   });
 
   it('clears waiting-on when a reply arrives', async () => {
@@ -144,6 +194,16 @@ describe.skipIf(!process.env.HEDWIG_IT)('triage on the seeded demo mailbox', () 
     expect(invoice.thread.count).toBe(3);
     expect(invoice.thread.participants.map((p) => p.email)).toEqual(expect.arrayContaining(['marta@kowalski-design.example', 'me@prafiles.example']));
     for (let i = 1; i < items.length; i++) expect(items[i - 1].triage.priority).toBeGreaterThanOrEqual(items[i].triage.priority);
+  });
+
+  it('keeps a needs-you item open while the reply is only a saved draft', async () => {
+    const docId = bySubject.get('Re: Follow-up appointment options');
+    const drafts = await loadRows("f.special_use = '\\Drafts' AND m.in_reply_to = '<doc-2@hedwig.test>'");
+    expect(drafts).toHaveLength(1); // the seed's unsent reply to the clinic
+    await pipeline.runSteps(drafts);
+    await resolution.sweepResolution(userId, addrs);
+    const { items } = await service.listTriage(userId, { view: 'needs_you' });
+    expect(items.some((i) => i.message.id === docId)).toBe(true);
   });
 
   it('resolves a needs-you item when the user replies in the thread', async () => {
@@ -219,6 +279,9 @@ describe.skipIf(!process.env.HEDWIG_IT)('triage on the seeded demo mailbox', () 
     const byLabel = Object.fromEntries(labels.map((l) => [l.label, l.n]));
     expect(byLabel.needs_you).toBeGreaterThan(0); // Priya's visa update, which the user answered
     expect(byLabel.ignored).toBeGreaterThan(0); // newsletters never opened
+    // The clinic's first message was read but never answered: the saved draft reply is not a reply.
+    const { rows: clinic } = await query("SELECT label FROM hedwig_triage_feedback WHERE message_id = $1 AND source = 'implicit'", [bySubject.get('Follow-up appointment options')]);
+    expect(clinic.map((c) => c.label)).not.toContain('needs_you');
     const trained = await service.retrain(userId);
     expect(trained.ok).toBe(true);
     expect(trained.samples).toBeGreaterThan(5);

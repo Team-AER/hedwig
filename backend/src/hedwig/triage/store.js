@@ -7,6 +7,16 @@ import { deadlineLabel } from './signals.js';
 // Null-safe on purpose: most folders have no special_use, and NOT (NULL OR false) would drop them.
 export const outgoingSql = (m, f, p) => `(COALESCE(${f}.special_use, '') = '\\Sent' OR COALESCE(lower(${m}.from_email) = ANY(${p}::text[]), false))`;
 
+/** SQL: message `m` (with folder `f`) is a saved draft. It is from the user but was never sent, so it answers nothing. */
+export const draftSql = (m, f) => `(COALESCE(${f}.special_use, '') = '\\Drafts' OR COALESCE(${m}.folder, '') ~* '(^|/)drafts?$')`;
+
+const DRAFT_FOLDER_RE = /(^|\/)drafts?$/i;
+
+/** JS twin of draftSql for rows already in memory. */
+export function isDraft(row) {
+  return row.special_use === '\\Drafts' || DRAFT_FOLDER_RE.test(String(row.folder || ''));
+}
+
 /** SQL: message `m` (with folder `f`) has left the inbox: deleted, archived, trashed or junked. */
 export const goneSql = (m, f) => `(${m}.is_deleted OR COALESCE(${f}.special_use, '') IN ('\\Archive','\\Trash','\\Junk','\\All')
   OR COALESCE(${m}.folder, '') ~* '(^|/)(archive|archives|trash|bin|deleted items|deleted messages|junk|junk e-?mail|spam)$')`;
