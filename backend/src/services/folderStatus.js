@@ -1,5 +1,6 @@
 import { query } from './db.js';
 import { extractImapError } from './imapError.js';
+import { isLoginDeferred } from './imapLoginGate.js';
 
 export const STATUS_INTERVAL_MS = 60000;
 // INBOX plus (BATCH - 1) rotating folders per cycle. The monitor query's LIMIT is bound from
@@ -143,6 +144,12 @@ export class FolderStatusMonitor {
       if (failed) throw new Error('One or more folder status checks failed');
       this.failures.delete(account.id);
     } catch (err) {
+      // The provider is refusing new logins and the gate held this one back. Not a failure of
+      // the check: come back when the gate says, without a warning a minute.
+      if (isLoginDeferred(err)) {
+        this.nextCheck.set(account.id, Date.now() + Math.max(STATUS_INTERVAL_MS, err.retryInMs || 0));
+        return;
+      }
       const failures = (this.failures.get(account.id) || 0) + 1;
       this.failures.set(account.id, failures);
       this.nextCheck.set(account.id, Date.now() + Math.min(600000, STATUS_INTERVAL_MS * 2 ** Math.min(failures - 1, 4)));

@@ -96,6 +96,10 @@ export function upstreamBusy(mgr, account, now = Date.now()) {
   const host = String(account.imap_host || '').toLowerCase();
   const cd = mgr._connectCooldown?.get?.(id);
   if (cd && cd.until > now) return { reason: `the provider refused a connection (upstream cooldown, refusal #${cd.failures || 1})`, retryMs: jitter(cd.until - now) };
+  // Refused logins: the engine runs the user's own actions on the live connection meanwhile, and a
+  // background fetch must not take that turn. Wait until a login has got through again.
+  const gate = mgr.loginGate?.status?.(id);
+  if (gate) return { reason: `the provider is refusing new logins (refusal #${gate.failures})`, retryMs: jitter(Math.max(gate.retryInMs, 15_000)) };
   const bo = mgr.snippetBackoff?.get?.(host);
   if (bo && bo.until > now) return { reason: 'the mail host is backing off after refusing the snippet indexer', retryMs: jitter(bo.until - now) };
   if (mgr.connectingAccounts?.has?.(id)) return { reason: 'the account is connecting', retryMs: jitter(30_000) };
@@ -113,6 +117,7 @@ export function upstreamBusy(mgr, account, now = Date.now()) {
 
 /** Errors that mean "the server is at its limit, come back later", not "this message is broken". */
 export function isMailBusyError(err) {
+  if (err?.code === 'LOGIN_DEFERRED') return true; // the engine's login gate held the login back
   return /\[LIMIT\]|\[UNAVAILABLE\]|\[INUSE\]|connection not available|too many|maximum number|number of connections|rate.?limit|temporarily|try again|connection limit|throttl|connect timeout|connections busy|cooldown active|pool evicted/i
     .test(String(err?.message || err || ''));
 }

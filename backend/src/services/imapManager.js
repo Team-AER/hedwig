@@ -1,5 +1,6 @@
 import { FolderStatusMonitor, checkpointFolderStatus } from './folderStatus.js';
 import { extractImapError } from './imapError.js';
+import { loginGate, isLoginDeferred, LoginDeferredError, LOGIN_PROBE_WAIT_MS } from './imapLoginGate.js';
 import { recordUnfetchable, suppressedUids, clearUnfetchable, hasRealGap } from './unfetchableUids.js';
 import { ImapFlow } from 'imapflow';
 import { query } from './db.js';
@@ -64,6 +65,12 @@ async function raceTimeout(promise, ms, label) {
 const CONNECT_CONCURRENCY_PER_HOST = 3;
 const hostConnectSem = createKeyedSemaphore(CONNECT_CONCURRENCY_PER_HOST);
 
+// Every login except the live sync connection's goes through the account's login gate
+// (imapLoginGate.js): while the provider is refusing logins this throws LoginDeferredError
+// without touching the network. Pass cfgOpts.live for the live connection (connect, reconnect,
+// poll-only and fresh-login sync), which keeps its own backoff in ImapManager._connectCooldown.
+// Its refusals still close the gate; its successes do not open it.
+//
 // Connect a fresh ImapFlow client, with an IPv4 fallback for broken IPv6 (#382). autoSelectFamily
 // (set in makeClientCfg) already races the TCP connect and recovers when a family's TCP handshake
 // is dead or hangs — but it commits to whichever family wins the TCP race, so an IPv6 path that
@@ -73,6 +80,38 @@ const hostConnectSem = createKeyedSemaphore(CONNECT_CONCURRENCY_PER_HOST);
 // triggers the retry — refusals / auth / cert errors are not a family problem, so they propagate
 // unchanged. Returns a connected client the caller owns (it attaches its own 'close'/idle listeners).
 async function connectImapClient(account, resolved, cfgOpts, timeoutMs, label) {
+  const live = !!cfgOpts?.live;
+  const gateId = account?.id;
+  const startedAt = live || !gateId ? Date.now() : loginGate.admit(gateId);
+  try {
+    const client = await openImapClient(account, resolved, cfgOpts, timeoutMs, label);
+    if (!live && gateId) {
+      const ended = loginGate.admitted(gateId);
+      if (ended) console.log(`IMAP logins for ${logAccount(account)} accepted again after ${ended} refusal${ended === 1 ? '' : 's'}; background work resumes`);
+    }
+    return client;
+  } catch (err) {
+    if (gateId) noteLoginOutcome(account, err, startedAt, label, live);
+    throw err;
+  }
+}
+
+// Close the login gate on a refusal, from whichever login it came. Anything else (DNS, TLS, a
+// timeout the IPv4 retry could not fix) is no answer about the throttle: let the next login try.
+function noteLoginOutcome(account, err, startedAt, label, live) {
+  const detail = extractImapError(err);
+  if (!err?.sawRefusal && !isConnectionRefusal(detail) && !isAuthFailure(detail)) {
+    if (!live) loginGate.settled(account.id);
+    return;
+  }
+  const ladder = isAuthFailure(detail) ? authCooldownMs : undefined;
+  const { ms, failures, escalated } = loginGate.refused(account.id, detail, startedAt, { ladder });
+  if (escalated) {
+    console.warn(`IMAP login refused for ${logAccount(account)} (${label}: ${detail}); pausing new logins for ${Math.round(ms / 1000)}s (refusal #${failures})${live ? '' : '. The live connection keeps syncing'}`);
+  }
+}
+
+async function openImapClient(account, resolved, cfgOpts, timeoutMs, label) {
   const host = (account.imap_host || '').toLowerCase();
   let sawRefusal = false; // a provider refusal ('Connection not available' etc.) fired mid-attempt
   const attempt = async (res, tag) => {
@@ -118,6 +157,8 @@ async function connectImapClient(account, resolved, cfgOpts, timeoutMs, label) {
     // stall): a second attempt just piles on pressure and doubles the delay — let the refusal
     // propagate so the caller's cooldown backs off (#384). Otherwise retry IPv4-only for a wedged
     // IPv6 TLS handshake (#382).
+    // Tell the login gate about a refusal that only showed up as an 'error' event.
+    if (sawRefusal && err && typeof err === 'object') err.sawRefusal = true;
     if (!shouldRetryIPv4(err?.message, resolved.addresses, sawRefusal)) throw err;
     const v4 = resolved.addresses.filter(a => !a.includes(':'));
     console.warn(`IMAP connect stalled for ${logAccount(account)} (${label}); retrying IPv4-only`);
@@ -541,6 +582,11 @@ const STALENESS_CHECK_MS = 3 * 60 * 1000;
 // below the 55s sync wall-clock so recovery beats the slow timeout-then-reconnect self-heal.
 const SYNC_HUNG_MS = 30 * 1000;
 
+// After the server ends a live session that had been up at least LIVE_RECONNECT_MIN_AGE_S, the
+// next sync tick runs this soon rather than on its interval. See _scheduleLiveReconnect.
+const LIVE_RECONNECT_DELAY_MS = 2000;
+const LIVE_RECONNECT_MIN_AGE_S = 60;
+
 // Durable flag push. A read/star change is written to the DB and pushed to IMAP
 // immediately; if that push fails (deaf/half-open pool connection, provider blip) the
 // message is queued here and re-pushed every cycle until the server confirms — otherwise
@@ -905,6 +951,7 @@ function safeDate(d) {
 //                       or dies under a sync it inherited, reconnect and sync again in the same
 //                       tick instead of treating it as a provider refusal (30 s cooldown). For
 //                       providers that cut long sessions on a timer. Omitted → the old handling.
+// stalenessProbe:       false skips the 3-minute fresh-login probe for a deaf live connection.
 const PROVIDERS = {
   google: {
     // Gmail folders are label memberships; matching Message-IDs are not proof of a move.
@@ -934,6 +981,10 @@ const PROVIDERS = {
     keepaliveNoopMs: 4 * 60 * 1000,
     // Yahoo cuts each session ~300 s after connect, so every fifth 60 s tick found it dying.
     retryDeadSocket: true,
+    // No staleness probe. Yahoo replaces the live session every 300 s by itself, so a deaf one
+    // cannot last much past the 3 min probe interval, and the probe cost a login every 3 min,
+    // twenty an hour, on the provider that throttles logins.
+    stalenessProbe: false,
     pushesFlags: true,
     snippetIndex: true,
     speculativeFetch: false,
@@ -1496,7 +1547,9 @@ function drainWaiters(pool) {
 }
 
 // Exported for imapPool.test.js, which pins how many connections a stalled pool opens.
-export async function acquirePooledClient(account) {
+// probe: false refuses to be the first login after a backoff (LoginDeferredError instead), for a
+// caller that has the live connection to fall back on and should not wait out a refusal.
+export async function acquirePooledClient(account, { probe = true } = {}) {
   const id = account.id;
   if (!connectionPools.has(id)) {
     connectionPools.set(id, { clients: [], inUse: new Set(), waiters: [] });
@@ -1512,6 +1565,9 @@ export async function acquirePooledClient(account) {
 
   // Grow pool if under limit — refresh token before creating a new connection
   if (pool.clients.length < POOL_SIZE) {
+    // Before the token refresh and DNS: a login the gate will not allow needs neither.
+    loginGate.check(id);
+    if (!probe && loginGate.refusing(id)) throw new LoginDeferredError(LOGIN_PROBE_WAIT_MS, loginGate.status(id)?.detail);
     const freshAccount = await ensureFreshToken(account);
     const { resolved, policy } = await resolveAccountHost(freshAccount);
     // Connect with the shared IPv4-fallback helper (#382); it attaches the #360 handshake-error
@@ -1560,6 +1616,16 @@ export async function acquirePooledClient(account) {
   });
 }
 
+// A pooled connection nobody is using, marked in use; null when there is none. Never logs in.
+// Release it with releasePooledClient.
+export function takeIdlePooledClient(accountId) {
+  const pool = connectionPools.get(accountId);
+  const idle = pool?.clients.find(c => !pool.inUse.has(c) && isClientUsable(c));
+  if (!idle) return null;
+  pool.inUse.add(idle);
+  return idle;
+}
+
 export function releasePooledClient(account, client) {
   const pool = connectionPools.get(account.id);
   if (!pool) { client.logout().catch(() => {}); return; }
@@ -1582,8 +1648,57 @@ export function evictPool(accountId) {
   connectionPools.delete(accountId);
 }
 
-async function withFreshClient(account, fn) {
-  const client = await acquirePooledClient(account);
+// The live sync connection for an account, when it is up. Set by ImapManager; the pool helpers
+// below are module functions and cannot see its connections otherwise.
+let liveClientFor = () => null;
+export function setLiveClientLookup(fn) {
+  liveClientFor = typeof fn === 'function' ? fn : () => null;
+}
+
+// How long an action waits for the live connection to come back. Yahoo cuts it every five
+// minutes and the reconnect follows within seconds (see _scheduleLiveReconnect).
+const LIVE_BORROW_WAIT_MS = 8000;
+
+async function waitForLiveClient(accountId, waitMs = LIVE_BORROW_WAIT_MS) {
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    const client = liveClientFor(accountId);
+    if (client && isClientUsable(client)) return client;
+    if (Date.now() >= deadline) return null;
+    await new Promise(r => setTimeout(r, 250));
+  }
+}
+
+// Run fn on the live sync connection instead of a pooled one. ImapFlow queues its mailbox locks,
+// so this takes turns with the sync tick rather than interleaving with it. It is never closed or
+// evicted here, whatever fn throws: the sync tick owns it and notices if it died.
+async function runOnLiveClient(client, fn) {
+  try {
+    return await fn(client);
+  } finally {
+    // IDLE resumes on whichever mailbox is selected. Put INBOX back so new mail is still pushed,
+    // instead of waiting for the next sync tick to select it.
+    const path = client.mailbox?.path;
+    if (path && path !== 'INBOX' && isClientUsable(client)) {
+      try { (await client.getMailboxLock('INBOX')).release(); } catch { /* the sync tick re-selects INBOX */ }
+    }
+  }
+}
+
+// borrowLive: while the provider refuses new logins, run fn on the live connection rather than
+// fail. Meant for the user's own actions, which are short. Background jobs pass false and wait
+// for the gate instead, so they never hold up the INBOX sync and IDLE.
+async function withFreshClient(account, fn, { borrowLive = true } = {}) {
+  let client;
+  try {
+    client = await acquirePooledClient(account, { probe: !borrowLive || !liveClientFor(account.id) });
+  } catch (err) {
+    if (!borrowLive || !(isLoginDeferred(err) || loginGate.refusing(account.id))) throw err;
+    const live = await waitForLiveClient(account.id);
+    if (!live) throw err;
+    logger.debug(`IMAP logins paused for ${logAccount(account)}; running on the live connection`);
+    return runOnLiveClient(live, fn);
+  }
   try {
     return await fn(client);
   } catch (err) {
@@ -1737,6 +1852,10 @@ export function classifyMoveBySearch(uids, remainingUids, destArrived) {
 export class ImapManager {
   constructor(wss) {
     this.wss = wss;
+    // Every login but the live connection's waits on this; Hedwig's body fetches read it too.
+    this.loginGate = loginGate;
+    // Lets withFreshClient run the user's actions on the live connection while logins are refused.
+    setLiveClientLookup((accountId) => this.connections.get(accountId));
     this._statusSyncRunning = new Set();
     this._statusSyncBackoff = new Map();
     this._statusAccountTimers = new Map();
@@ -1942,6 +2061,9 @@ export class ImapManager {
             const acct = await query('SELECT * FROM email_accounts WHERE id = $1', [accountId]);
             const account = acct.rows[0];
             if (!account) continue;
+            // The probe is a login of its own. Not while the provider is refusing them, and not
+            // where the profile says the live session cannot outlive the probe interval anyway.
+            if (providerProfile(account).stalenessProbe === false || loginGate.waitMs(accountId) > 0) continue;
             // Our highest synced INBOX UID — the watermark for "have we seen the newest mail".
             const { rows: [w] } = await query(
               "SELECT MAX(uid)::bigint AS maxuid FROM messages WHERE account_id = $1 AND folder = 'INBOX'",
@@ -2042,7 +2164,7 @@ export class ImapManager {
             else reconnect();
           } catch (err) {
             recordWarning('staleness_error', accountId);
-            console.warn(`Staleness check error for ${accountId}:`, err.message);
+            if (!isLoginDeferred(err)) console.warn(`Staleness check error for ${accountId}:`, extractImapError(err));
           }
         }
       } finally {
@@ -2162,6 +2284,9 @@ export class ImapManager {
           if (!op.resolved) await this._clearFlagMarker(op.messageId, op.flag); // confirmed on server
           ops.delete(key);
         } catch (err) {
+          // Held back by the login gate, not refused by the server: like an outage, it must not
+          // spend the give-up budget. The rest of this account's ops would be held back too.
+          if (isLoginDeferred(err)) break;
           op.attempts += 1;
           if (op.attempts >= FLAG_PUSH_MAX_ATTEMPTS) {
             console.warn(`Flag-push giving up after ${op.attempts} attempts (${op.flag} msg=${op.messageId}): ${extractImapError(err)}`);
@@ -2179,7 +2304,10 @@ export class ImapManager {
   // and the in-_syncTick reconnect path. Centralised here so a fix in one place
   // automatically covers both code paths.
   _attachIdleListeners(client, account) {
-    client.on('exists', ({ count, prevCount } = {}) => {
+    client.on('exists', ({ path, count, prevCount } = {}) => {
+      // Another folder is selected while an action borrowed this connection (withFreshClient,
+      // logins refused). New mail there is not new INBOX mail.
+      if (path && path !== 'INBOX') return;
       if ((count ?? 0) <= (prevCount ?? 0)) return;
       // Push an optimistic delta to the frontend immediately so the unread badge
       // updates without waiting for the full IMAP fetch + DB insert cycle.
@@ -2270,6 +2398,25 @@ export class ImapManager {
     const meta = this._persistentMeta.get(client);
     const age = this._connAgeSec(client);
     console.log(`IMAP connection closed for ${logAccount(account)}${age != null ? ` after ${age}s` : ''}${meta ? ` (IDLE ${meta.idleSeen ? 'was seen' : 'never seen'} on it)` : ''}`);
+    this._scheduleLiveReconnect(account, age);
+  }
+
+  // Reconnect within seconds when the server ends a session that had been up a while (Yahoo ends
+  // every one at ~300 s), instead of at the next sync tick up to a minute later. Until then no
+  // new mail is pushed, and while logins are refused the user's actions have no live connection
+  // to run on. It is the reconnect the tick would make, only sooner: no extra login.
+  //
+  // A session that died young waits for the tick. Back-to-back reconnects are what a provider
+  // pushing back looks like, and the tick's refusal handling is the right place for that.
+  _scheduleLiveReconnect(account, ageSec) {
+    if (ageSec == null || ageSec < LIVE_RECONNECT_MIN_AGE_S) return;
+    if (!this.syncIntervals.has(account.id) || this._pollOnlyAccounts.has(account.id)) return;
+    if ((this.syncThrottleSkips.get(account.id) || 0) > 0) return; // the tick would spend a skip
+    const timer = setTimeout(() => {
+      if (this.connections.has(account.id) || !this.syncIntervals.has(account.id)) return;
+      this._syncTick(account).catch(err => console.warn(`Early reconnect failed for ${logAccount(account)}: ${err.message}`));
+    }, LIVE_RECONNECT_DELAY_MS);
+    timer.unref?.();
   }
 
   // Keepalive for providers that drop a quiet session (profile keepaliveNoopMs). IDLE is the
@@ -2429,7 +2576,7 @@ export class ImapManager {
       // connectingAccounts holds the lock), and recovers from a stalled IPv6 handshake by retrying
       // IPv4-only (#382).
       client = await connectImapClient(account, resolved,
-        { enableIdle: providerProfile(account).usesIdle !== false, policy, idleKeepaliveMs: providerProfile(account).idleKeepaliveMs },
+        { enableIdle: providerProfile(account).usesIdle !== false, policy, idleKeepaliveMs: providerProfile(account).idleKeepaliveMs, live: true },
         30000, 'IMAP connect');
 
       // Remove from active connections the moment the server closes the socket.
@@ -2477,11 +2624,12 @@ export class ImapManager {
       // PurelyMail): there it only opens an unused connection on a connection-sensitive
       // server during the startup backfill window, which is exactly the pressure we're
       // trying to reduce.
-      if (!providerProfile(account).preferFreshBodyFetch) {
+      // Not while the provider is refusing logins: the first click borrows the live connection.
+      if (!providerProfile(account).preferFreshBodyFetch && !loginGate.refusing(account.id)) {
         setImmediate(() => {
           acquirePooledClient(account)
             .then(c => releasePooledClient(account, c))
-            .catch(err => console.warn(`Pool pre-warm failed for ${logAccount(account)}:`, extractImapError(err)));
+            .catch(err => { if (!isLoginDeferred(err)) console.warn(`Pool pre-warm failed for ${logAccount(account)}:`, extractImapError(err)); });
         });
       }
 
@@ -2617,6 +2765,7 @@ export class ImapManager {
     const cd = this._connectCooldown.get(account.id);
     if (cd && Date.now() < cd.until) return;
     this.syncingAccounts.add(account.id);
+    const tickStartedAt = Date.now();
     const host = (account.imap_host || '').toLowerCase();
     let client = null;
     let slotHeld = false;
@@ -2625,7 +2774,7 @@ export class ImapManager {
       slotHeld = true;
       const fresh = await raceTimeout(ensureFreshToken(account), 15000, 'Poll-only token refresh');
       const { resolved, policy } = await raceTimeout(resolveAccountHost(fresh), 15000, 'Poll-only host resolve');
-      client = await connectImapClient(fresh, resolved, { enableIdle: false, policy }, 30000, 'Poll-only connect');
+      client = await connectImapClient(fresh, resolved, { enableIdle: false, policy, live: true }, 30000, 'Poll-only connect');
 
       const folderMs = this.userFolderSyncIntervalMs.has(account.user_id)
         ? this.userFolderSyncIntervalMs.get(account.user_id)
@@ -2651,7 +2800,10 @@ export class ImapManager {
     } catch (err) {
       const detail = extractImapError(err);
       const refused = isConnectionRefusal(detail);
-      if (refused) this._noteConnectionRefusal(account);
+      if (refused) {
+        this._noteConnectionRefusal(account);
+        loginGate.refused(account.id, detail, tickStartedAt); // as in _syncTick
+      }
       console.warn(`Poll-only sync error for ${logAccount(account)}: ${detail}`);
       // Surface only what we actually backed off on. Gated (unlike the connect paths, which
       // record any failure) because this catch also fires on ordinary slow ticks, and one
@@ -2697,6 +2849,7 @@ export class ImapManager {
   // instead of waiting out a cooldown that may be hours long.
   clearConnectCooldown(accountId) {
     this._connectCooldown.delete(accountId);
+    loginGate.clear(accountId);
   }
 
   _noteConnectionRefusal(account) {
@@ -2763,7 +2916,7 @@ export class ImapManager {
     try {
       const fresh = await raceTimeout(ensureFreshToken(account), 15000, 'Fresh sync token refresh');
       const { resolved, policy } = await raceTimeout(resolveAccountHost(fresh), 15000, 'Fresh sync host resolve');
-      client = await connectImapClient(fresh, resolved, { policy }, 30000, 'Fresh sync connect');
+      client = await connectImapClient(fresh, resolved, { policy, live: true }, 30000, 'Fresh sync connect');
       // syncMessages' own CONDSTORE modseq check is the "did anything change?" gate: it returns
       // cheaply when HIGHESTMODSEQ is unchanged, and runs the delta fetch on ANY change. We used
       // to pre-gate on a UID-watermark search here, but that only detected NEW mail — a flag
@@ -2855,7 +3008,7 @@ export class ImapManager {
           })(), 20000, 'Reconnect setup');
           if (!setup) return; // account deleted/disabled mid-reconnect
           pendingClient = await connectImapClient(setup.freshAccount, setup.resolved,
-            { enableIdle: providerProfile(setup.freshAccount).usesIdle !== false, policy: setup.policy, idleKeepaliveMs: providerProfile(setup.freshAccount).idleKeepaliveMs },
+            { enableIdle: providerProfile(setup.freshAccount).usesIdle !== false, policy: setup.policy, idleKeepaliveMs: providerProfile(setup.freshAccount).idleKeepaliveMs, live: true },
             30000, 'Reconnect');
           const reconnected = { client: pendingClient, account: setup.freshAccount };
           activeClient = reconnected.client;
@@ -3008,6 +3161,9 @@ export class ImapManager {
       // keeps hammering a provider that's refusing logins. Honored by the check above next tick.
       if (!deadSocket && isConnectionRefusal(detail)) {
         this._noteConnectionRefusal(account);
+        // Pushback on the live connection is the provider's answer to extra logins as well. A
+        // login refused in this tick is already counted: it started after tickStartedAt.
+        loginGate.refused(account.id, detail, tickStartedAt);
         // Surface what we backed off on, for the same reason as the poll-only tick: gated on the
         // refusal so a one-off 'Sync wall-clock timeout' doesn't flag an otherwise healthy account.
         await this._recordAccountError(account, detail);
@@ -3139,8 +3295,9 @@ export class ImapManager {
         } finally {
           lock.release();
         }
-      });
+      }, { borrowLive: false });
     } catch (err) {
+      if (isLoginDeferred(err)) return; // the next tick polls again
       console.warn(`Flag range sync error for ${logAccount(account)}:`, err.message);
     }
   }
@@ -3235,7 +3392,7 @@ export class ImapManager {
   // a plugin tick can mock this away instead of exercising a live IMAP pool.
   async syncFolderViaPool(account, folder) {
     return withFreshClient(account, (client) =>
-      this.syncMessages(account, client, folder, 100, false, true));
+      this.syncMessages(account, client, folder, 100, false, true), { borrowLive: false });
   }
 
   // Called when a user changes their sync interval preference — replaces running
@@ -3272,23 +3429,30 @@ export class ImapManager {
     }, 5000));
   }
 
+  // The folder status monitor runs every minute per account, and used to log in every time: for
+  // Yahoo, most of the logins it saw from us. A pooled connection nobody is using answers STATUS
+  // just as well (in AUTHENTICATED or SELECTED state), so take one when there is one.
+  //
+  // Refusals here close the login gate (connectImapClient) and no longer arm the live
+  // connection's cooldown: a refused status check used to postpone the live reconnect.
   async _withCountClient(account, fn) {
     const host = (account.imap_host || '').toLowerCase();
     await this._bgConnSem.acquire(host, { timeoutMs: 30000 });
     let client;
+    let pooled = null;
     try {
-      const cooldown = this._connectCooldown.get(account.id);
-      if (cooldown && Date.now() < cooldown.until) throw new Error('Provider connection cooldown active');
+      pooled = takeIdlePooledClient(account.id);
+      if (pooled) return await fn(pooled);
+      loginGate.check(account.id);
       const { rows: [current] } = await query('SELECT * FROM email_accounts WHERE id=$1 AND enabled', [account.id]);
       if (!current) return;
       const fresh = await raceTimeout(ensureFreshToken(current), 15000, 'Count token refresh');
       const { resolved, policy } = await raceTimeout(resolveAccountHost(fresh), 15000, 'Count host resolve');
       client = await connectImapClient(fresh, resolved, { policy }, 25000, 'Folder status connect');
       return await fn(client);
-    } catch (err) {
-      if (isConnectionRefusal(extractImapError(err))) this._noteConnectionRefusal(account);
-      throw err;
     } finally {
+      // A pooled client that timed out was closed by observeFolder and has left the pool already.
+      if (pooled) releasePooledClient(account, pooled);
       if (client) { try { client.close(); } catch { /* already closed */ } }
       this._bgConnSem.release(host);
     }
@@ -4577,7 +4741,8 @@ export class ImapManager {
       // on gtd_enabled + changedCount>0 only.
       await emitSectionsChanged(this.pluginFacade, account, backfilledRows);
     } catch (err) {
-      console.error(`Backfill failed for ${logAccount(account)}/${folder}:`, err.message);
+      if (isLoginDeferred(err)) logger.debug(`Backfill deferred for ${logAccount(account)}/${folder}: ${err.message}`);
+      else console.error(`Backfill failed for ${logAccount(account)}/${folder}:`, extractImapError(err));
     } finally {
       if (bfClient) { try { bfClient.close(); } catch { /* already disconnected */ } }
       this.backfillRunning.delete(backfillKey);
@@ -4689,7 +4854,8 @@ export class ImapManager {
         }
         console.log(`Bulk flag refresh: ${updates.length}/${msgs.length} updated in ${folder} for ${logAccount(account)}`);
       } catch (err) {
-        console.warn(`Bulk flag refresh error for ${logAccount(account)}/${folder}: ${err.message}`);
+        if (isLoginDeferred(err)) return; // logins refused: the next backfill retries the lot
+        console.warn(`Bulk flag refresh error for ${logAccount(account)}/${folder}: ${extractImapError(err)}`);
       } finally {
         if (client) { try { client.close(); } catch { /* ignore */ } }
       }
@@ -4730,6 +4896,12 @@ export class ImapManager {
         const pathLower = path.toLowerCase();
         if (skipFolderPatterns.some(pat => pathLower.includes(pat))) continue;
         if (skipFolderNames.includes(pathLower)) continue;
+        // Each folder is a login. Once the provider refuses one, the rest would only be held back
+        // (or refused) in turn; the next connect runs the backfill again.
+        if (loginGate.refusing(account.id)) {
+          console.log(`Backfill paused for ${logAccount(account)} at ${path}: the provider is refusing new logins; it resumes on the next connect`);
+          break;
+        }
         await this.backfillMessages(account, path).catch(err =>
           console.warn(`Backfill skipped ${logAccount(account)}/${path}: ${err.message}`)
         );
@@ -4771,6 +4943,7 @@ export class ImapManager {
     const host = (account.imap_host || '').toLowerCase();
     const backoff = this.snippetBackoff.get(host);
     if (backoff && Date.now() < backoff.until) return;
+    if (loginGate.refusing(account.id)) return; // the 10-minute scheduler comes back
     this.snippetIndexerRunning.add(account.id);
 
     // Rate limit: conservative batches so this doesn't affect normal usage.
@@ -5174,7 +5347,7 @@ export class ImapManager {
       try {
         await withFreshClient(account, async (client) => {
           await this.syncMessages(account, client, spamPath, 50, false, true);
-        });
+        }, { borrowLive: false });
         this.broadcast({ type: 'folders_synced', accountId: account.id }, account.user_id);
       } finally {
         this._bgConnSem.release(host);
@@ -5632,8 +5805,15 @@ export class ImapManager {
         return; // applied
       } catch (err) {
         lastErr = err;
+        // A login the provider refused, or one the gate held back, fails the same way in 400 ms.
+        // The retry is for a stale pooled connection; the flag-push reconciler covers the rest.
+        if (isLoginDeferred(err) || isConnectionRefusal(extractImapError(err))) break;
         if (attempt < 2) await new Promise(r => setTimeout(r, 400));
       }
+    }
+    if (isLoginDeferred(lastErr)) {
+      console.warn(`setFlag deferred: uid=${uid} ${flag}=${value}: ${lastErr.message}`);
+      throw lastErr;
     }
     console.error(`setFlag failed after retry: uid=${uid} ${flag}=${value}:`, lastErr ? extractImapError(lastErr) : 'unknown');
     throw lastErr;
@@ -6404,9 +6584,11 @@ export class ImapManager {
           }
           serverUidsByFolder.set(folder, new Set(serverUids));
         }
-      });
+      }, { borrowLive: false }); // a SEARCH ALL per folder: too long to hold the live connection
     } catch (err) {
-      console.warn(`Reconcile connection error for ${logAccount(account)}: ${extractImapError(err)}`);
+      // Paused logins: the next reconcile, ten ticks on, tries again.
+      if (isLoginDeferred(err)) logger.debug(`Reconcile deferred for ${logAccount(account)}: ${err.message}`);
+      else console.warn(`Reconcile connection error for ${logAccount(account)}: ${extractImapError(err)}`);
       return;
     }
 

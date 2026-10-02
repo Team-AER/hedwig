@@ -118,6 +118,18 @@ describe('yielding to upstream', () => {
     expect(my.upstreamBusy({ ...m, syncingAccounts: new Set(['other']) }, YAHOO, now)).toBeNull();
   });
 
+  it('is busy while the engine is refusing new logins, which the live connection then serves to the user', async () => {
+    const { LoginGate } = await import('../../services/imapLoginGate.js');
+    const now = Date.now();
+    const m = { ...mgr(), loginGate: new LoginGate({ now: () => now }) };
+    expect(my.upstreamBusy(m, YAHOO, now)).toBeNull();
+    m.loginGate.refused(ACC, '[UNAVAILABLE] AUTHENTICATE Server error - Please try again later');
+    expect(my.upstreamBusy(m, YAHOO, now)).toMatchObject({ reason: expect.stringMatching(/refusing new logins/), retryMs: expect.any(Number) });
+    expect(my.upstreamBusy(m, YAHOO, now).retryMs).toBeGreaterThanOrEqual(60_000);
+    m.loginGate.admitted(ACC);
+    expect(my.upstreamBusy(m, YAHOO, now)).toBeNull();
+  });
+
   it('skips the fetch during a provider cooldown and defers the job without spending an attempt', async () => {
     const m = mgr();
     m._connectCooldown.set(ACC, { until: Date.now() + 90_000, failures: 3 });
@@ -212,6 +224,7 @@ describe('per-account backoff', () => {
     expect(my.isMailBusyError(new Error('UID FETCH Server error - Please try again later'))).toBe(true);
     expect(my.isMailBusyError(new Error('Provider connection cooldown active'))).toBe(true);
     expect(my.isMailBusyError(new Error('IMAP connections busy, please retry'))).toBe(true);
+    expect(my.isMailBusyError(Object.assign(new Error('held back'), { code: 'LOGIN_DEFERRED' }))).toBe(true);
     expect(my.isMailBusyError(new Error('Unexpected token in BODYSTRUCTURE'))).toBe(false);
     const m = mgr({ fetchMessageBody: vi.fn(async () => { throw new Error('Unexpected token in BODYSTRUCTURE'); }) });
     await expect(my.guardedFetch({ imapManager: m, account: YAHOO, messageId: MSG }, () => m.fetchMessageBody())).rejects.toThrow('BODYSTRUCTURE');

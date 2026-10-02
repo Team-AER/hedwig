@@ -201,3 +201,65 @@ production data: backend logs (`prodlogs.sh`) and SELECT queries (`prodsql.sh`).
 - Other areas: Trash snippet batches refused by Yahoo (`UID FETCH Server error - Please try
   again later`), `fetchMessageBody … no body after retry` for Sent and Personal, and the classic
   shell. INBOX data completeness checks out (303/303, no staleness misses).
+
+## Follow-up, 2026-10-02: Yahoo refusing every login but the live one
+
+### What production showed
+
+After a restart, Yahoo answered the startup burst (live connect, backfill, folder status and
+pool pre-warm logins within 11 s) with `[UNAVAILABLE] AUTHENTICATE Server error - Please try
+again later`. For at least the next 25 minutes it accepted every live reconnect and refused
+every other login:
+
+- one mark-read retried by the flag-push reconciler every 30 s, two logins each time, all refused;
+- the user's move to Trash failed (`IMAP move to trash failed: Command failed`);
+- the folder status monitor, the staleness probe, reconcile, the pool pre-warm and one backfill
+  login per folder kept asking.
+
+That is about four refused logins a minute, which keeps a provider's throttle shut. The live
+cooldown (`_connectCooldown`) did not help. The pool, flag pushes and staleness probe never
+consulted it. It was cleared every five minutes when Yahoo ended the live session and the
+reconnect got through, so it never climbed past `refusal #1`. Worse, a refused status-check
+login armed it, which postponed the live reconnect: the one login Yahoo was accepting.
+
+### The fix
+
+`backend/src/services/imapLoginGate.js`, used by every login in `imapManager.js`:
+
+- **One gate per account for every login except the live connection's.** Any refused login
+  closes it for 1 min, doubling to 30 min. Refusals of the live login count too, and so does
+  pushback on a live command. A rejected password takes the live connection's 5 min to 6 h
+  ladder instead. While the gate is closed, a login fails at once with `LoginDeferredError` and
+  sends nothing.
+- **It opens only when an extra login gets through.** After the wait, one login goes first and
+  the rest are held until it is answered. A live reconnect succeeding does not open it.
+- **The user's actions run on the live connection while the gate is closed.** That covers
+  mark-read, move, delete, opening a message, attachments and folder actions
+  (`withFreshClient`, `borrowLive`). INBOX is selected again afterwards so IDLE keeps
+  watching it, and the live connection is never closed or evicted by a borrowed action.
+- **Background work waits instead of borrowing:** reconcile, flag-range sync, folder integrity
+  sync, the spam folder poll, backfill, snippet indexing, bulk flags, and Hedwig's body fetches
+  (`mailYield.upstreamBusy`). Held-back logins are not failures: no warning, and the flag-push
+  give-up budget is not spent.
+- **Folder status checks** use an idle pooled connection when there is one, instead of a login a
+  minute. Their refusals close the gate and no longer arm the live cooldown.
+- **Yahoo has no staleness probe** (`stalenessProbe: false`). Yahoo replaces the live session
+  every 300 s anyway, and the probe was a login every 3 min.
+- **When a session that lived at least 60 s is closed, the live connection reconnects 2 s
+  later** instead of at the next tick. This is the same login, sooner. It keeps the window
+  without a live connection to a few seconds.
+
+Tests: `imapLoginGate.test.js` covers the gate itself. `imapLoginBackoff.test.js` replays the
+incident with ImapFlow mocked, so one constructor call is one login.
+
+### What to look for in the logs after deploy
+
+- `IMAP login refused for p***@yahoo.com (<label>: <reason>); pausing new logins for 60s
+  (refusal #1)`, then the same line at 120 s, 240 s and so on while Yahoo keeps refusing. Lines
+  should be minutes apart, not seconds.
+- `IMAP logins for p***@yahoo.com accepted again after N refusals; background work resumes`
+  when it recovers.
+- No `setFlag failed after retry … [UNAVAILABLE]`, no `Folder status cycle failed …
+  [UNAVAILABLE]`, no `Staleness check error` for Yahoo, and no failed Trash moves.
+- After `IMAP connection closed for p***@yahoo.com after ~300s`, expect `Reconnecting` about
+  2 s later.
