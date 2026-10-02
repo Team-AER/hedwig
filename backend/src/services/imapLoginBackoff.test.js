@@ -232,6 +232,31 @@ describe('while Yahoo refuses every login but the live one', () => {
   });
 });
 
+describe('a burst of extra logins', () => {
+  it('goes one at a time, so the first refusal stops the rest unsent', async () => {
+    // At a restart the status check, pool pre-warm and backfill all logged in within 2 s.
+    const { mgr } = setup();
+    folderStatusQueries();
+    const burst = await Promise.allSettled([
+      acquirePooledClient(yahoo),
+      acquirePooledClient(yahoo),
+      mgr._withCountClient(yahoo, async () => {}),
+    ]);
+    expect(logins).toHaveLength(1);
+    expect(burst.map(r => r.status)).toEqual(['rejected', 'rejected', 'rejected']);
+    expect(burst.slice(1).map(r => r.reason.code)).toEqual(['LOGIN_DEFERRED', 'LOGIN_DEFERRED']);
+    expect(loginGate.status(yahoo.id)?.failures).toBe(1);
+  });
+
+  it('still lets every login through when the provider takes them', async () => {
+    accept = () => true;
+    setup();
+    const clients = await Promise.all([acquirePooledClient(yahoo), acquirePooledClient(yahoo), acquirePooledClient(yahoo)]);
+    expect(logins).toHaveLength(3);
+    expect(new Set(clients).size).toBe(3);
+  });
+});
+
 describe('what closes the gate', () => {
   it('a rejected password holds extra logins back as long as the live connection waits', async () => {
     const { mgr } = setup();

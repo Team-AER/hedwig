@@ -233,6 +233,9 @@ login armed it, which postponed the live reconnect: the one login Yahoo was acce
   sends nothing.
 - **It opens only when an extra login gets through.** After the wait, one login goes first and
   the rest are held until it is answered. A live reconnect succeeding does not open it.
+- **Extra logins for an account go one at a time**, for the handshake only. The second deploy
+  showed why: the status check, pool pre-warm and backfill logged in within 2 s of a restart and
+  Yahoo refused all three. Now the first refusal stops the others before they are sent.
 - **The user's actions run on the live connection while the gate is closed.** That covers
   mark-read, move, delete, opening a message, attachments and folder actions
   (`withFreshClient`, `borrowLive`). INBOX is selected again afterwards so IDLE keeps

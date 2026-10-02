@@ -79,20 +79,35 @@ const hostConnectSem = createKeyedSemaphore(CONNECT_CONCURRENCY_PER_HOST);
 // host, retry once forcing IPv4-only, which sidesteps the stalled IPv6 handshake. Only a timeout
 // triggers the retry — refusals / auth / cert errors are not a family problem, so they propagate
 // unchanged. Returns a connected client the caller owns (it attaches its own 'close'/idle listeners).
+// Extra logins for one account go one at a time, for the handshake only. When the provider
+// refuses one, the rest are still queued here and the gate turns them away unsent. At a
+// restart the status check, pool pre-warm and backfill used to log in at once, and Yahoo
+// refused all three.
+const accountLoginSem = createKeyedSemaphore(1);
+
 async function connectImapClient(account, resolved, cfgOpts, timeoutMs, label) {
   const live = !!cfgOpts?.live;
   const gateId = account?.id;
-  const startedAt = live || !gateId ? Date.now() : loginGate.admit(gateId);
+  const gated = !live && !!gateId;
+  if (gated) {
+    loginGate.check(gateId); // no queueing for a login the gate would refuse anyway
+    await accountLoginSem.acquire(gateId);
+  }
   try {
-    const client = await openImapClient(account, resolved, cfgOpts, timeoutMs, label);
-    if (!live && gateId) {
-      const ended = loginGate.admitted(gateId);
-      if (ended) console.log(`IMAP logins for ${logAccount(account)} accepted again after ${ended} refusal${ended === 1 ? '' : 's'}; background work resumes`);
+    const startedAt = gated ? loginGate.admit(gateId) : Date.now();
+    try {
+      const client = await openImapClient(account, resolved, cfgOpts, timeoutMs, label);
+      if (gated) {
+        const ended = loginGate.admitted(gateId);
+        if (ended) console.log(`IMAP logins for ${logAccount(account)} accepted again after ${ended} refusal${ended === 1 ? '' : 's'}; background work resumes`);
+      }
+      return client;
+    } catch (err) {
+      if (gateId) noteLoginOutcome(account, err, startedAt, label, live);
+      throw err;
     }
-    return client;
-  } catch (err) {
-    if (gateId) noteLoginOutcome(account, err, startedAt, label, live);
-    throw err;
+  } finally {
+    if (gated) accountLoginSem.release(gateId);
   }
 }
 
