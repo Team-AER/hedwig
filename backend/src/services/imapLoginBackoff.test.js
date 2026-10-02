@@ -290,6 +290,21 @@ describe('folder status checks', () => {
     expect(mgr._connectCooldown.has(yahoo.id)).toBe(false);
   });
 
+  it('are the login that tests the water once the wait is over, even with a pooled connection idle', async () => {
+    accept = () => true;
+    const { mgr } = setup();
+    const pooled = await acquirePooledClient(yahoo);
+    releasePooledClient(yahoo, pooled);
+    loginGate.refused(yahoo.id, 'refused');
+    await vi.advanceTimersByTimeAsync(LOGIN_BACKOFF_BASE_MS);
+    logins[0].client.status.mockResolvedValue({ messages: 3, unseen: 1, uidNext: 10, uidValidity: 5n });
+    folderStatusQueries();
+    await mgr.folderStatusMonitor.refresh(yahoo);
+    expect(logins).toHaveLength(2);
+    expect(loginGate.refusing(yahoo.id)).toBe(false);
+    expect(console.log).toHaveBeenCalledWith(expect.stringMatching(/accepted again after 1 refusal;/));
+  });
+
   it('run on an idle pooled connection when there is one, without a login', async () => {
     accept = () => true;
     const { mgr } = setup();
@@ -328,5 +343,57 @@ describe('the live connection after Yahoo ends a session', () => {
     live.close();
     await vi.advanceTimersByTimeAsync(10_000);
     expect(tick).not.toHaveBeenCalled();
+  });
+});
+
+describe('backfill at connect', () => {
+  const FOLDERS = ['Archive', 'Bulk', 'Draft', 'Sent', 'Trash'];
+
+  function backfillSetup() {
+    accept = () => true;
+    const { mgr } = setup();
+    mgr.refreshBulkFlags = vi.fn().mockResolvedValue();
+    mgr.startSnippetIndexer = vi.fn().mockResolvedValue();
+    // Every folder already complete: UID SEARCH finds 1 and 2, the DB has both.
+    query.mockImplementation(async (sql) => {
+      if (/FROM email_accounts/.test(sql)) return { rows: [yahoo] };
+      if (/SELECT path FROM folders/.test(sql)) return { rows: FOLDERS.map(path => ({ path })) };
+      if (/SELECT COUNT\(\*\) as count/.test(sql)) return { rows: [{ count: '2', max_uid: 2 }] };
+      if (/SELECT uid FROM messages/.test(sql)) return { rows: [{ uid: '1' }, { uid: '2' }] };
+      return { rows: [] };
+    });
+    return mgr;
+  }
+
+  it('uses one login for every folder, not one per folder', async () => {
+    // Seven logins in 35 s were enough for Yahoo to start refusing them.
+    const mgr = backfillSetup();
+    await mgr.backfillAllFolders(yahoo);
+    expect(logins).toHaveLength(1);
+    const { client } = logins[0];
+    expect(client.getMailboxLock.mock.calls.map(c => c[0])).toEqual(['INBOX', ...FOLDERS]);
+    expect(client.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('logs in again only when the shared connection has died', async () => {
+    const mgr = backfillSetup();
+    ImapFlow.mockImplementationOnce(function (cfg) {
+      const c = fakeClient();
+      // Yahoo ends the session while the Bulk folder is being read.
+      c.search = vi.fn(async () => { if (c.mailbox.path === 'Bulk') c.close(); return [1, 2]; });
+      logins.push({ cfg, client: c });
+      return c;
+    });
+    await mgr.backfillAllFolders(yahoo);
+    expect(logins).toHaveLength(2);
+    expect(logins[1].client.getMailboxLock.mock.calls.map(c => c[0])).toEqual(['Draft', 'Sent', 'Trash']);
+  });
+
+  it('stops at the first held-back login instead of trying every folder', async () => {
+    const mgr = backfillSetup();
+    accept = () => false;
+    await mgr.backfillAllFolders(yahoo);
+    expect(logins).toHaveLength(1);
+    expect(console.log).toHaveBeenCalledWith(expect.stringMatching(/Backfill paused .* at Archive/));
   });
 });

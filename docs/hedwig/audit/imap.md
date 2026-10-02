@@ -242,7 +242,12 @@ login armed it, which postponed the live reconnect: the one login Yahoo was acce
   (`mailYield.upstreamBusy`). Held-back logins are not failures: no warning, and the flag-push
   give-up budget is not spent.
 - **Folder status checks** use an idle pooled connection when there is one, instead of a login a
-  minute. Their refusals close the gate and no longer arm the live cooldown.
+  minute. Their refusals close the gate and no longer arm the live cooldown. Once the wait is
+  over, the next status check makes the probe login itself, so the gate does not stay closed
+  until a pooled session happens to die.
+- **One backfill connection for every folder.** The first deploy of this fix showed the trigger:
+  the backfill at connect logged in once per folder, and Yahoo refused the seventh login in 35 s.
+  The whole sequence now shares one connection and logs in again only when it dies.
 - **Yahoo has no staleness probe** (`stalenessProbe: false`). Yahoo replaces the live session
   every 300 s anyway, and the probe was a login every 3 min.
 - **When a session that lived at least 60 s is closed, the live connection reconnects 2 s
