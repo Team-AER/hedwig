@@ -51,7 +51,7 @@ email address or `DOMAIN\username` with your normal password. A `DOMAIN\username
      - **Accounts in this organizational directory only** if only your Microsoft 365 tenant's
        mailboxes will connect.
    - Redirect URI: platform **Web**,
-     `https://hedwig.brainfc.uk/oauth/microsoft/callback`
+     `https://hedwig.example.com/oauth/microsoft/callback`
      (generally `${APP_URL}/oauth/microsoft/callback`; the OAuth routes are served at `/oauth`,
      not under `/api`).
 2. **Certificates & secrets → Client secrets → New client secret.** Copy the **Value** (not the
@@ -74,13 +74,13 @@ email address or `DOMAIN\username` with your normal password. A `DOMAIN\username
 ### Configure Hedwig
 
 Either fill in Settings → Integrations → Microsoft 365 / Outlook.com (stored encrypted in the
-database), or set these in `/opt/hedwig/.env` on the Hedwig LXC and redeploy:
+database), or set these in your installation’s `.env` and recreate the compose services:
 
 ```
 MICROSOFT_CLIENT_ID=<Application (client) ID>
 MICROSOFT_CLIENT_SECRET=<client secret Value>
 MICROSOFT_TENANT=common
-MICROSOFT_REDIRECT_URI=https://hedwig.brainfc.uk/oauth/microsoft/callback
+MICROSOFT_REDIRECT_URI=https://hedwig.example.com/oauth/microsoft/callback
 ```
 
 - `MICROSOFT_TENANT`: `common` (work and personal accounts), `organizations` (work/school

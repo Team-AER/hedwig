@@ -1,11 +1,26 @@
 # Hedwig architecture
 
-Hedwig is Team-AER's fork of MailFlow. It keeps every upstream capability and adds five layers:
+Hedwig is Team-AER's fork of MailFlow. It builds on the upstream mail client and adds five layers:
 a context engine, learning triage, insights, an agent framework, and plugin runtime v2, plus a
-pane-tree UI shell. All Hedwig code lives in new directories so monthly upstream merges stay clean.
+pane-tree UI shell. Hedwig modules live primarily in dedicated directories, with explicit integration points in the mail engine and UI.
 
-PRD and build plan: https://claude.ai/code/artifact/48ecc34a-a467-473c-b457-16afebc0e082
-UI design canvas: https://claude.ai/artifact/8MoUVyhgwXosgUDeAizWfX
+Start with [Setup](SETUP.md), [API](API.md), and [Plugins](PLUGINS.md). The checked-in
+[product PRD](PRD-v2-product.md) and [design build notes](design/REDESIGN-BUILD-2026-09-24.md)
+record intent and history; implementation and migrations are the current source of truth.
+
+```mermaid
+flowchart TD
+    Client[React client] --> API[Express API and IMAP engine]
+    API <-->|IMAP and SMTP| Providers[Mail providers]
+    API --> DB[(PostgreSQL and pgvector)]
+    API --> Redis[(Redis)]
+    Worker[Hedwig worker] --> DB
+    Worker -->|API-side jobs| API
+    API --> Gateway[Configured model gateway]
+    Worker --> Gateway
+    Worker --> Embeddings[Configured embeddings service]
+    Worker -->|Optional| Tika[Attachment text extraction]
+```
 
 ## Principles (inherited from upstream CLAUDE.md, still binding)
 
@@ -14,8 +29,9 @@ UI design canvas: https://claude.ai/artifact/8MoUVyhgwXosgUDeAizWfX
   body-fetch job, using upstream's own fetch and sanitizer).
 - Loud failure beats silent degradation. A failing step records `hedwig_msg.error`, a failing job
   records `hedwig_jobs.last_error`, and `/api/hedwig/admin/health` shows both.
-- No data loss. Hedwig never deletes or moves mail on its own. Agent actions that change mail are
-  recorded as `hedwig_agent_actions` and wait for the user to approve them.
+- No permanent mail deletion by the agent. Agent actions that change mail are recorded as
+  `hedwig_agent_actions` and wait for user approval. Sorting ordinarily changes database state;
+  opt-in `spam.autoMove` can move confident spam to the provider’s Junk folder, with logged undo.
 - Everything is configurable (see `backend/src/hedwig/config.js`). Add a knob to `SCHEMA` rather
   than hard-coding a number, a model id, a URL, or a schedule.
 - No new npm dependencies without the lead's approval. Everything needed is already installed:
@@ -27,8 +43,8 @@ UI design canvas: https://claude.ai/artifact/8MoUVyhgwXosgUDeAizWfX
 | --- | --- | --- |
 | API (`backend`) | `node src/index.js` | upstream MailFlow + Hedwig routes, API-side jobs (`mail.fetchBody`, approved agent actions) |
 | Worker (`hedwig-worker`) | `node src/hedwig/worker.js` | pipeline scanner, job loop, schedules. No IMAP. |
-| Embeddings | llm-proxy → Uranus Ollama | `POST /v1/embeddings`, `bge-m3` (1024 dims) |
-| Models | `llm-proxy.cls` (LiteLLM) | `Qwen/Qwen3.8-Flash-Next` for the fast, long and agent roles |
+| Embeddings | configured external provider | `POST /v1/embeddings`, lexical hash vectors, or disabled; dimensions must match the configured profile |
+| Models | configured OpenAI-compatible gateway | separate fast, long, and agent roles, with feature routing and budgets |
 
 The API applies migrations at boot (`backend/migrations` then `backend/migrations-hedwig`). The
 worker waits for the Hedwig schema before starting.
@@ -51,7 +67,10 @@ worker waits for the Hedwig schema before starting.
 | `context/` | context agent | entities, embeddings step, topics, extraction, cards, search, ask |
 | `triage/` | triage agent | 3-stage pipeline, classifier, feedback, sender stats, waiting-on |
 | `insights/`, `agent/` | agent+insights agent | stats, briefings, insight cards, agent loop, automations |
-| `pluginsv2/` + `backend/plugins/` | plugins agent | manifests, permissions, loader, facade, first-party plugins |
+| `pluginsv2/` + `backend/src/plugins/` | plugins agent | manifests, permissions, loader, facade, first-party plugins |
+| `sort/`, `labels/`, `work/` | product modules | streams, correction feedback, sorting reasons, and unfinished-work state |
+| `indexer/`, `ask2/`, `cards/` | product modules | message/attachment index, cited answers, record cards and ledger data |
+| `profile/`, `onboarding/` | product modules | user profile context and onboarding routes |
 
 ### Module contract (`modules.js`)
 
@@ -99,7 +118,7 @@ always cover all mail. Commitments are not made from mail older than `pipeline.b
 
 ### Data model
 
-All tables are in `backend/migrations-hedwig/h0001_core.sql`. Modules that need more columns add a
+Hedwig tables and changes are defined by the sequence of files in `backend/migrations-hedwig/`, starting with `h0001_core.sql`. Modules that need more columns add a
 new file `h00NN_<module>_<what>.sql` (additive, idempotent: `IF NOT EXISTS`). Never edit h0001 after
 it has shipped; never edit upstream migrations.
 
@@ -111,10 +130,10 @@ Always through `llm.js`. Pick a role (`fast` for per-message work, `long` for su
 parse with `extractJson`; always handle `null`. Every model output that reaches the UI carries the
 message ids it came from.
 
-Model: `Qwen/Qwen3.8-Flash-Next` supports tools and JSON mode, 262k context, ~2 s for short calls.
-The gateway rejects `reasoning_effort: "off"`; `llm.js` already maps off → `none`.
+Model capabilities, context limits, and latency depend on your configured provider.
+Choose models that support the role’s tool/JSON requirements. `llm.js` normalizes routing and reasoning settings for the gateway.
 
-Decision models (Laya on the Avifors CPU pool) are called with `llm.systemOne` (`POST /v1/systemone`,
+Configured decision models are called with `llm.systemOne` (`POST /v1/systemone`,
 the Ollama/Nimble System One shape). The model's training data is in `llm/decision-models`. The state
 text and question wording must match that training data.
 - `sort/decision.js` (`aer-laya`, layer `decision`): settles stream, spam and needs-you before Reflex
@@ -161,6 +180,7 @@ context, `beforeSend` in the send route (plugins agent), `collectInsights` in in
 | `shell/`, `theme/`, `icons.jsx`, `index.js` | shell agent | pane tree, templates, layout editor, tokens/themes, palette integration, plugin bundle loader, MailApp integration |
 | `views/` | views agent | every Hedwig view (needs-you, context card, ask, timeline, insights, agent, settings pages) |
 | `frontend/src/plugins/<first-party>/` | plugins agent | frontend halves of first-party plugins |
+| `v2/` | product views | People, Reading, Records, Screener, Daily Brief, Hedwig today, work lists and ledger |
 
 Views register with `registerView` from `hedwig/views/index.js` (imported once by `hedwig/index.js`).
 Commands register with `registerCommand`. Cross-pane state lives in `useHedwig`; upstream state
@@ -196,16 +216,23 @@ element is a real `<button>`/`<a>`/`<input>` with a label; 44 px targets on phon
 
 ## Testing
 
+Follow [Setup → Local development](SETUP.md#local-development) to configure Node.js 22,
+the development database, and `backend/.env`; a private `.env.hedwig-dev` file is not supplied by this repository.
+
 ```bash
-export PATH=/opt/homebrew/opt/node@22/bin:$PATH
-docker compose -f docker-compose.devdb.yml up -d          # pgvector + redis on 55432/56379
-cd backend && set -a && . ./.env.hedwig-dev && set +a
-node scripts/hedwig-migrate.mjs && node scripts/hedwig-seed.mjs   # demo / hedwig-demo-password
-npx vitest run src/hedwig                                  # unit tests
-npm run test:hedwig-it                                     # + integration tests (sequential: they share the dev DB)
-cd ../frontend && npm test && npm run lint && npm run build
+# backend/
+npm test
+npm run lint
+npm run lint:plugins
+node scripts/hedwig-migrate.mjs
+npm run test:hedwig-it
+
+# frontend/
+npm test
+npm run lint
+npm run build
 ```
 
-Unit tests mock `../../services/db.js` with `vi.mock`. Integration tests are guarded with
-`describe.skipIf(!process.env.HEDWIG_IT)` and may use the seeded demo user. The gateway at
-`http://llm-proxy.cls/v1` is reachable from dev machines; tests must not depend on it.
+Unit tests mock the database. Integration tests are guarded by `HEDWIG_IT` and share a
+disposable development database, so the integration script runs them sequentially. Tests
+must not depend on a production mailbox or a live model gateway.
