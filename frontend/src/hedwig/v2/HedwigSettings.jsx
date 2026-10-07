@@ -1,6 +1,6 @@
 // Settings → Hedwig, the v2 part. The Power mode switch (the rail no longer carries it), then
 // Simple: five switches, how far back Hedwig analyzes mail, and the look (a blue-family accent, blur, light or dark, dark mode for
-// mail). Power adds the rules list with dry-run (/sort/rules), the model routing table (read-only
+// mail, where PDFs and pictures open). Power adds the rules list with dry-run (/sort/rules), the model routing table (read-only
 // unless admin), prompt versions (admin) and index status (/index/status). Section headers are the 11px/600
 // SectionLabel, rows 13px, fields radius 8 on --hw-field; mono only for model and prompt ids.
 import { useState } from 'react';
@@ -9,7 +9,7 @@ import { useHedwig } from '../store.js';
 import { useStore } from '../../store/index.js';
 import { useIsAdmin } from '../views/hooks.js';
 import { DEFAULT_ACCENT } from '../theme/tokens.js';
-import { useV2, UI_DEFAULTS } from './state.js';
+import { useV2, UI_DEFAULTS, normaliseAttachmentOpen } from './state.js';
 import { v2Api, listOf, isMockMode } from './client.js';
 import { useV2Resource } from './hooks.js';
 import { nextScheme, schemeLabel } from './Rail.jsx';
@@ -208,22 +208,27 @@ export function mailDarkChoices() {
   ];
 }
 
-// "Dark mode for mail": Smart darkens light mail in the dark theme (images keep their colours),
-// Off shows every mail on its own light page. Two segments on the field fill, radius 8.
-function MailDarkRow({ value }) {
-  const current = normaliseMailDark(value);
-  const label = tv('hedwig.v2.settings.mailDark', 'Dark mode for mail');
+/** Where PDFs and pictures open, in order: in Hedwig's viewer (the default) or in a new tab. */
+export function attachmentOpenChoices() {
+  return [
+    { value: 'viewer', label: tv('hedwig.v2.settings.attachmentOpenViewer', 'In Hedwig') },
+    { value: 'tab', label: tv('hedwig.v2.settings.attachmentOpenTab', 'In a new tab') },
+  ];
+}
+
+// One per-user ui.* choice as segments on the field fill, radius 8.
+function ChoiceRow({ label, help, choices, current, onChoose, ...rest }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 0', borderTop: `1px solid ${V.line}` }}>
       <span style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
         <span style={{ fontSize: 13 }}>{label}</span>
-        <span style={{ fontSize: 12, color: V.muted }}>{tv('hedwig.v2.settings.mailDarkHelp', 'In the dark look, light mail is darkened and photos keep their colours.')}</span>
+        <span style={{ fontSize: 12, color: V.muted }}>{help}</span>
       </span>
-      <div role="radiogroup" aria-label={label} data-mail-dark-setting="" style={{ display: 'inline-flex', padding: 2, gap: 2, borderRadius: 8, background: V.field, flexShrink: 0 }}>
-        {mailDarkChoices().map((c) => {
+      <div role="radiogroup" aria-label={label} {...rest} style={{ display: 'inline-flex', padding: 2, gap: 2, borderRadius: 8, background: V.field, flexShrink: 0 }}>
+        {choices.map((c) => {
           const on = current === c.value;
           return (
-            <button key={c.value} type="button" role="radio" aria-checked={on} onClick={() => { if (!on) useV2.getState().setPref('mailDark', c.value); }}
+            <button key={c.value} type="button" role="radio" aria-checked={on} onClick={() => { if (!on) onChoose(c.value); }}
               className="hw-btn"
               style={{ height: 24, padding: '0 10px', border: 0, borderRadius: 6, background: on ? V.content : 'transparent', boxShadow: on ? `0 0 0 1px ${V.line}` : 'none', color: on ? V.ink : V.muted, font: 'inherit', fontSize: 12, fontWeight: on ? 600 : 400, cursor: on ? 'default' : 'pointer' }}>
               {c.label}
@@ -232,6 +237,36 @@ function MailDarkRow({ value }) {
         })}
       </div>
     </div>
+  );
+}
+
+// "Dark mode for mail": Smart darkens light mail in the dark theme (images keep their colours),
+// Off shows every mail on its own light page.
+function MailDarkRow({ value }) {
+  return (
+    <ChoiceRow
+      label={tv('hedwig.v2.settings.mailDark', 'Dark mode for mail')}
+      help={tv('hedwig.v2.settings.mailDarkHelp', 'In the dark look, light mail is darkened and photos keep their colours.')}
+      choices={mailDarkChoices()}
+      current={normaliseMailDark(value)}
+      onChoose={(v) => useV2.getState().setPref('mailDark', v)}
+      data-mail-dark-setting=""
+    />
+  );
+}
+
+// "Open PDFs and pictures": in Hedwig's viewer over the message (which can still hand one to a
+// tab), or straight in a new browser tab. Saved per person.
+function AttachmentOpenRow({ value }) {
+  return (
+    <ChoiceRow
+      label={tv('hedwig.v2.settings.attachmentOpen', 'Open PDFs and pictures')}
+      help={tv('hedwig.v2.settings.attachmentOpenHelp', 'In Hedwig shows them over the message, with a button to open a new tab.')}
+      choices={attachmentOpenChoices()}
+      current={normaliseAttachmentOpen(value)}
+      onChoose={(v) => useV2.getState().setPref('attachmentOpen', v)}
+      data-attachment-open-setting=""
+    />
   );
 }
 
@@ -265,6 +300,7 @@ function LookSection() {
         <LinkBtn onClick={() => useV2.getState().setScheme(nextScheme(scheme))}>{schemeLabel(scheme)}</LinkBtn>
       </div>
       <MailDarkRow value={prefs.mailDark} />
+      <AttachmentOpenRow value={prefs.attachmentOpen} />
       {(prefs.accent !== UI_DEFAULTS.accent || prefs.blur !== UI_DEFAULTS.blur) && (
         <div style={{ paddingTop: 4 }}>
           <LinkBtn muted onClick={() => { useV2.getState().setPref('accent', UI_DEFAULTS.accent); useV2.getState().setPref('blur', UI_DEFAULTS.blur); setBlur(UI_DEFAULTS.blur); }}>

@@ -218,11 +218,13 @@
     "downloadAll": "Download all",
     "downloadAllZip": "Download all (zip)",
     "preview": {
-      "previous": "Previous picture",
-      "next": "Next picture",
+      "previous": "Previous attachment",
+      "next": "Next attachment",
       "download": "Download",
       "close": "Close",
-      "failed": "This picture could not be shown."
+      "failed": "This picture could not be shown.",
+      "failedPdf": "This PDF could not be shown here.",
+      "openInTab": "Open in new tab"
     },
     "reply": "Reply",
     "replyAll": "Reply All",

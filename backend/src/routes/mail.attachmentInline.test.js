@@ -66,6 +66,22 @@ describe('GET /messages/:id/attachments/:part?inline=1', () => {
     expect(res.headers.get('content-disposition')).toMatch(/^inline;/);
   });
 
+  it('lets this origin alone frame an inline PDF, for the reader\'s viewer', async () => {
+    mockAttachment({ part: '2', filename: 'statement.pdf', type: 'application/pdf', size: 5 });
+    const res = await fetch(url(true));
+    expect(res.headers.get('x-frame-options')).toBe('SAMEORIGIN');
+    expect(res.headers.get('content-security-policy')).toBe("frame-ancestors 'self'");
+  });
+
+  it('a picture, or a PDF that downloads, is not made frameable', async () => {
+    mockAttachment({ part: '2', filename: 'Picture1.jpg', type: 'image/jpeg', size: 5 });
+    expect((await fetch(url(true))).headers.get('x-frame-options')).toBeNull();
+    mockAttachment({ part: '2', filename: 'statement.pdf', type: 'application/pdf', size: 5 });
+    const res = await fetch(url(false));
+    expect(res.headers.get('x-frame-options')).toBeNull();
+    expect(res.headers.get('content-security-policy')).toBeNull();
+  });
+
   it('an SVG or HTML file still downloads, even when asked inline', async () => {
     mockAttachment({ part: '2', filename: 'logo.svg', type: 'image/svg+xml', size: 5 });
     const res = await fetch(url(true));

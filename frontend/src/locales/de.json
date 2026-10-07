@@ -218,11 +218,13 @@
     "downloadAll": "Alle herunterladen",
     "downloadAllZip": "Alle herunterladen (ZIP)",
     "preview": {
-      "previous": "Vorheriges Bild",
-      "next": "Nächstes Bild",
+      "previous": "Vorheriger Anhang",
+      "next": "Nächster Anhang",
       "download": "Herunterladen",
       "close": "Schließen",
-      "failed": "Dieses Bild kann nicht angezeigt werden."
+      "failed": "Dieses Bild kann nicht angezeigt werden.",
+      "failedPdf": "Diese PDF-Datei kann hier nicht angezeigt werden.",
+      "openInTab": "In neuem Tab öffnen"
     },
     "reply": "Antworten",
     "replyAll": "Allen antworten",

@@ -1,5 +1,5 @@
 // v2 client state shared by the rail, the tab bar and the views: the per-user ui.* settings
-// (Power mode, blur, accent, dark mode for mail, and the two switches the frontend itself honours), the stream
+// (Power mode, blur, accent, dark mode for mail, where attachments open, and the two switches the frontend itself honours), the stream
 // counts, the "Hedwig today" numbers and the thread the list panes have selected.
 import { create } from 'zustand';
 import { hedwigApi } from '../api.js';
@@ -18,6 +18,8 @@ export const UI_DEFAULTS = {
   helpMeWrite: true,
   // Dark mode for mail bodies under the dark theme: 'smart' (utils/mailDarkMode.js) or 'off'.
   mailDark: 'smart',
+  // Where a PDF or picture attachment opens: 'viewer' (over the reader) or 'tab' (a new tab).
+  attachmentOpen: 'viewer',
 };
 
 const UI_KEYS = Object.keys(UI_DEFAULTS);
@@ -35,6 +37,10 @@ export function applyUserVars(prefs) {
   el.textContent = userVarsCss({ accent: prefs.accent, blur: prefs.blur });
 }
 
+export function normaliseAttachmentOpen(value) {
+  return value === 'tab' ? 'tab' : 'viewer';
+}
+
 /** ui.* values from GET /settings field descriptions ([{ key, value }]). */
 export function prefsFromFields(fields) {
   const out = {};
@@ -46,6 +52,7 @@ export function prefsFromFields(fields) {
   if (out.blur !== undefined) out.blur = clampBlur(out.blur);
   if (out.accent !== undefined) out.accent = normaliseHex(out.accent) || DEFAULT_ACCENT;
   if (out.mailDark !== undefined) out.mailDark = normaliseMailDark(out.mailDark);
+  if (out.attachmentOpen !== undefined) out.attachmentOpen = normaliseAttachmentOpen(out.attachmentOpen);
   return out;
 }
 

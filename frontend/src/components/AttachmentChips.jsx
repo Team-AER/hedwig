@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { classifyAttachmentRisk } from '../utils/attachmentRisk.js';
 import {
-  THUMB_MAX_BYTES, attachmentUrl, getAttachmentObjectUrl, isPdfAttachment, isPreviewableImage,
-  peekAttachmentUrl, splitFilename,
+  THUMB_MAX_BYTES, attachmentUrl, getAttachmentObjectUrl, isPreviewableImage, peekAttachmentUrl,
+  previewKind, splitFilename,
 } from '../utils/attachmentPreview.js';
 import AttachmentLightbox from './AttachmentLightbox.jsx';
 
@@ -15,9 +15,10 @@ import AttachmentLightbox from './AttachmentLightbox.jsx';
 // MessagePane's own markup, unchanged; `look="hedwig"` is the reader's tile (220×48, radius 8,
 // hairline, over the --hw-* palette).
 //
-// A picture shows a 40×40 thumbnail (fetched once it scrolls into view, up to 8 MB) and opens in
-// a lightbox; a PDF opens in the browser's viewer in a new tab; anything else downloads. Long
-// names are cut in the middle so the extension stays visible.
+// A picture shows a 40×40 thumbnail (fetched once it scrolls into view, up to 8 MB). A picture or
+// a PDF opens in the attachment viewer over the reader, which can hand it on to a new tab;
+// `openIn="tab"` (the person's ui.attachmentOpen) opens it straight in a new tab instead. Anything
+// else downloads. Long names are cut in the middle so the extension stays visible.
 
 // riskArmed value for the "Download all" link. A Symbol, so no attachment part can ever equal it.
 const DOWNLOAD_ALL = Symbol('downloadAll');
@@ -102,12 +103,12 @@ export async function downloadAttachment(messageId, part, filename) {
 }
 
 /**
- * A PDF in a new tab, in the browser's own viewer: the attachment route with ?inline=1, which the
- * backend serves as application/pdf with an inline disposition. Opened synchronously from the
- * click, so no popup blocker stands in the way; where no tab opens (a shell that refuses
- * window.open), it downloads instead.
+ * A picture or a PDF in a new tab, as the browser shows it: the attachment route with ?inline=1,
+ * which the backend serves as the picture's type or application/pdf with an inline disposition.
+ * Opened synchronously from the click, so no popup blocker stands in the way; where no tab opens
+ * (a shell that refuses window.open), it downloads instead.
  */
-export function openPdfAttachment(messageId, part, filename) {
+export function openAttachmentInTab(messageId, part, filename) {
   const w = window.open(attachmentUrl(messageId, part, { inline: true }), '_blank');
   if (w) { try { w.opener = null; } catch { /* cross-origin already */ } return Promise.resolve(); }
   return downloadAttachment(messageId, part, filename);
@@ -184,7 +185,7 @@ const LOOKS = {
   },
 };
 
-export default function AttachmentChips({ messageId, attachments, look = 'classic' }) {
+export default function AttachmentChips({ messageId, attachments, look = 'classic', openIn = 'viewer' }) {
   const { t } = useTranslation();
   const L = LOOKS[look] || LOOKS.classic;
   const hedwig = look === 'hedwig';
@@ -193,14 +194,15 @@ export default function AttachmentChips({ messageId, attachments, look = 'classi
   const [riskArmed, setRiskArmed] = useState(null);
   const [downloadingPart, setDownloadingPart] = useState(null);
   const [hovered, setHovered] = useState(null);
-  // The lightbox's position among this message's pictures, or null when it is closed.
+  // The viewer's position among this message's pictures and PDFs, or null when it is closed.
   const [preview, setPreview] = useState(null);
   useEffect(() => { setRiskArmed(null); setPreview(null); }, [messageId]);
   const closePreview = useCallback(() => setPreview(null), []);
 
   const list = Array.isArray(attachments) ? attachments : [];
   if (!list.length || !messageId) return null;
-  const images = list.filter(isPreviewableImage).map((att) => ({ messageId, part: att.part, filename: att.filename, size: att.size }));
+  const inTab = openIn === 'tab';
+  const viewable = list.filter(previewKind).map((att) => ({ messageId, part: att.part, filename: att.filename, size: att.size, kind: previewKind(att) }));
 
   const handleDownload = async (part, filename) => {
     setDownloadingPart(part);
@@ -212,21 +214,26 @@ export default function AttachmentChips({ messageId, attachments, look = 'classi
       setDownloadingPart(null);
     }
   };
-  // A picture previews, a PDF opens in a tab, anything else downloads.
+  const openInTab = (att) => {
+    openAttachmentInTab(messageId, att.part, att.filename).catch((err) => console.error('Download error:', err));
+  };
+  // A picture or a PDF opens in the viewer (or a tab, by choice), anything else downloads.
   const handleOpen = (att) => {
-    if (isPreviewableImage(att)) {
-      const at = images.findIndex((img) => img.part === att.part);
+    if (previewKind(att)) {
+      if (inTab) { openInTab(att); return; }
+      const at = viewable.findIndex((v) => v.part === att.part);
       if (at >= 0) { setPreview(at); return; }
-    }
-    if (isPdfAttachment(att)) {
-      openPdfAttachment(messageId, att.part, att.filename).catch((err) => console.error('Download error:', err));
-      return;
     }
     handleDownload(att.part, att.filename);
   };
   const downloadPreviewed = (item, url) => {
     if (url) saveUrl(url, item.filename);
     else handleDownload(item.part, item.filename);
+  };
+  // Quick Look's "Open with Preview": the tab takes over, so the viewer closes.
+  const openPreviewedInTab = (item) => {
+    setPreview(null);
+    openInTab(item);
   };
 
   // "Download all" hands over every file at once, so it asks first whenever one of them would. While
@@ -283,7 +290,7 @@ export default function AttachmentChips({ messageId, attachments, look = 'classi
             ? t('message.attachmentRisk.doubleExt', { ext: risk.doubleExt })
             : t(`message.attachmentRisk.${risk.level}`, { ext: risk.ext });
           const over = hovered === i;
-          const kind = isPreviewableImage(att) ? 'preview' : isPdfAttachment(att) ? 'open' : 'download';
+          const kind = !previewKind(att) ? 'download' : inTab ? 'open' : 'preview';
           return (
           <button
             key={i}
@@ -345,13 +352,14 @@ export default function AttachmentChips({ messageId, attachments, look = 'classi
           );
         })}
       </div>
-      {preview !== null && images[preview] && (
+      {preview !== null && viewable[preview] && (
         <AttachmentLightbox
-          items={images}
+          items={viewable}
           index={preview}
           onIndex={setPreview}
           onClose={closePreview}
           onDownload={downloadPreviewed}
+          onOpenInTab={openPreviewedInTab}
           formatSize={formatBytes}
         />
       )}

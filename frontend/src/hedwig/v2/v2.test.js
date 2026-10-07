@@ -76,7 +76,7 @@ const P = await import('./primitives.jsx');
 const StreamView = (await import('./StreamView.jsx')).default;
 const Screener = (await import('./Screener.jsx')).default;
 const Thread = (await import('./Thread.jsx')).default;
-const { foldRuns, upstreamOwnsKey, hiddenInPage } = await import('./Thread.jsx');
+const { foldRuns, upstreamOwnsKey, hiddenInPage, MessageBody } = await import('./Thread.jsx');
 const { shortcutBus } = await import('../../utils/shortcutBus.js');
 const Brief = (await import('./Brief.jsx')).default;
 const Today = (await import('./Today.jsx')).default;
@@ -1216,6 +1216,41 @@ describe('Settings → Hedwig (Simple and Power)', () => {
     assert.deepEqual(all('button[role="radio"]', document.querySelector('[data-mail-dark-setting]')).map((b) => b.getAttribute('aria-checked')), ['false', 'true']);
     assert.deepEqual(prefsFromFields([{ key: 'ui.mailDark', value: 'off' }]), { mailDark: 'off' });
     assert.deepEqual(prefsFromFields([{ key: 'ui.mailDark', value: 'weird' }]), { mailDark: 'smart' });
+  });
+
+  test('The look: Open PDFs and pictures, In Hedwig (the default) or In a new tab, saved as ui.attachmentOpen; the reader follows it', async () => {
+    await cleanup();
+    await render(h(HedwigSettingsV2));
+    const group = document.querySelector('[data-attachment-open-setting]');
+    assert.ok(group, 'the row is in The look');
+    assert.equal(group.getAttribute('aria-label'), 'Open PDFs and pictures');
+    const radios = all('button[role="radio"]', group);
+    assert.deepEqual(radios.map((b) => b.textContent), ['In Hedwig', 'In a new tab']);
+    assert.deepEqual(radios.map((b) => b.getAttribute('aria-checked')), ['true', 'false']);
+    await click(radios[1]);
+    assert.equal(useV2.getState().prefs.attachmentOpen, 'tab');
+    assert.deepEqual(prefsFromFields([{ key: 'ui.attachmentOpen', value: 'tab' }]), { attachmentOpen: 'tab' });
+    assert.deepEqual(prefsFromFields([{ key: 'ui.attachmentOpen', value: 'weird' }]), { attachmentOpen: 'viewer' });
+
+    const opened = [];
+    const realOpen = dom.window.open;
+    dom.window.open = (url) => { opened.push(url); return {}; };
+    try {
+      await cleanup();
+      const m = { id: 'm-pdf', subject: 'Statement', from: { email: 'bank@example.com' } };
+      const state = { body: { html: null, text: 'Attached.', attachments: [{ part: '2', filename: 'statement.pdf', type: 'application/pdf', size: 1000 }] }, error: null, loading: false, remote: false, loadImages() {}, retry() {} };
+      await render(h(MessageBody, { m, state }));
+      await click(document.querySelector('[data-attachment]'));
+      assert.deepEqual(opened, ['/api/mail/messages/m-pdf/attachments/2?inline=1'], 'a new tab, by choice');
+      assert.ok(!document.querySelector('[role="dialog"]'));
+      await React.act(async () => { useV2.setState({ prefs: { ...UI_DEFAULTS } }); });
+      await click(document.querySelector('[data-attachment]'));
+      assert.equal(opened.length, 1, 'no tab by default');
+      assert.ok(document.querySelector('[role="dialog"] iframe[data-lightbox-pdf]'), 'the viewer opens over the reader');
+    } finally {
+      dom.window.open = realOpen;
+      await cleanup();
+    }
   });
 
   test('Analyze mail from: the household default until the person picks their own window', async () => {

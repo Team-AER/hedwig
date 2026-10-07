@@ -218,11 +218,13 @@
     "downloadAll": "Tout télécharger",
     "downloadAllZip": "Tout télécharger (zip)",
     "preview": {
-      "previous": "Image précédente",
-      "next": "Image suivante",
+      "previous": "Pièce jointe précédente",
+      "next": "Pièce jointe suivante",
       "download": "Télécharger",
       "close": "Fermer",
-      "failed": "Impossible d'afficher cette image."
+      "failed": "Impossible d'afficher cette image.",
+      "failedPdf": "Impossible d'afficher ce PDF ici.",
+      "openInTab": "Ouvrir dans un nouvel onglet"
     },
     "reply": "Répondre",
     "replyAll": "Répondre à tous",

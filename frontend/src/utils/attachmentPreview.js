@@ -1,7 +1,8 @@
-// What an attachment chip can show without a download: a thumbnail for a picture, the picture in
-// a lightbox, a PDF in the browser's own viewer. Pictures are fetched once as blobs (with the
-// session cookie) and kept as object URLs in a small LRU, so the chip, the lightbox and the next
-// visit to the same message share one fetch. The kind is read from the extension first, because
+// What an attachment chip can show without a download: a thumbnail for a picture, and the picture
+// or a PDF in the attachment viewer (the PDF in the browser's own viewer, framed). Pictures are
+// fetched once as blobs (with the session cookie) and kept as object URLs in a small LRU, so the
+// chip, the viewer and the next visit to the same message share one fetch; a PDF is not, the frame
+// loads it from the inline route. The kind is read from the extension first, because
 // the declared MIME type is sender-controlled; SVG is never previewed (it can carry script).
 
 import { classifyAttachmentRisk } from './attachmentRisk.js';
@@ -34,6 +35,13 @@ export function isPdfAttachment(att) {
   if (classifyAttachmentRisk(name, att.type).level !== 'ok') return false;
   const ext = extOf(name);
   return ext === 'pdf' || (!ext && String(att.type || '').toLowerCase().startsWith('application/pdf'));
+}
+
+/** What the attachment viewer can show it as: 'image', 'pdf', or null (it downloads). */
+export function previewKind(att) {
+  if (isPreviewableImage(att)) return 'image';
+  if (isPdfAttachment(att)) return 'pdf';
+  return null;
 }
 
 /**

@@ -220,11 +220,13 @@
     "downloadAll": "Pobierz wszystko",
     "downloadAllZip": "Pobierz wszystko (zip)",
     "preview": {
-      "previous": "Poprzedni obraz",
-      "next": "Następny obraz",
+      "previous": "Poprzedni załącznik",
+      "next": "Następny załącznik",
       "download": "Pobierz",
       "close": "Zamknij",
-      "failed": "Nie można wyświetlić tego obrazu."
+      "failed": "Nie można wyświetlić tego obrazu.",
+      "failedPdf": "Nie można tu wyświetlić tego pliku PDF.",
+      "openInTab": "Otwórz w nowej karcie"
     },
     "reply": "Odpowiedz",
     "replyAll": "Odpowiedz wszystkim",

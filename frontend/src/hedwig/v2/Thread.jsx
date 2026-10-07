@@ -440,6 +440,7 @@ function TextBody({ text }) {
  */
 export function MessageBody({ m, state, phone = false, darkMode = false, onDarkMode = null }) {
   const { body, error, loading, remote, loadImages, retry } = state;
+  const attachmentOpen = useV2((s) => s.prefs?.attachmentOpen);
   const isReply = isReplyMessage(m.subject || m.raw?.subject, m.inReplyTo);
   if (!body) {
     if (error) {
@@ -462,7 +463,7 @@ export function MessageBody({ m, state, phone = false, darkMode = false, onDarkM
       {html ? <HtmlBody m={m} html={html} body={body} isReply={isReply} darkMode={darkMode} onDarkMode={onDarkMode} /> : <TextBody text={text} />}
       {error && <ErrorLine error={error} onRetry={retry} retryLabel={tv('hedwig.v2.action.retry', 'Try again')} />}
       {Array.isArray(body.attachments) && body.attachments.length > 0 && (
-        <AttachmentChips look="hedwig" messageId={m.id} attachments={body.attachments} />
+        <AttachmentChips look="hedwig" messageId={m.id} attachments={body.attachments} openIn={attachmentOpen} />
       )}
     </div>
   );

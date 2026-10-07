@@ -692,15 +692,22 @@ router.get('/messages/:id/attachments/:part', async (req, res) => {
 
     if (!buffer) return res.status(404).json({ error: 'Could not fetch attachment' });
 
-    // ?inline=1 (the reader's thumbnails, lightbox and PDF tab): shown in the browser when the
-    // file is a picture or a PDF, as the type inlineContentType vouches for; anything else still
-    // downloads. A picture also gets a sandbox CSP, so even a mislabelled file cannot script this
-    // origin (not a PDF: Chrome's viewer refuses to load under a sandbox).
+    // ?inline=1 (the reader's thumbnails and its attachment viewer, or a new tab): shown in the
+    // browser when the file is a picture or a PDF, as the type inlineContentType vouches for;
+    // anything else still downloads. A picture also gets a sandbox CSP, so even a mislabelled file
+    // cannot script this origin (not a PDF: Chrome's viewer refuses to load under a sandbox). A
+    // PDF may be framed by this origin alone, for the viewer; frame-ancestors outranks the
+    // X-Frame-Options a proxy in front may add.
     const inlineType = req.query.inline === '1' ? inlineContentType(att.filename, att.type) : null;
     if (inlineType) {
       res.setHeader('Content-Type', inlineType);
       res.setHeader('Content-Disposition', attachmentDisposition(att.filename, 'inline'));
-      if (inlineType !== 'application/pdf') res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'; img-src 'self'; style-src 'unsafe-inline'");
+      if (inlineType === 'application/pdf') {
+        res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+        res.setHeader('Content-Security-Policy', "frame-ancestors 'self'");
+      } else {
+        res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'; img-src 'self'; style-src 'unsafe-inline'");
+      }
     } else {
       res.setHeader('Content-Type', att.type || 'application/octet-stream');
       res.setHeader('Content-Disposition', attachmentDisposition(att.filename));

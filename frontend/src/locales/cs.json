@@ -307,11 +307,13 @@
     "downloadAll": "Stáhnout vše",
     "downloadAllZip": "Stáhnout vše (zip)",
     "preview": {
-      "previous": "Předchozí obrázek",
-      "next": "Další obrázek",
+      "previous": "Předchozí příloha",
+      "next": "Další příloha",
       "download": "Stáhnout",
       "close": "Zavřít",
-      "failed": "Tento obrázek nelze zobrazit."
+      "failed": "Tento obrázek nelze zobrazit.",
+      "failedPdf": "Toto PDF zde nelze zobrazit.",
+      "openInTab": "Otevřít na nové kartě"
     },
     "reply": "Odpovědět",
     "replyAll": "Odpovědět všem",
