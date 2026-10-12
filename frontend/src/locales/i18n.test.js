@@ -189,6 +189,16 @@ const SAME_VALUE_ALLOWED = {
   'hedwig.v2.ask.copy':               [['es', 'ptBR']],
   // "Sources" (en, fr)
   'hedwig.v2.ask.sources':            [['en', 'fr']],
+  // Hedwig accounts (Add account screen): "e" for "and" (it, pt); "Configurar", "Cancelar",
+  // "Copiar", "Continuar" (es, pt); "ID client" is what Google's console says in fr and it
+  'hedwig.accounts.googleSub':        [['it', 'ptBR']],
+  'hedwig.accounts.microsoftSub':     [['it', 'ptBR']],
+  'hedwig.accounts.hintSetup':        [['es', 'ptBR']],
+  'hedwig.accounts.cancel':           [['es', 'ptBR']],
+  'hedwig.accounts.copy':             [['es', 'ptBR']],
+  'hedwig.accounts.clientId':         [['fr', 'it']],
+  'hedwig.accounts.continue':         [['es', 'ptBR']],
+  'hedwig.accounts.manual':           [['es', 'ptBR']],
   // "Version" — same spelling in de, en, fr
   'admin.about.version': [['de', 'en', 'fr']],
   // "via" (on-behalf-of sender, #366) — identical preposition in en and fr

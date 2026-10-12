@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
-  OAUTH_PROVIDERS, MICROSOFT_SCOPE, getMicrosoftConfig, isOAuthConfigured,
+  OAUTH_PROVIDERS, MICROSOFT_SCOPE, getMicrosoftConfig, getGoogleConfig, isOAuthConfigured,
   buildAuthorizeUrl, buildCodeExchangeBody, buildRefreshBody, microsoftLoginName, oauthProvider,
+  normalizeLoginHint,
 } from '../services/oauthProviders.js';
 
 const ENV_KEYS = [
@@ -57,6 +58,56 @@ describe('Microsoft config', () => {
   it('is not configured without a client ID, and has no redirect without APP_URL', () => {
     expect(isOAuthConfigured('microsoft')).toBe(false);
     expect(getMicrosoftConfig().redirectUri).toBeUndefined();
+  });
+});
+
+describe('Google config', () => {
+  it('derives the redirect from APP_URL like Microsoft, so a client ID and secret are enough', () => {
+    process.env.GOOGLE_CLIENT_ID = 'g-id';
+    process.env.GOOGLE_CLIENT_SECRET = 'g-secret';
+    process.env.APP_URL = 'https://mail.example.org/';
+    expect(getGoogleConfig()).toEqual({
+      clientId: 'g-id',
+      clientSecret: 'g-secret',
+      redirectUri: 'https://mail.example.org/oauth/google/callback',
+    });
+    expect(isOAuthConfigured('google')).toBe(true);
+  });
+
+  it('keeps an explicit GOOGLE_REDIRECT_URI', () => {
+    process.env.GOOGLE_REDIRECT_URI = 'https://other.example/oauth/google/callback';
+    process.env.APP_URL = 'https://mail.example.org';
+    expect(getGoogleConfig().redirectUri).toBe('https://other.example/oauth/google/callback');
+  });
+
+  it('is not configured with a client ID but no redirect (no APP_URL): the start route could only fail', () => {
+    process.env.GOOGLE_CLIENT_ID = 'g-id';
+    expect(isOAuthConfigured('google')).toBe(false);
+    process.env.APP_URL = 'https://mail.example.org';
+    expect(isOAuthConfigured('google')).toBe(true);
+  });
+});
+
+describe('login_hint', () => {
+  it('passes a plain address to both providers', () => {
+    for (const id of ['microsoft', 'google']) {
+      const url = parse(buildAuthorizeUrl(id, {
+        state: 's', loginHint: ' ana@example.org ',
+        config: { clientId: 'id', redirectUri: 'https://h.example/cb', tenantId: 'common' },
+      }));
+      expect(url.searchParams.get('login_hint')).toBe('ana@example.org');
+    }
+  });
+
+  it('drops anything that is not a plain address', () => {
+    for (const bad of [undefined, '', 'ana', 'ana@', '@example.org', 'a b@example.org', 'a@b@example.org', 'ana@example\r\n.org', `${'a'.repeat(250)}@example.org`, ['ana@example.org']]) {
+      expect(normalizeLoginHint(bad)).toBeNull();
+    }
+    const url = parse(buildAuthorizeUrl('google', {
+      state: 's', loginHint: 'not an address',
+      config: { clientId: 'id', redirectUri: 'https://h.example/cb' },
+    }));
+    expect(url.searchParams.has('login_hint')).toBe(false);
   });
 });
 

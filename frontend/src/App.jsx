@@ -8,10 +8,14 @@ import { applyLayout } from './layouts.js';
 import LoginPage from './components/LoginPage.jsx';
 import MailApp from './components/MailApp.jsx';
 import LockScreen from './components/LockScreen.jsx';
+import { signInResultFromUrl, reportSignInResult } from './hedwig/accounts/signIn.js';
+import { tv } from './hedwig/v2/i18n.js';
 
 export default function App() {
   const { user, setUser, loadPreferences, isLocked, setLocked } = useStore();
   const [checking, setChecking] = useState(true);
+  // Set when this window is a mailbox sign-in window that could not close itself.
+  const [signInWindow, setSignInWindow] = useState(null);
 
   // Register service worker on first mount — independent of auth state.
   // The SW itself does nothing until the user explicitly grants push permission.
@@ -42,17 +46,14 @@ export default function App() {
     const savedListWidth = Number(localStorage.getItem('mailflow_list_width')) || undefined;
     applyLayout(localStorage.getItem('mailflow_layout') || 'comfortable', savedListWidth);
 
-    // Handle OAuth popup callback
-    const params = new URLSearchParams(window.location.search);
-    const oauthSuccess = params.get('oauth_success');
-    const oauthError = params.get('oauth_error');
-    if ((oauthSuccess || oauthError) && window.opener) {
-      if (oauthSuccess) {
-        window.opener.postMessage({ type: 'oauth_success', provider: oauthSuccess }, window.location.origin);
-      } else {
-        window.opener.postMessage({ type: 'oauth_error', error: oauthError }, window.location.origin);
-      }
+    // Handle OAuth popup callback: the last stop of a mailbox sign-in window (hedwig/accounts/
+    // signIn.js). Report to the page that opened it, then close. Google's and Microsoft's pages
+    // can cut window.opener, and with it the right to close this window, so say so if it stays.
+    const signInResult = signInResultFromUrl(window.location.search, { hasOpener: !!window.opener });
+    if (signInResult) {
+      reportSignInResult(signInResult);
       window.close();
+      setTimeout(() => setSignInWindow(signInResult), 300);
       return;
     }
 
@@ -84,6 +85,24 @@ export default function App() {
       })
       .finally(() => setChecking(false));
   }, [loadPreferences, setUser, setLocked]);
+
+  if (signInWindow) {
+    const ok = signInWindow.type === 'oauth_success';
+    return (
+      <div style={{
+        height: 'var(--app-height, 100svh)', display: 'flex', alignItems: 'center',
+        justifyContent: 'center', background: 'var(--bg-primary)', padding: 24, boxSizing: 'border-box',
+      }}>
+        <div style={{ maxWidth: 360, textAlign: 'center', fontSize: 14, lineHeight: 1.55, color: 'var(--text-primary)' }}>
+          <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 6 }}>
+            {ok ? tv('hedwig.accounts.windowDone', 'Signed in') : tv('hedwig.accounts.signInFailed', 'Sign-in did not finish')}
+          </div>
+          {!ok && signInWindow.error && <div style={{ color: 'var(--red)', marginBottom: 6 }}>{signInWindow.error}</div>}
+          <div style={{ color: 'var(--text-secondary)' }}>{tv('hedwig.accounts.windowClose', 'You can close this window and go back to Hedwig.')}</div>
+        </div>
+      </div>
+    );
+  }
 
   if (checking) {
     return (

@@ -10,7 +10,7 @@
 
 ## What you can do
 
-- **Bring accounts together.** Gmail, iCloud, Microsoft 365, Outlook, and other IMAP/SMTP providers share a unified inbox, threaded reader, rich-text composer, attachments, and account-specific sending. Microsoft accounts use OAuth2; see the [Microsoft setup guide](docs/hedwig/ACCOUNTS-MICROSOFT.md).
+- **Bring accounts together.** Gmail, iCloud, Microsoft 365, Outlook, and other IMAP/SMTP providers share a unified inbox, threaded reader, rich-text composer, attachments, and account-specific sending. Google and Microsoft accounts connect with one click through OAuth2 once an admin registers Hedwig with them; see the [Google](docs/hedwig/ACCOUNTS-GOOGLE.md) and [Microsoft](docs/hedwig/ACCOUNTS-MICROSOFT.md) setup guides.
 - **Read in streams.** People puts correspondence and Needs you together; Reading collects newsletters; Records bundles receipts, deliveries, bills, and notifications. The Screener lets you choose where new senders belong.
 - **See why and correct it.** Sorting combines rules, sender history, learned feedback, and configured models. Decisions carry reasons; corrections teach the classifier. Hedwig today records sorting activity with undo controls.
 - **Keep track of work.** Reply Later, Set Aside, Snoozed, Waiting on, and Drafts keep unfinished conversations close. The Daily Brief gathers what needs you and what you are waiting for; Records includes Bills and a Ledger for purchases, subscriptions, travel, and deliveries.
@@ -67,6 +67,7 @@ The frontend listens on HTTPS port 443 and HTTP port 80 by default (`APP_PORT` /
 | [Architecture](docs/hedwig/ARCHITECTURE.md) | Processes, modules, pipeline, models, UI, and testing |
 | [API](docs/hedwig/API.md) | Hedwig API endpoints and service contracts |
 | [Plugins](docs/hedwig/PLUGINS.md) | Manifests, grants, hooks, frontend bundles, and trust boundaries |
+| [Google accounts](docs/hedwig/ACCOUNTS-GOOGLE.md) | Gmail and Google Workspace OAuth configuration |
 | [Microsoft accounts](docs/hedwig/ACCOUNTS-MICROSOFT.md) | Outlook and Microsoft 365 OAuth configuration |
 | [Roadmap](ROADMAP.md) | Product direction and the status of planning documents |
 | [Contributing](CONTRIBUTING.md) | Development checks and pull requests to this fork |

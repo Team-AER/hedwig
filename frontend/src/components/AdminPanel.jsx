@@ -36,6 +36,9 @@ import { folderParentLabel } from '../utils/folderDisplay.js';
 import { PRESET_ORDER, PRESET_LABEL_KEYS, applyPreset, isMicrosoftImapHost, microsoftAuthMode } from '../utils/accountPresets.js';
 import SpamSettings from './SpamSettings.jsx';
 import { Icon } from '../hedwig/icons.jsx';
+import AddAccount from '../hedwig/accounts/AddAccount.jsx';
+import { openSignIn, listenForSignIn } from '../hedwig/accounts/signIn.js';
+import { tv } from '../hedwig/v2/i18n.js';
 
 // ─── Shared field component ───────────────────────────────────────────────────
 function Field({ label, required, children }) {
@@ -68,18 +71,8 @@ const COLORS = [
 // utils/accountPresets.js with the Microsoft sign-in rules.
 
 // ─── Account Form (Add or Edit) ───────────────────────────────────────────────
-// Opens the Microsoft authorization-code flow in a new tab. App.jsx posts
-// { type: 'oauth_success' | 'oauth_error' } back to this window when it returns.
-function openMicrosoftSignIn() {
-  // Real anchor click rather than window.open — see IntegrationsTab.handleConnectMs.
-  const a = document.createElement('a');
-  a.href = '/oauth/microsoft';
-  a.target = '_blank';
-  a.rel = 'opener';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-}
+// Microsoft sign-in from this form opens the same sign-in window as Add account
+// (hedwig/accounts/signIn.js), which reports back when it returns.
 
 export function AccountForm({ initial, onSave, onCancel }) {
   const { t } = useTranslation();
@@ -112,23 +105,18 @@ export function AccountForm({ initial, onSave, onCancel }) {
     api.getIntegrationsStatus().then(setIntegrationStatus).catch(() => {});
   }, []);
 
-  // The sign-in tab reports back through postMessage (App.jsx). On success the backend has
+  // The sign-in window reports back (App.jsx → signIn.js). On success the backend has
   // already created (or re-pointed) the account, so refresh the list and leave the form.
-  useEffect(() => {
-    const onMessage = (e) => {
-      if (e.origin !== window.location.origin) return;
-      if (e.data?.type === 'oauth_success' && e.data?.provider === 'microsoft') {
-        setConnectingMs(false);
-        api.getAccounts().then(setAccounts).catch(() => {});
-        onCancel();
-      } else if (e.data?.type === 'oauth_error') {
-        setConnectingMs(false);
-        setError(String(e.data.error || ''));
-      }
-    };
-    window.addEventListener('message', onMessage);
-    return () => window.removeEventListener('message', onMessage);
-  }, [onCancel, setAccounts]);
+  useEffect(() => listenForSignIn((result) => {
+    if (result.ok && result.provider === 'microsoft') {
+      setConnectingMs(false);
+      api.getAccounts().then(setAccounts).catch(() => {});
+      onCancel();
+    } else if (!result.ok) {
+      setConnectingMs(false);
+      setError(result.error);
+    }
+  }), [onCancel, setAccounts]);
 
   useEffect(() => {
     api.admin.getSettings()
@@ -168,7 +156,7 @@ export function AccountForm({ initial, onSave, onCancel }) {
   const handleMicrosoftSignIn = () => {
     setError('');
     setConnectingMs(true);
-    openMicrosoftSignIn();
+    openSignIn('microsoft', { loginHint: form.email_address });
     setTimeout(() => setConnectingMs(false), 5000);
   };
 
@@ -715,6 +703,16 @@ function AccountsTab() {
     updateAccount(id, { sync_error: null });
   };
 
+  // "Sign in again" on an OAuth account: the callback re-points the existing row (same
+  // address), so a fresh account list is all the page needs.
+  useEffect(() => {
+    if (subview !== 'list') return undefined;
+    return listenForSignIn((result) => {
+      if (result.ok) api.getAccounts().then(setAccounts).catch(console.error);
+      else addNotification({ type: 'error', title: tv('hedwig.accounts.signInFailed', 'Sign-in did not finish'), body: result.error });
+    });
+  }, [subview, setAccounts, addNotification]);
+
   const handleReindex = async (id) => {
     try {
       await api.reindexAccount(id);
@@ -835,23 +833,14 @@ function AccountsTab() {
   };
 
   if (subview === 'add') {
+    // Provider list and sign-in (hedwig/accounts/AddAccount.jsx); the IMAP form is its "Other".
     return (
-      <div>
-        <button onClick={() => setSubview('list')} style={{
-          display: 'flex', alignItems: 'center', gap: 6,
-          background: 'none', border: 'none', color: 'var(--text-secondary)',
-          cursor: 'pointer', fontSize: 13, padding: '0 0 16px 0',
-        }}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <polyline points="15 18 9 12 15 6"/>
-          </svg>
-          {t('sidebar.backToAccounts')}
-        </button>
-        <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 20 }}>
-          {t('admin.accounts.addTitle')}
-        </div>
-        <AccountForm onSave={handleAdd} onCancel={() => setSubview('list')} />
-      </div>
+      <AddAccount
+        ManualForm={AccountForm}
+        onSaveManual={handleAdd}
+        onAdded={() => setSubview('list')}
+        onClose={() => setSubview('list')}
+      />
     );
   }
 
@@ -1184,15 +1173,26 @@ function AccountsTab() {
               </div>
               <div style={{ fontSize: 11, marginTop: 3, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                 {account.sync_error ? (
-                  <span style={{
-                    color: 'var(--red)',
-                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                  }}>⚠ {account.sync_error}</span>
+                  <>
+                    <span style={{
+                      color: 'var(--red)',
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }}>⚠ {account.sync_error}</span>
+                    {(account.oauth_provider === 'google' || account.oauth_provider === 'microsoft') && (
+                      <button type="button" data-testid="sign-in-again"
+                        onClick={() => openSignIn(account.oauth_provider, { loginHint: account.email_address })}
+                        style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--accent)', fontSize: 11, fontWeight: 500 }}>
+                        {tv('hedwig.accounts.signInAgain', 'Sign in again')}
+                      </button>
+                    )}
+                  </>
                 ) : (
                   <>
                     <span style={{ color: 'var(--green)' }}>● {t('admin.accounts.connected')}</span>
                     <span style={{ color: 'var(--text-tertiary)' }}>
-                      {account.imap_host}:{account.imap_port}
+                      {account.oauth_provider === 'google' ? tv('hedwig.accounts.viaGoogle', 'Signed in with Google')
+                        : account.oauth_provider === 'microsoft' ? tv('hedwig.accounts.viaMicrosoft', 'Signed in with Microsoft')
+                        : `${account.imap_host}:${account.imap_port}`}
                     </span>
                   </>
                 )}

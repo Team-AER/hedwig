@@ -18,26 +18,34 @@ are not supported.
 
 ## For users
 
-**Outlook.com or Microsoft 365.** Settings → Accounts → Add account → **Outlook / Microsoft 365**
-→ **Sign in with Microsoft**. A new tab opens at Microsoft; sign in, accept the permissions, and
-the account appears in the list. Hedwig fills in `outlook.office365.com` (IMAP 993, TLS) and
-`smtp.office365.com` (SMTP 587, STARTTLS) itself.
+**Outlook.com or Microsoft 365.** Settings → Accounts → **Add account** → **Microsoft**. A window
+opens at Microsoft; sign in, accept the permissions, and the window closes. The account appears
+in the list with "Signed in with Microsoft". Hedwig fills in `outlook.office365.com` (IMAP 993,
+TLS) and `smtp.office365.com` (SMTP 587, STARTTLS) itself.
 
-If the form shows a password field with the note "Outlook.com and Microsoft 365 no longer accept
-passwords for IMAP", the admin has not configured Microsoft sign-in yet (next section). The Add
-button stays disabled for these hosts because Microsoft would refuse the password.
+For a company address on Microsoft 365, **Other mail account** works too: type the address, and
+Hedwig finds Microsoft from the domain's MX records and opens the same sign-in with the address
+filled in.
+
+If Microsoft sign-in is not set up yet, an admin sees a setup card instead: the redirect URI to
+register, links to Entra and this guide, and fields for the client ID and secret (next
+section). Everyone else sees "Ask your Hedwig admin". There is no password fallback, because
+Microsoft refuses passwords on IMAP for these mailboxes.
 
 Settings → Integrations → Microsoft 365 / Outlook.com offers the same sign-in, and a
 **device code** option for personal accounts (needs "Allow public client flows", below).
 
 An account that was added earlier with a password can be fixed by signing in with Microsoft for
 the same address: Hedwig switches the existing account to OAuth and the Exchange Online hosts.
+When Microsoft ends a sign-in (secret expired, password changed, access revoked), the account
+shows an error and **Sign in again**.
 
-**Exchange Server (on-premises).** Add account → **Exchange**. Enter your server's IMAP and SMTP
-host names (often the same, such as `mail.example.com`), keep ports 993 and 587, and use your
-email address or `DOMAIN\username` with your normal password. A `DOMAIN\username` or
-`user@domain\shared-mailbox` login makes the IMAP client use `LOGIN` instead of
-`AUTHENTICATE PLAIN`, which is what Exchange expects for those forms.
+**Exchange Server (on-premises).** Add account → **Other mail account** → **Set up manually** →
+**Exchange**. Enter your server's IMAP and SMTP host names (often the same, such as
+`mail.example.com`), keep ports 993 and 587, and use your email address or `DOMAIN\username` with
+your normal password. A `DOMAIN\username` or `user@domain\shared-mailbox` login makes the IMAP
+client use `LOGIN` instead of `AUTHENTICATE PLAIN`, which is what Exchange expects for those
+forms.
 
 ## For the admin: register Hedwig with Microsoft (Outlook.com and Microsoft 365)
 
@@ -73,8 +81,10 @@ email address or `DOMAIN\username` with your normal password. A `DOMAIN\username
 
 ### Configure Hedwig
 
-Either fill in Settings → Integrations → Microsoft 365 / Outlook.com (stored encrypted in the
-database), or set these in your installation’s `.env` and recreate the compose services:
+Paste the client ID and secret into the setup card (Settings → Accounts → Add account →
+Microsoft, as an admin; it uses tenant `common`) or into Settings → Integrations → Microsoft 365 /
+Outlook.com (both stored encrypted in the database), or set these in your installation’s `.env`
+and recreate the compose services:
 
 ```
 MICROSOFT_CLIENT_ID=<Application (client) ID>
@@ -95,8 +105,8 @@ MICROSOFT_REDIRECT_URI=https://hedwig.example.com/oauth/microsoft/callback
   worker. `deploy/deploy-lxc.sh` never overwrites an existing `.env`, so add them by hand on
   an install that already has one.
 
-`GET /api/integrations/status` reports `microsoft.configured: true` once a client ID is set,
-and the Add account form then offers **Sign in with Microsoft**.
+`GET /api/integrations/status` reports `microsoft.configured: true` once a client ID and a redirect URI are set,
+and Add account → Microsoft then opens the sign-in.
 
 ### Microsoft 365 mailbox settings
 
@@ -130,7 +140,7 @@ Manage email apps (IMAP, Authenticated SMTP).
 
 | Symptom | Cause |
 |---|---|
-| "Microsoft OAuth not configured" | No client ID, or no redirect URI and no `APP_URL`. |
+| "Microsoft sign-in is not set up on this Hedwig yet" | No client ID, or no redirect URI and no `APP_URL`. |
 | `AADSTS50011` redirect URI mismatch | The URI in Entra differs from `MICROSOFT_REDIRECT_URI` / `${APP_URL}/oauth/microsoft/callback` (scheme, host, trailing slash). |
 | `AADSTS50020` / personal account refused | The app registration allows only organisational accounts, or `MICROSOFT_TENANT` is a tenant ID. Use "any organizational directory and personal Microsoft accounts" with `common`. |
 | `AADSTS65001` consent required | Grant admin consent in Entra for the tenant. |

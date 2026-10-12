@@ -10,6 +10,7 @@ import {
   getMicrosoftConfig, getGoogleConfig,
   buildAuthorizeUrl, buildCodeExchangeBody, buildRefreshBody, microsoftLoginName,
 } from '../services/oauthProviders.js';
+import { SignInError, signInFailureMessage, providerErrorMessage } from '../services/oauthErrors.js';
 
 // Cache JWKS fetchers per tenant — createRemoteJWKSet handles caching internally.
 const jwksCache = new Map();
@@ -35,13 +36,36 @@ const deviceFlows = new Map();
 // the redirect URI defaults to ${APP_URL}/oauth/microsoft/callback. See oauthProviders.js.
 const getMsConfig = getMicrosoftConfig;
 
-// Step 1: redirect user to Microsoft login
-router.get('/microsoft', async (req, res) => {
-  if (!req.session?.userId) return res.status(401).json({ error: 'Not authenticated' });
+// The sign-in runs in its own window (Settings → Accounts → Add account), so every way out of
+// a flow is a redirect to the app with oauth_success / oauth_error, which App.jsx reports to
+// the window that opened it. A JSON error here would strand the user on a blank page.
+// oauth_popup=1 tells App.jsx it is that window even when the provider's pages have cut
+// window.opener (Cross-Origin-Opener-Policy); the start route records it in the session.
+function signInDone(res, params, popup) {
+  const q = new URLSearchParams(params);
+  if (popup) q.set('oauth_popup', '1');
+  res.redirect(`/?${q}`);
+}
+const failSignIn = (res, message, popup) => signInDone(res, { oauth_error: message }, popup);
 
-  const msConfig = getMsConfig();
-  if (!msConfig.clientId || !msConfig.redirectUri) {
-    return res.status(500).json({ error: 'Microsoft OAuth not configured. Set MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET, MICROSOFT_TENANT and APP_URL (or MICROSOFT_REDIRECT_URI) in .env, or fill in Settings → Integrations → Microsoft. See docs/hedwig/ACCOUNTS-MICROSOFT.md' });
+// Read and clear the popup marker; the callback must not leave it for a later same-tab flow.
+function takePopupFlag(req) {
+  const popup = !!req.session?.oauthPopup;
+  if (req.session) delete req.session.oauthPopup;
+  return popup;
+}
+
+// Step 1 for both providers: redirect to the provider's sign-in. ?login_hint=<address>
+// pre-fills the account there (the Add account screen passes it when it knows the address).
+async function startSignIn(req, res, id) {
+  const provider = OAUTH_PROVIDERS[id];
+  const popup = req.query.popup === '1';
+  if (!req.session?.userId) return failSignIn(res, 'Sign in to Hedwig first, then try again.', popup);
+
+  const config = provider.getConfig();
+  if (!config.clientId || !config.redirectUri) {
+    console.error(`${provider.label} OAuth not configured: set the client ID and secret in Settings → Integrations, or in .env (docs/hedwig/ACCOUNTS-${id.toUpperCase()}.md); the redirect URI needs APP_URL.`);
+    return failSignIn(res, `${provider.label} sign-in is not set up on this Hedwig yet.`, popup);
   }
 
   // Generate a random CSRF nonce for the state parameter and store it alongside
@@ -49,28 +73,33 @@ router.get('/microsoft', async (req, res) => {
   const oauthNonce = randomBytes(16).toString('hex');
   req.session.oauthNonce  = oauthNonce;
   req.session.oauthUserId = req.session.userId;
+  req.session.oauthPopup  = popup;
 
   // Save session before redirecting so the nonce is committed to the store
   // before the external provider redirects back with the authorization code.
   await new Promise((resolve, reject) => req.session.save(err => err ? reject(err) : resolve()));
-  res.redirect(buildAuthorizeUrl('microsoft', { state: oauthNonce, config: msConfig }));
-});
+  res.redirect(buildAuthorizeUrl(id, { state: oauthNonce, config, loginHint: req.query.login_hint }));
+}
+
+// Step 1: redirect user to Microsoft login
+router.get('/microsoft', (req, res) => startSignIn(req, res, 'microsoft'));
 
 // Step 2: Microsoft redirects back here with auth code
 router.get('/microsoft/callback', async (req, res) => {
   const { code, state, error, error_description } = req.query;
+  const popup = takePopupFlag(req);
 
   if (error) {
     console.error('Microsoft OAuth error:', error, error_description);
-    return res.redirect(`/?oauth_error=${encodeURIComponent(error_description || error)}`);
+    return failSignIn(res, providerErrorMessage(error, error_description), popup);
   }
 
   // Validate CSRF nonce BEFORE making any external requests
   if (!state || state !== req.session.oauthNonce) {
-    return res.redirect(`/?oauth_error=${encodeURIComponent('Invalid OAuth state — please try again')}`);
+    return failSignIn(res, 'Invalid OAuth state — please try again', popup);
   }
   const userId = req.session.oauthUserId;
-  if (!userId) return res.redirect(`/?oauth_error=${encodeURIComponent('OAuth session expired — please try again')}`);
+  if (!userId) return failSignIn(res, 'OAuth session expired — please try again', popup);
   delete req.session.oauthNonce;
   delete req.session.oauthUserId;
 
@@ -88,17 +117,17 @@ router.get('/microsoft/callback', async (req, res) => {
 
     const tokens = await tokenRes.json();
     if (!tokenRes.ok) {
-      throw new Error(tokens.error_description || tokens.error || 'Token exchange failed');
+      throw new SignInError(providerErrorMessage(tokens.error || 'Token exchange failed', tokens.error_description));
     }
 
     // Authorization-code flow uses the client secret → confidential client.
     await processMicrosoftTokens(userId, tokens, { tenantId, clientId, publicClient: false });
 
     // Redirect back to app with success
-    res.redirect('/?oauth_success=microsoft');
+    signInDone(res, { oauth_success: 'microsoft' }, popup);
   } catch (err) {
     console.error('Microsoft OAuth callback error:', err);
-    res.redirect('/?oauth_error=Authentication+failed');
+    failSignIn(res, signInFailureMessage(err), popup);
   }
 });
 
@@ -142,11 +171,11 @@ async function processMicrosoftTokens(userId, tokens, { tenantId, clientId, publ
       loginName = microsoftLoginName(payload, email);
     } catch (jwtErr) {
       console.error('Microsoft id_token validation failed:', jwtErr.message);
-      throw new Error('Could not validate Microsoft identity token — please try again', { cause: jwtErr });
+      throw new SignInError('Could not validate Microsoft identity token — please try again', { cause: jwtErr });
     }
   }
 
-  if (!email) throw new Error('Could not retrieve email address from Microsoft profile — ensure the openid, email, and profile scopes are granted');
+  if (!email) throw new SignInError('Could not retrieve email address from Microsoft profile — ensure the openid, email, and profile scopes are granted');
   if (!loginName) loginName = email;
   const mbx = MICROSOFT.mailbox;
 
@@ -384,36 +413,23 @@ async function doRefreshMicrosoftToken(account) {
 const googleJwks = createRemoteJWKSet(new URL('https://www.googleapis.com/oauth2/v3/certs'));
 
 // Step 1: redirect user to Google consent
-router.get('/google', async (req, res) => {
-  if (!req.session?.userId) return res.status(401).json({ error: 'Not authenticated' });
-
-  const googleConfig = getGoogleConfig();
-  if (!googleConfig.clientId || !googleConfig.redirectUri) {
-    return res.status(500).json({ error: 'Google OAuth not configured. Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI in .env' });
-  }
-
-  const oauthNonce = randomBytes(16).toString('hex');
-  req.session.oauthNonce  = oauthNonce;
-  req.session.oauthUserId = req.session.userId;
-
-  await new Promise((resolve, reject) => req.session.save(err => err ? reject(err) : resolve()));
-  res.redirect(buildAuthorizeUrl('google', { state: oauthNonce, config: googleConfig }));
-});
+router.get('/google', (req, res) => startSignIn(req, res, 'google'));
 
 // Step 2: Google redirects back here with auth code
 router.get('/google/callback', async (req, res) => {
   const { code, state, error } = req.query;
+  const popup = takePopupFlag(req);
 
   if (error) {
     console.error('Google OAuth error:', error);
-    return res.redirect(`/?oauth_error=${encodeURIComponent(error)}`);
+    return failSignIn(res, providerErrorMessage(error), popup);
   }
 
   if (!state || state !== req.session.oauthNonce) {
-    return res.redirect(`/?oauth_error=${encodeURIComponent('Invalid OAuth state — please try again')}`);
+    return failSignIn(res, 'Invalid OAuth state — please try again', popup);
   }
   const userId = req.session.oauthUserId;
-  if (!userId) return res.redirect(`/?oauth_error=${encodeURIComponent('OAuth session expired — please try again')}`);
+  if (!userId) return failSignIn(res, 'OAuth session expired — please try again', popup);
   delete req.session.oauthNonce;
   delete req.session.oauthUserId;
 
@@ -430,14 +446,14 @@ router.get('/google/callback', async (req, res) => {
 
     const tokens = await tokenRes.json();
     if (!tokenRes.ok) {
-      throw new Error(tokens.error_description || tokens.error || 'Token exchange failed');
+      throw new SignInError(providerErrorMessage(tokens.error || 'Token exchange failed', tokens.error_description));
     }
 
     await processGoogleTokens(userId, tokens, { clientId });
-    res.redirect('/?oauth_success=google');
+    signInDone(res, { oauth_success: 'google' }, popup);
   } catch (err) {
     console.error('Google OAuth callback error:', err);
-    res.redirect('/?oauth_error=Authentication+failed');
+    failSignIn(res, signInFailureMessage(err), popup);
   }
 });
 
@@ -450,7 +466,7 @@ async function processGoogleTokens(userId, tokens, { clientId }) {
   if (!refresh_token) {
     // Without a refresh token the account dies silently in an hour. Fail loudly
     // instead of persisting a mailbox that will break by itself later.
-    throw new Error('Google did not return a refresh token. Revoke this app at myaccount.google.com/permissions and reconnect.');
+    throw new SignInError('Google did not return a refresh token. Revoke this app at myaccount.google.com/permissions and reconnect.');
   }
 
   let email = null;
@@ -468,11 +484,11 @@ async function processGoogleTokens(userId, tokens, { clientId }) {
       displayName = payload.name || null;
     } catch (jwtErr) {
       console.error('Google id_token validation failed:', jwtErr.message);
-      throw new Error('Could not validate Google identity token — please try again', { cause: jwtErr });
+      throw new SignInError('Could not validate Google identity token — please try again', { cause: jwtErr });
     }
   }
 
-  if (!email) throw new Error('Could not retrieve email address from Google profile — ensure the openid, email, and profile scopes are granted');
+  if (!email) throw new SignInError('Could not retrieve email address from Google profile — ensure the openid, email, and profile scopes are granted');
 
   // Same advisory-lock upsert as Microsoft: two callbacks racing for one mailbox
   // would otherwise both miss the SELECT and each INSERT a duplicate row.
@@ -488,13 +504,20 @@ async function processGoogleTokens(userId, tokens, { clientId }) {
     let accountId;
     if (existing.rows.length) {
       accountId = existing.rows[0].id;
+      // Like Microsoft: an account first added with an app password switches to XOAUTH2 as the
+      // signed-in address on Gmail's own endpoints, whatever login and hosts it had before.
+      const mbx = GOOGLE.mailbox;
       await client.query(`
         UPDATE email_accounts SET
           oauth_provider = 'google',
           oauth_access_token = $1, oauth_refresh_token = $2, oauth_token_expiry = $3,
-          name = $4, oauth_public_client = false, sync_error = NULL
+          name = $4, oauth_public_client = false, sync_error = NULL,
+          auth_user = $6,
+          imap_host = $7, imap_port = $8, imap_tls = $9,
+          smtp_host = $10, smtp_port = $11, smtp_tls = $12
         WHERE id = $5
-      `, [encrypt(access_token), encrypt(refresh_token), expiry, displayName || email, accountId]);
+      `, [encrypt(access_token), encrypt(refresh_token), expiry, displayName || email, accountId,
+          email, mbx.imap_host, mbx.imap_port, mbx.imap_tls, mbx.smtp_host, mbx.smtp_port, mbx.smtp_tls]);
     } else {
       const colors = ['#ea4335', '#fbbc04', '#34a853', '#4285f4'];
       const color = colors[Math.floor(Math.random() * colors.length)];

@@ -59,10 +59,13 @@ export function getMicrosoftConfig() {
 }
 
 export function getGoogleConfig() {
+  const base = appUrl();
   return {
-    clientId: process.env.GOOGLE_CLIENT_ID,
-    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-    redirectUri: process.env.GOOGLE_REDIRECT_URI,
+    clientId: envFirst('GOOGLE_CLIENT_ID'),
+    clientSecret: envFirst('GOOGLE_CLIENT_SECRET'),
+    // Same default as Microsoft: the callback route under ${APP_URL}/oauth.
+    redirectUri: envFirst('GOOGLE_REDIRECT_URI')
+      || (base ? `${base}/oauth/google/callback` : undefined),
   };
 }
 
@@ -112,13 +115,30 @@ export function oauthProvider(id) {
   return p;
 }
 
-/** True when the provider has a client ID (from .env or the Integrations tab). */
+/**
+ * True when the browser sign-in can start: a client ID (from .env or the Integrations tab) and a
+ * redirect URI (explicit, or derived from APP_URL). Without the redirect the start route can only
+ * fail, so the Add account screen must not offer it.
+ */
 export function isOAuthConfigured(id) {
-  return !!oauthProvider(id).getConfig().clientId;
+  const cfg = oauthProvider(id).getConfig();
+  return !!cfg.clientId && !!cfg.redirectUri;
+}
+
+/**
+ * The address to pre-fill on the provider's sign-in page, or null. Only a plain address is
+ * passed on: it lands in the provider's URL, so nothing with spaces or control characters.
+ */
+export function normalizeLoginHint(value) {
+  if (typeof value !== 'string') return null;
+  const v = value.trim();
+  // eslint-disable-next-line no-control-regex -- rejecting control characters is the point
+  if (!v || v.length > 254 || /[\s\0-\x1f\x7f]/.test(v)) return null;
+  return /^[^@]+@[^@]+\.[^@]+$/.test(v) ? v : null;
 }
 
 /** Browser redirect URL for the authorization-code flow. */
-export function buildAuthorizeUrl(id, { state, config } = {}) {
+export function buildAuthorizeUrl(id, { state, config, loginHint } = {}) {
   const p = oauthProvider(id);
   const cfg = config || p.getConfig();
   const params = new URLSearchParams({
@@ -129,6 +149,8 @@ export function buildAuthorizeUrl(id, { state, config } = {}) {
     state,
     ...p.authorizeParams,
   });
+  const hint = normalizeLoginHint(loginHint);
+  if (hint) params.set('login_hint', hint);
   return `${p.authorizeUrl(cfg)}?${params}`;
 }
 

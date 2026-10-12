@@ -36,8 +36,12 @@ let base;
 const savedClientId = process.env.MS_CLIENT_ID;
 const savedGoogleClientId = process.env.GOOGLE_CLIENT_ID;
 const savedMicrosoftClientId = process.env.MICROSOFT_CLIENT_ID;
+const savedAppUrl = process.env.APP_URL;
 
 beforeAll(async () => {
+  // Both redirect URIs default to ${APP_URL}/oauth/<provider>/callback; a provider is only
+  // configured once it has one.
+  process.env.APP_URL = 'https://mail.example.org';
   await new Promise((resolve) => { server = buildApp().listen(0, resolve); });
   base = `http://127.0.0.1:${server.address().port}`;
 });
@@ -50,6 +54,8 @@ afterAll(async () => {
   else process.env.GOOGLE_CLIENT_ID = savedGoogleClientId;
   if (savedMicrosoftClientId === undefined) delete process.env.MICROSOFT_CLIENT_ID;
   else process.env.MICROSOFT_CLIENT_ID = savedMicrosoftClientId;
+  if (savedAppUrl === undefined) delete process.env.APP_URL;
+  else process.env.APP_URL = savedAppUrl;
 });
 
 afterEach(() => {
@@ -95,6 +101,21 @@ describe('GET /api/integrations/status (non-admin capability check)', () => {
       microsoft: { configured: false },
       google: { configured: true },
     });
+  });
+
+  it('reports configured=false for a client ID without a redirect URI (no APP_URL): the sign-in could only fail', async () => {
+    process.env.GOOGLE_CLIENT_ID = 'some-google-client-id';
+    process.env.MS_CLIENT_ID = 'some-client-id';
+    delete process.env.APP_URL;
+    try {
+      const res = await fetch(`${base}/api/integrations/status`);
+      expect(await res.json()).toEqual({
+        microsoft: { configured: false },
+        google: { configured: false },
+      });
+    } finally {
+      process.env.APP_URL = 'https://mail.example.org';
+    }
   });
 
   it('never leaks credentials in the response', async () => {

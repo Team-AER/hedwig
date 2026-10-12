@@ -273,3 +273,26 @@ Model bounds: `llm.models.enabled` (admin) lists the models people may pick. A u
 `llm.models.fast|long|agent` through `PATCH /settings`, only to a model in that list (400 otherwise),
 and an override stops applying as soon as its model leaves the list. Everything under `/admin/*`
 requires an admin (403 otherwise).
+
+## Accounts (Add account) — `backend/src/hedwig/accounts/`
+
+Settings → Accounts → Add account (`frontend/src/hedwig/accounts/`). Not gated on Hedwig
+intelligence: adding a mailbox is plain mail. See `PLAN-CLICK-TO-SIGN-IN.md`.
+
+| Method | Path | Body | Returns |
+| --- | --- | --- | --- |
+| GET | `/accounts/discover?email=<address>` | | `{ domain, provider: 'google'\|'microsoft'\|'yahoo'\|'icloud'\|null, source: 'domain'\|'mx'\|null }`; 400 when it is not an address |
+
+The address's own domain decides first (gmail.com, outlook.com, yahoo.*, icloud.com…); otherwise
+the domain's MX records do (Google Workspace, Microsoft 365, Yahoo small business, iCloud+ custom
+domains). A failed or slow lookup (2 s, 2 tries) is `provider: null`, never an error.
+
+The sign-in itself is upstream's OAuth routes, outside `/api`:
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| GET | `/oauth/google`, `/oauth/microsoft` | `?login_hint=<address>` pre-fills the provider's sign-in; `?popup=1` marks a sign-in window, so its result URL carries `oauth_popup=1`. Every outcome is a redirect to `/?oauth_success=<provider>` or `/?oauth_error=<message>`; App.jsx reports it to the opener by `postMessage` and the `hedwig-oauth` BroadcastChannel. |
+| GET | `/oauth/google/callback`, `/oauth/microsoft/callback` | Registered redirect URIs, `${APP_URL}/oauth/<provider>/callback` unless `GOOGLE_REDIRECT_URI` / `MICROSOFT_REDIRECT_URI` say otherwise. A second sign-in for an address that already exists re-points that account. |
+
+`GET /api/integrations/status` reports a provider `configured` only when it has a client ID and a
+redirect URI.

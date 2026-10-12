@@ -39,7 +39,7 @@ docker compose -f docker-compose.hedwig.yml up -d --build
 docker compose -f docker-compose.hedwig.yml ps
 ```
 
-Open `APP_URL`. The first registered user becomes administrator. Set registration/invitation policy, configure models and pipeline settings, and connect accounts in Settings → Accounts. [Microsoft accounts](ACCOUNTS-MICROSOFT.md) require an application registration and the documented OAuth settings.
+Open `APP_URL`. The first registered user becomes administrator. Set registration/invitation policy, configure models and pipeline settings, and connect accounts in Settings → Accounts. Signing in with [Google](ACCOUNTS-GOOGLE.md) or [Microsoft](ACCOUNTS-MICROSOFT.md) needs an OAuth client registered with that provider, once per install; Add account walks an admin through it.
 
 ## HTTPS and reverse proxies
 
