@@ -2259,6 +2259,14 @@
         "wrongNoteLabel": "Co bylo na odpovědi špatně",
         "markWrongBtn": "Označit jako chybné",
         "sources": "Zdroje"
+      },
+      "drafts": {
+        "delete": "Smazat koncept"
+      },
+      "act": {
+        "draftDeleted": "Koncept smazán",
+        "draftsDeleted": "Smazané koncepty: {{n}}",
+        "draftDeleteFailed": "Koncept se nepodařilo smazat."
       }
     },
     "accounts": {

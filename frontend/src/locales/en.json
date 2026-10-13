@@ -2240,6 +2240,14 @@
         "wrongNoteLabel": "What was wrong with the answer",
         "markWrongBtn": "Mark it wrong",
         "sources": "Sources"
+      },
+      "drafts": {
+        "delete": "Delete draft"
+      },
+      "act": {
+        "draftDeleted": "Draft deleted",
+        "draftsDeleted": "{{n}} drafts deleted",
+        "draftDeleteFailed": "Could not delete the draft."
       }
     },
     "accounts": {

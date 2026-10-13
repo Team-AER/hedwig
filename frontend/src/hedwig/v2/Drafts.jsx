@@ -9,14 +9,16 @@ import { useStore } from '../../store/index.js';
 import { useV2, watchDrafts } from './state.js';
 import { openDraft, draftRecipient } from './drafts.js';
 import { ListSearch, rowDate, onListKeyDown } from './rows.jsx';
-import { Avatar, ErrorLine, Hair, Num, Quiet, V, ViewBody, ViewHead, Why, usePhone } from './primitives.jsx';
+import { performAction } from './actions.js';
+import { Avatar, ErrorLine, Hair, IconButton, Num, Quiet, V, ViewBody, ViewHead, Why, usePhone } from './primitives.jsx';
 import { tv } from './i18n.js';
 
 const draftKey = (m) => m.id || `${m.account_id}:${m.folder}:${m.uid}`;
 
-/** One draft row: a single button (Enter opens it in the composer). */
-export function DraftRow({ m, phone = false, busy = false, onOpen }) {
+/** One draft row: a single button (Enter opens it in the composer), and Delete on hover or focus. */
+export function DraftRow({ m, phone = false, busy = false, onOpen, onDelete }) {
   const [hot, setHot] = useState(false);
+  const [within, setWithin] = useState(false);
   const to = draftRecipient(m);
   const name = to ? (to.name || to.email) : '';
   const subject = m.subject && m.subject !== '(no subject)' ? m.subject : tv('hedwig.v2.row.noSubject', '(no subject)');
@@ -30,6 +32,8 @@ export function DraftRow({ m, phone = false, busy = false, onOpen }) {
       data-draft-row=""
       onMouseEnter={() => setHot(true)}
       onMouseLeave={() => setHot(false)}
+      onFocus={() => setWithin(true)}
+      onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setWithin(false); }}
       style={{ position: 'relative', display: 'flex', flexDirection: 'column', boxSizing: 'border-box', minHeight: phone ? 88 : 76, padding: phone ? '12px 8px' : '10px 14px 10px 8px', borderRadius: 8, background: hot ? V.hover : undefined }}
     >
       <button
@@ -61,6 +65,11 @@ export function DraftRow({ m, phone = false, busy = false, onOpen }) {
           )}
         </span>
       </button>
+      {onDelete && (
+        <div data-row-actions="" style={{ position: 'absolute', top: 6, right: 10, display: 'flex', visibility: hot || within || phone ? 'visible' : 'hidden', zIndex: 1 }}>
+          <IconButton icon="trash" size={24} label={tv('hedwig.v2.drafts.delete', 'Delete draft')} disabled={busy} onClick={() => onDelete(m)} />
+        </div>
+      )}
     </article>
   );
 }
@@ -90,7 +99,18 @@ export default function Drafts() {
     }
   };
 
-  const items = drafts.items || [];
+  // Deleted here: off the list at once, discarded on the server after the Undo window.
+  const [gone, setGone] = useState(() => new Set());
+  const remove = (m) => {
+    const key = draftKey(m);
+    performAction({
+      kind: 'deleteDraft', items: [{ threadId: m.thread_key || m.id, messageId: m.id }], messages: [m], advance: false,
+      onApply: () => setGone((cur) => new Set([...cur, key])),
+      onRevert: () => setGone((cur) => { const next = new Set(cur); next.delete(key); return next; }),
+    });
+  };
+
+  const items = (drafts.items || []).filter((m) => !gone.has(draftKey(m)));
   const title = tv('hedwig.v2.drafts.title', 'Drafts');
   const body = (
     <div onKeyDown={onListKeyDown}>
@@ -102,7 +122,7 @@ export default function Drafts() {
       {items.map((m, i) => (
         <div key={draftKey(m)}>
           {i > 0 && <Hair style={{ margin: `0 0 0 ${phone ? 66 : 62}px` }} />}
-          <DraftRow m={m} phone={phone} busy={opening === draftKey(m)} onOpen={open} />
+          <DraftRow m={m} phone={phone} busy={opening === draftKey(m)} onOpen={open} onDelete={remove} />
         </div>
       ))}
     </div>

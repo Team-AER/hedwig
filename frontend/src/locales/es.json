@@ -2240,6 +2240,14 @@
         "wrongNoteLabel": "Qué estaba mal en la respuesta",
         "markWrongBtn": "Marcar como incorrecta",
         "sources": "Fuentes"
+      },
+      "drafts": {
+        "delete": "Eliminar borrador"
+      },
+      "act": {
+        "draftDeleted": "Borrador eliminado",
+        "draftsDeleted": "{{n}} borradores eliminados",
+        "draftDeleteFailed": "No se pudo eliminar el borrador."
       }
     },
     "accounts": {

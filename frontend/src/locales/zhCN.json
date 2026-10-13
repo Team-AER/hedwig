@@ -2240,6 +2240,14 @@
         "wrongNoteLabel": "回答哪里有误",
         "markWrongBtn": "标记为错误",
         "sources": "来源"
+      },
+      "drafts": {
+        "delete": "删除草稿"
+      },
+      "act": {
+        "draftDeleted": "草稿已删除",
+        "draftsDeleted": "已删除 {{n}} 份草稿",
+        "draftDeleteFailed": "无法删除草稿。"
       }
     },
     "accounts": {

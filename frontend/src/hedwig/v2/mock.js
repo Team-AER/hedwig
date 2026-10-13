@@ -695,6 +695,20 @@ THREADS['t-lease'] = {
   quickReplies: [],
 };
 
+// A conversation that is only a draft (a new message not sent yet): Delete deletes the draft.
+THREADS['t-draft-only'] = {
+  subject: 'Quote for the kitchen',
+  label: 'Home',
+  participants: 'You',
+  messages: [
+    { id: 'm-draft-only', uid: 52, folder: 'Drafts', accountId: ACCOUNT_WORK, from: { name: 'You', email: 'me@example.org' }, to: 'Builder', date: todayAt(9, 0),
+      subject: 'Quote for the kitchen', text: 'Hi, could you send a quote for the kitchen worktop?' },
+  ],
+  story: null,
+  deadline: null,
+  quickReplies: [],
+};
+
 // Upstream rows in acc-work's Drafts folder (GET /mail/messages?folder=Drafts), newest first.
 function mockDrafts() {
   return [

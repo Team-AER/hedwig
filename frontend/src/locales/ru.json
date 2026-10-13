@@ -2240,6 +2240,14 @@
         "wrongNoteLabel": "Что было неверно в ответе",
         "markWrongBtn": "Отметить как неверный",
         "sources": "Источники"
+      },
+      "drafts": {
+        "delete": "Удалить черновик"
+      },
+      "act": {
+        "draftDeleted": "Черновик удалён",
+        "draftsDeleted": "Удалено черновиков: {{n}}",
+        "draftDeleteFailed": "Не удалось удалить черновик."
       }
     },
     "accounts": {

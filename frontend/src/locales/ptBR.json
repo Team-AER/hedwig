@@ -2240,6 +2240,14 @@
         "wrongNoteLabel": "O que estava errado na resposta",
         "markWrongBtn": "Marcar como errada",
         "sources": "Fontes"
+      },
+      "drafts": {
+        "delete": "Excluir rascunho"
+      },
+      "act": {
+        "draftDeleted": "Rascunho excluído",
+        "draftsDeleted": "{{n}} rascunhos excluídos",
+        "draftDeleteFailed": "Não foi possível excluir o rascunho."
       }
     },
     "accounts": {

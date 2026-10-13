@@ -2240,6 +2240,14 @@
         "wrongNoteLabel": "Cosa c’era di sbagliato nella risposta",
         "markWrongBtn": "Segna come sbagliata",
         "sources": "Fonti"
+      },
+      "drafts": {
+        "delete": "Elimina bozza"
+      },
+      "act": {
+        "draftDeleted": "Bozza eliminata",
+        "draftsDeleted": "{{n}} bozze eliminate",
+        "draftDeleteFailed": "Impossibile eliminare la bozza."
       }
     },
     "accounts": {

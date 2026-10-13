@@ -113,6 +113,16 @@ function useThread(item) {
     }
   }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, [load]);
+  // The composer saves, sends and discards drafts: read the thread again once it closes (and again
+  // a little later, for the delete of the old copy that runs after the close).
+  useEffect(() => {
+    const timers = [];
+    const unsub = useStore.subscribe((st, prev) => {
+      if (!prev.composing || st.composing) return;
+      for (const ms of [400, 2000]) timers.push(setTimeout(() => load(true), ms));
+    });
+    return () => { unsub(); for (const t of timers) clearTimeout(t); };
+  }, [load]);
   // Change the loaded thread in place (a rewritten story or TL;DR), only while it is still `forKey`'s.
   const patch = useCallback((forKey, fn) => {
     setState((s) => (s.data && s.key === forKey ? { ...s, data: fn(s.data) } : s));
@@ -668,7 +678,7 @@ function MessageItem({ m, n, you, open, onToggle, phone, tldr = null, tldrLighte
  * snippet and Edit draft, which reopens it in the composer (saving replaces it, sending deletes
  * it). Never a read-only body and never a reply to yourself.
  */
-function DraftItem({ m, n, phone, busy, onEdit }) {
+function DraftItem({ m, n, phone, busy, onEdit, onDelete }) {
   const snippet = snippetOf(m);
   const to = m.to && m.to !== 'you' ? m.to : '';
   return (
@@ -683,10 +693,14 @@ function DraftItem({ m, n, phone, busy, onEdit }) {
         <span title={fullTime(m.date)} style={{ flexShrink: 0, fontSize: 12, color: V.muted, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{listTime(m.date)}</span>
       </header>
       {snippet && <p data-draft-snippet="" style={{ margin: 0, fontSize: 13, lineHeight: '19px', color: V.muted, maxWidth: '68ch', overflowWrap: 'anywhere', display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 3, overflow: 'hidden' }}>{snippet}</p>}
-      <div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <Btn accent size={phone ? 'phone' : 'md'} disabled={busy} onClick={onEdit}>
           <Icon name="pencil" size={14} />
           {busy ? tv('hedwig.v2.drafts.opening', 'Opening…') : tv('hedwig.v2.drafts.edit', 'Edit draft')}
+        </Btn>
+        <Btn size={phone ? 'phone' : 'md'} disabled={busy} onClick={onDelete} data-draft-delete="">
+          <Icon name="trash" size={14} />
+          {tv('hedwig.v2.drafts.delete', 'Delete draft')}
         </Btn>
       </div>
     </article>
@@ -842,7 +856,9 @@ export default function Thread({ props }) {
   useEffect(() => { useV2.getState().ensureDrafts(); }, []);
 
   const data = t.data;
-  const messages = useMemo(() => data?.messages || [], [data]);
+  // Drafts deleted from here leave at once (Delete draft waits out its Undo window on the server).
+  const [goneDrafts, setGoneDrafts] = useState(() => new Set());
+  const messages = useMemo(() => (data?.messages || []).filter((m) => !goneDrafts.has(m.id)), [data, goneDrafts]);
   const isDraft = (m) => isDraftMessage(m, { accounts, folders: storeFolders, draftFolders });
   const newest = messages[messages.length - 1];
   // A draft is never what you reply to: `latest` is the newest real message; a draft at the end
@@ -898,9 +914,22 @@ export default function Thread({ props }) {
   // Undo, the call runs behind it. Drafts are never part of Done, Delete, Junk or Move.
   const act = (kind, extra = {}) => {
     if (!actItem) return;
-    performAction({ kind, items: [actItem], messages: messages.filter((m) => m.id && !isDraft(m)), advance: !phone, ...extra });
+    const mail = messages.filter((m) => m.id && !isDraft(m));
+    // A conversation that is only drafts: deleting it deletes them.
+    if (kind === 'delete' && !mail.length) deleteDrafts(messages.filter((m) => m.id && isDraft(m)));
+    else performAction({ kind, items: [actItem], messages: mail, advance: !phone, ...extra });
     if (phone && TAKES_AWAY.has(kind)) phoneCtx?.back?.();
   };
+  // Delete draft: off the screen at once, discarded on the server after the Undo window.
+  function deleteDrafts(list) {
+    const ids = list.map((m) => m.id).filter(Boolean);
+    if (!actItem || !ids.length) return;
+    performAction({
+      kind: 'deleteDraft', items: [actItem], messages: list, advance: false,
+      onApply: () => setGoneDrafts((cur) => new Set([...cur, ...ids])),
+      onRevert: () => setGoneDrafts((cur) => { const next = new Set(cur); for (const id of ids) next.delete(id); return next; }),
+    });
+  }
   const done = () => act('done');
   const del = () => act('delete');
   const junk = () => act('junk');
@@ -1262,7 +1291,7 @@ export default function Thread({ props }) {
           return fold.start === i ? <FoldRow key={`fold-${i}`} count={fold.count} phone={phone} onOpen={() => setUnfolded(true)} /> : null;
         }
         if (isDraft(m)) {
-          return <DraftItem key={m.id || i} m={m} n={i + 1} phone={phone} busy={busy === 'editDraft'} onEdit={() => editDraft(m)} />;
+          return <DraftItem key={m.id || i} m={m} n={i + 1} phone={phone} busy={busy === 'editDraft'} onEdit={() => editDraft(m)} onDelete={() => deleteDrafts([m])} />;
         }
         const latestOne = i === latestIdx;
         return (
@@ -1310,6 +1339,10 @@ export default function Thread({ props }) {
           <Icon name="pencil" size={16} />
           {continueLabel}
         </Btn>
+        <Btn size="phone" disabled={busy === 'editDraft'} onClick={() => deleteDrafts([trailingDraft])}>
+          <Icon name="trash" size={16} />
+          {tv('hedwig.v2.drafts.delete', 'Delete draft')}
+        </Btn>
       </div>
     )
     : (
@@ -1317,6 +1350,7 @@ export default function Thread({ props }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 40, boxSizing: 'border-box', padding: '0 6px 0 12px', borderRadius: 10, background: V.field }}>
           <span aria-hidden="true" style={{ display: 'inline-flex', color: V.attentionInk }}><Icon name="file" size={14} /></span>
           <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: V.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{tv('hedwig.v2.drafts.waiting', 'Your reply is saved as a draft.')}</span>
+          <IconButton icon="trash" size={28} label={tv('hedwig.v2.drafts.delete', 'Delete draft')} disabled={busy === 'editDraft'} onClick={() => deleteDrafts([trailingDraft])} />
           <Btn accent disabled={busy === 'editDraft'} onClick={() => editDraft(trailingDraft)}><Icon name="pencil" size={14} />{continueLabel}</Btn>
         </div>
       </div>

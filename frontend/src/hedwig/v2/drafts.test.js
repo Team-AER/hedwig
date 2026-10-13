@@ -68,6 +68,7 @@ const drafts = await import('./drafts.js');
 const Drafts = (await import('./Drafts.jsx')).default;
 const Rail = (await import('./Rail.jsx')).default;
 const Thread = (await import('./Thread.jsx')).default;
+const actions = await import('./actions.js');
 const { v2Views } = await import('./index.js');
 
 setMockMode(true);
@@ -211,6 +212,24 @@ describe('drafts: the view', () => {
     assert.equal(rows[1].querySelector('[data-avatar]').textContent.trim().charAt(0), 'D', 'no recipient: the avatar says Draft');
   });
 
+  test('Delete on a row takes the draft off the list and discards it after the Undo window', async () => {
+    const discarded = [];
+    actions.setActionOps({ discardDrafts: async (msgs) => { discarded.push(msgs.map((m) => m.id)); } });
+    try {
+      await render(h(Drafts, {}));
+      await settle(60);
+      assert.equal(all('[data-row-button]').length, 2);
+      await click(all('[aria-label="Delete draft"]')[0]);
+      await settle(10);
+      assert.equal(all('[data-row-button]').length, 1, 'off the list at once');
+      assert.deepEqual(discarded, []);
+      await actions.flushPending();
+      assert.deepEqual(discarded, [['d-1']]);
+    } finally {
+      actions.resetActions();
+    }
+  });
+
   test('clicking a row opens the composer with the draft, as upstream\'s Drafts folder does', async () => {
     await render(h(Drafts, {}));
     await settle(60);
@@ -318,6 +337,51 @@ describe('drafts: in a thread', () => {
     await settle(30);
     assert.equal(composed.length, 2);
     assert.equal(composed[1].draftUid, 41);
+  });
+
+  test('Delete draft takes it off at once; Undo brings it back; it is discarded only after the Undo window', async () => {
+    const discarded = [];
+    actions.setActionOps({ discardDrafts: async (msgs) => { discarded.push(msgs.map((m) => m.id)); } });
+    try {
+      await render(h(Thread, { props: { item: leaseItem } }));
+      await settle(80);
+      await click(byText('button', 'Delete draft', document.querySelector('article[data-draft]')));
+      await settle(10);
+      assert.equal(document.querySelector('article[data-draft]'), null, 'off the thread at once');
+      assert.equal(byText('button', 'Continue draft'), undefined, 'and the reply bar is a reply bar again');
+      assert.deepEqual(discarded, [], 'nothing is sent while it can be undone');
+      assert.equal(actions.undo(), true);
+      await settle(10);
+      assert.ok(document.querySelector('article[data-draft]'), 'Undo brings it back');
+
+      await click(byLabel('Delete draft', document.querySelector('[data-reply-bar]')));
+      await settle(10);
+      assert.equal(document.querySelector('article[data-draft]'), null, 'the reply bar deletes it too');
+      await actions.flushPending();
+      assert.deepEqual(discarded, [['m-lease-draft']]);
+    } finally {
+      actions.resetActions();
+    }
+  });
+
+  test('deleting a conversation that is only a draft deletes the draft instead of failing', async () => {
+    const discarded = [];
+    const trashed = [];
+    actions.setActionOps({ discardDrafts: async (msgs) => { discarded.push(msgs.map((m) => m.id)); }, trash: async (msgs) => { trashed.push(msgs.map((m) => m.id)); } });
+    try {
+      await render(h(Thread, { props: { item: { threadId: 't-draft-only', messageId: 'm-draft-only', subject: 'Quote for the kitchen' } } }));
+      await settle(80);
+      assert.ok(document.querySelector('article[data-draft]'));
+      await click(document.querySelector('[role="toolbar"] [data-action="delete"]'));
+      await settle(10);
+      assert.equal(document.querySelector('article[data-draft]'), null);
+      await actions.flushPending();
+      assert.deepEqual(discarded, [['m-draft-only']]);
+      assert.deepEqual(trashed, []);
+      assert.ok(!actions.useUndo.getState().toasts.some((t) => t.tone === 'error'), 'no "Could not delete."');
+    } finally {
+      actions.resetActions();
+    }
   });
 
   test('a thread without a draft keeps its reply field', async () => {

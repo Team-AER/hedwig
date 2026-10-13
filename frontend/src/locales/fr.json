@@ -2240,6 +2240,14 @@
         "wrongNoteLabel": "Ce qui était faux dans la réponse",
         "markWrongBtn": "Marquer comme fausse",
         "sources": "Sources"
+      },
+      "drafts": {
+        "delete": "Supprimer le brouillon"
+      },
+      "act": {
+        "draftDeleted": "Brouillon supprimé",
+        "draftsDeleted": "{{n}} brouillons supprimés",
+        "draftDeleteFailed": "Impossible de supprimer le brouillon."
       }
     },
     "accounts": {

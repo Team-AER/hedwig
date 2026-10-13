@@ -2259,6 +2259,14 @@
         "wrongNoteLabel": "Co było nie tak z odpowiedzią",
         "markWrongBtn": "Oznacz jako błędną",
         "sources": "Źródła"
+      },
+      "drafts": {
+        "delete": "Usuń wersję roboczą"
+      },
+      "act": {
+        "draftDeleted": "Usunięto wersję roboczą",
+        "draftsDeleted": "Usunięte wersje robocze: {{n}}",
+        "draftDeleteFailed": "Nie udało się usunąć wersji roboczej."
       }
     },
     "accounts": {

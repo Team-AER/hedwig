@@ -103,6 +103,11 @@ const defaultOps = {
     if (!isMockMode()) await oneByOne(msgs, (m) => api.deleteMessage(m.id));
     announceSortChange({ deleted: msgs.map((m) => m.id) });
   },
+  // Upstream's delete route discards a draft outright (no Trash), as every mail client does.
+  async discardDrafts(msgs) {
+    if (!isMockMode()) await oneByOne(msgs, (m) => api.deleteMessage(m.id));
+    announceSortChange({ deleted: msgs.map((m) => m.id), drafts: true });
+  },
   async junk(msgs) {
     if (!isMockMode()) await oneByOne(msgs, (m) => api.markSpam(m.id));
     announceSortChange({ spam: msgs.map((m) => m.id) });
@@ -223,6 +228,24 @@ function planFor(spec, items) {
         },
         inverse: (e) => ops.untrash((e.resolved || []).flatMap((x) => x.msgs)),
       };
+    case 'deleteDraft': {
+      // A draft deleted on purpose (Delete draft in the reader, the Drafts list). It is gone for good
+      // once sent, so it waits out the Undo window like every delete; the conversation stays.
+      const drafts = (spec.messages || []).filter((m) => m?.id).map(actionMessage).filter((m) => m.draft);
+      if (!drafts.length) return null;
+      return {
+        deferred: true,
+        title: tvn(drafts.length, ['hedwig.v2.act.draftDeleted', 'Draft deleted'], ['hedwig.v2.act.draftsDeleted', '{{n}} drafts deleted']),
+        failTitle: tv('hedwig.v2.act.draftDeleteFailed', 'Could not delete the draft.'),
+        async commit() {
+          await ops.discardDrafts(drafts);
+          return drafts;
+        },
+        inverse: null,
+        onApply: spec.onApply,
+        onRevert: spec.onRevert,
+      };
+    }
     case 'junk':
       return {
         removes: true,
@@ -508,11 +531,11 @@ function commit(e) {
 
 /**
  * Do something to one or more stream items, at once on screen, with Undo.
- * spec: { kind: 'done' | 'delete' | 'junk' | 'flag' | 'read' | 'snooze' | 'replyLater' | 'setAside' | 'delegated' | 'reference' | 'unlist' | 'move' | 'custom',
+ * spec: { kind: 'done' | 'delete' | 'deleteDraft' | 'junk' | 'flag' | 'read' | 'snooze' | 'replyLater' | 'setAside' | 'delegated' | 'reference' | 'unlist' | 'move' | 'custom',
  *   items: stream items, stream?, messages? (the reader's thread messages, drafts included or not),
  *   messageIds? (flag / read), on? (flag), read? (read), until?, untilLabel? (snooze),
  *   folder?, label? (move), advance? (false: leave the selection alone, as on a phone), immediate?,
- *   run?, undo?, onApply?, onRevert? (custom),
+ *   run?, undo?, onApply?, onRevert? (custom, deleteDraft),
  *   title?, failTitle? (the toast's words instead of the action's own) }
  * Returns the action's id (for undo), or null when there is nothing to do.
  */

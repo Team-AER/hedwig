@@ -2240,6 +2240,14 @@
         "wrongNoteLabel": "Was an der Antwort falsch war",
         "markWrongBtn": "Als falsch markieren",
         "sources": "Quellen"
+      },
+      "drafts": {
+        "delete": "Entwurf löschen"
+      },
+      "act": {
+        "draftDeleted": "Entwurf gelöscht",
+        "draftsDeleted": "{{n}} Entwürfe gelöscht",
+        "draftDeleteFailed": "Der Entwurf konnte nicht gelöscht werden."
       }
     },
     "accounts": {
