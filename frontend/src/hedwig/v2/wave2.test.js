@@ -606,11 +606,15 @@ describe('Ask', () => {
 
   test('history opens a saved answer with its citations instead of asking again', async () => {
     await render(h(Ask, { props: {} }));
-    const history = byLabel('Earlier questions');
-    assert.match(history.textContent, /What did the landlord say about the deposit\?/);
-    assert.match(history.textContent, /marked wrong/);
-    assert.match(history.textContent, /nothing found/);
-    await click(all('button', history).find((b) => b.textContent.includes('the deposit')));
+    // An empty chat lists the earlier questions; once one is open, the header's history button does.
+    const history = () => document.querySelector('aside[aria-label="Earlier questions"]');
+    const reopen = async () => { if (!history()) await click(document.querySelector('button[aria-label="Earlier questions"]')); };
+    assert.match(history().textContent, /What did the landlord say about the deposit\?/);
+    assert.match(history().textContent, /marked wrong/);
+    assert.match(history().textContent, /nothing found/);
+    await click(all('button', history()).find((b) => b.textContent.includes('the deposit')));
+    assert.equal(history(), null, 'the answer opens as the conversation');
+    assert.equal(document.querySelector('.hw-ask-bubble').textContent, 'What did the landlord say about the deposit?');
     assert.ok(requests().includes('GET /context/ask/a-deposit'));
     assert.ok(!requests().some((r) => r.startsWith('STREAM')), 'no new question');
     assert.match(text(), /carries over if you renew/);
@@ -618,11 +622,13 @@ describe('Ask', () => {
     assert.equal(all('.hw-cite').length, 2);
     assert.match(byLabel('Sources').textContent, /Move-in checklist and deposit/);
 
-    await click(all('button', history).find((b) => b.textContent.includes('passport')));
+    await reopen();
+    await click(all('button', history()).find((b) => b.textContent.includes('passport')));
     assert.match(text(), /Nothing in your mail answers this\./);
     assert.match(text(), /no model was asked/);
     assert.equal(byLabel('Sources'), null);
-    await click(all('button', history).find((b) => b.textContent.includes('electricity')));
+    await reopen();
+    await click(all('button', history()).find((b) => b.textContent.includes('electricity')));
     assert.match(text(), /Unsupported/);
     assert.match(text(), /cites none of your messages/);
     assert.match(text(), /Marked wrong\. Hedwig learns from this\./);
@@ -640,16 +646,21 @@ describe('Ask', () => {
 
     const follow = byLabel('Ask a follow-up');
     assert.ok(follow, 'after an answer the field asks a follow-up');
-    assert.match(text(), /Following up on “What is the deposit\? cite it”/);
+    // A chat: the field sits under the conversation, which reads oldest first.
+    assert.ok(follow.closest('form').compareDocumentPosition(document.querySelector('[role="log"]')) & dom.window.Node.DOCUMENT_POSITION_PRECEDING, 'the field is below the conversation');
     await type(follow, 'and if I renew?');
     await submit(follow.closest('form'));
     await settle(120);
+    assert.deepEqual(all('.hw-ask-bubble').map((b) => b.textContent), ['What is the deposit? cite it', 'and if I renew?']);
     const log = await mock.mockRequest('GET', '/context/ask/history');
     assert.equal(log[0].question, 'and if I renew?');
     assert.equal(log[0].followUpOf, log[1].id);
     assert.match(text(), /Renewing keeps the same deposit/);
 
-    await click(byText('button', 'Wrong answer'));
+    // Each answer in the conversation has its own; the newest is the follow-up's.
+    const wrongButtons = all('button').filter((b) => b.textContent.trim() === 'Wrong answer');
+    assert.equal(wrongButtons.length, 2);
+    await click(wrongButtons.at(-1));
     await type(byLabel('What was wrong with the answer'), 'It is not the same deposit');
     await submit(byLabel('What was wrong with the answer').closest('form'));
     assert.ok(requests().includes(`POST /context/ask/${log[0].id}/feedback`));
