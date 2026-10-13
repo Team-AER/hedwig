@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterAll } from 'vitest';
 import { mockGateway } from '../testing/mockGateway.js';
 
 const db = { calls: [], handler: null };
@@ -51,6 +51,14 @@ const reflexPrompt = (await import('../prompts/sort.reflex.js')).default;
 
 const NOW = new Date('2026-09-23T12:00:00Z');
 const daysAgo = (d) => new Date(NOW.getTime() - d * 86400_000);
+// The fixtures date mail relative to NOW, and the engine reads the clock (message age against
+// sort.reflexMaxAgeDays, the guard's window), so the clock starts at NOW too and keeps running.
+// Otherwise "a day ago" drifts out of those windows as the calendar moves on.
+beforeAll(() => {
+  vi.useFakeTimers({ toFake: ['Date'], shouldAdvanceTime: true });
+  vi.setSystemTime(NOW);
+});
+afterAll(() => { vi.useRealTimers(); });
 const ME = new Set(['me@example.com']);
 const USER = '11111111-1111-4111-8111-111111111111';
 
