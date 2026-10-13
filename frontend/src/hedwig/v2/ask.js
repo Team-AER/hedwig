@@ -105,3 +105,52 @@ export function historyMark(entry) {
   if (entry?.unsupported) return 'unsupported';
   return null;
 }
+
+const CITE_RUN = /\[\d{1,3}(?:\s*,\s*\d{1,3})*\](?:\s*\[\d{1,3}(?:\s*,\s*\d{1,3})*\])*/g;
+
+/**
+ * Citations in reading order. The server numbers every message it read, often 40 or more, so an
+ * answer citing 44 and then 4 showed "⁴⁴ … ⁴". The cited sources become 1, 2, 3… in the order the
+ * answer first cites them, the ones it read but did not cite follow, and a run of markers such as
+ * "[4][44]" becomes one "[1, 2]". Numbers that name no source are left as they are.
+ * @param {string} answer
+ * @param {{ n: number, message?: object }[]} sources
+ * @returns {{ text: string, sources: { n: number, source: number, message?: object, cited: boolean }[], toSource: (d: number) => number }}
+ */
+export function readingOrder(answer, sources = []) {
+  const text = String(answer || '');
+  const list = Array.isArray(sources) ? sources.filter((s) => s && Number.isInteger(s.n)) : [];
+  const known = new Set(list.map((s) => s.n));
+  const cited = citedNumbers(text).filter((n) => known.has(n));
+  const order = [...cited, ...list.map((s) => s.n).filter((n) => !cited.includes(n))];
+  const toDisplay = new Map(order.map((n, i) => [n, i + 1]));
+  const out = text.replace(CITE_RUN, (run) => {
+    const nums = [...new Set((run.match(/\d{1,3}/g) || []).map((x) => toDisplay.get(Number(x)) ?? Number(x)))];
+    return `[${nums.join(', ')}]`;
+  });
+  const bySource = new Map(list.map((s) => [s.n, s]));
+  const citedSet = new Set(cited);
+  return {
+    text: out,
+    sources: order.map((n, i) => ({ ...bySource.get(n), n: i + 1, source: n, cited: citedSet.has(n) })),
+    toSource: (d) => order[Number(d) - 1] ?? Number(d),
+  };
+}
+
+/**
+ * Earlier questions, one row per question: the same words asked again show once, as the newest
+ * (history is newest first), or as the one on screen when that is an older copy.
+ */
+export function distinctQuestions(entries = [], currentId = null) {
+  const list = Array.isArray(entries) ? entries : [];
+  const groups = new Map();
+  for (const e of list) {
+    if (!e || !e.id) continue;
+    const key = String(e.question || '').trim().replace(/\s+/g, ' ').toLowerCase();
+    const at = groups.get(key);
+    if (!at) groups.set(key, e);
+    else if (e.id === currentId) groups.set(key, e);
+  }
+  const keep = new Set([...groups.values()].map((e) => e.id));
+  return list.filter((e) => e && keep.has(e.id));
+}

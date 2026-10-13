@@ -41,6 +41,12 @@ describe('linkifyCitations', () => {
     const html = '<pre><code>arr[1]</code></pre><a title="[2]">x</a>';
     assert.equal(linkifyCitations(html), html);
   });
+  it('separates adjacent citations with a comma', () => {
+    const out = linkifyCitations('<p>Total [2, 1] and [3][4] and [5] alone</p>');
+    assert.equal((out.match(/hw-cite-sep/g) || []).length, 2);
+    assert.match(out, /data-cite="2"[^<]*<\/button><span class="hw-cite-sep" aria-hidden="true">,<\/span><button[^>]*data-cite="1"/);
+    assert.doesNotMatch(out, /data-cite="5"[^<]*<\/button><span class="hw-cite-sep"/);
+  });
 });
 
 describe('reduceAsk', () => {

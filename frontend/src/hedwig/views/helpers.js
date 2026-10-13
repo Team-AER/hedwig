@@ -204,12 +204,15 @@ export function linkifyCitations(html) {
       return part;
     }
     if (codeDepth > 0 || !part.includes('[')) return part;
-    return parseCitations(part).map((seg) => {
+    const segs = parseCitations(part);
+    return segs.map((seg, i) => {
       if (seg.type === 'text') return seg.text;
       if (seg.type === 'msg') {
         return `<button type="button" class="hw-cite" data-msg="${escapeAttr(seg.id)}" aria-label="Open cited message">↗</button>`;
       }
-      return `<button type="button" class="hw-cite" data-cite="${seg.n}" aria-label="Open source ${seg.n}">${seg.n}</button>`;
+      // "[1, 2]" and "[1][2]" read as ¹,² rather than ¹².
+      const sep = segs[i - 1]?.type === 'cite' ? '<span class="hw-cite-sep" aria-hidden="true">,</span>' : '';
+      return `${sep}<button type="button" class="hw-cite" data-cite="${seg.n}" aria-label="Open source ${seg.n}">${seg.n}</button>`;
     }).join('');
   }).join('');
 }

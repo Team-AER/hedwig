@@ -9,7 +9,7 @@ import { getView } from '../registry.js';
 import { v2Api, v2Stream, listOf } from '../v2/client.js';
 import { useV2Resource } from '../v2/hooks.js';
 import { openThread } from '../v2/nav.js';
-import { ASK2_INITIAL, askStarted, fromSaved, historyMark, reduceAsk2, coverageGap } from '../v2/ask.js';
+import { ASK2_INITIAL, askStarted, fromSaved, historyMark, reduceAsk2, coverageGap, readingOrder, distinctQuestions } from '../v2/ask.js';
 import { Btn, ErrorLine, Glyph, Hair, IconBtn, IconButton, LinkBtn, Mono, Quiet, Reason, SectionLabel, V, ViewBody, ViewHead, usePhone } from '../v2/primitives.jsx';
 import { Icon } from '../icons.jsx';
 import { ASK_FIELD_CSS, askFieldStyle, askInputStyle } from '../v2/Brief.jsx';
@@ -122,7 +122,9 @@ export default function Ask({ props = {} }) {
   const startOver = () => { ctlRef.current?.abort(); setState(ASK2_INITIAL); setChain([]); setError(null); inputRef.current?.focus(); };
   const submit = (e) => { e.preventDefault(); run(question, { followUp: followingUp }); };
   const streaming = state.status === 'streaming';
-  const entries = listOf(history.data, 'items').filter((h) => h && h.id);
+  const entries = distinctQuestions(listOf(history.data, 'items').filter((h) => h && h.id), state.id);
+  // A follow-up keeps its wording while it is being answered, not only once it is done.
+  const followUpMode = Boolean(followingUp || state.followUpOf);
   const title = tv('hedwig.v2.ask.title', 'Ask');
 
   const form = (
@@ -143,8 +145,8 @@ export default function Ask({ props = {} }) {
           type="text"
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
-          placeholder={followingUp ? tv('hedwig.v2.ask.followUpPlaceholder', 'and what about…') : tv('hedwig.v2.brief.askPlaceholder', 'what did the landlord say about the deposit?')}
-          aria-label={followingUp ? tv('hedwig.v2.ask.followUpLabel', 'Ask a follow-up') : tv('hedwig.v2.brief.askLabel', 'Ask your mail')}
+          placeholder={followUpMode ? tv('hedwig.v2.ask.followUpPlaceholder', 'and what about…') : tv('hedwig.v2.brief.askLabel', 'Ask your mail')}
+          aria-label={followUpMode ? tv('hedwig.v2.ask.followUpLabel', 'Ask a follow-up') : tv('hedwig.v2.brief.askLabel', 'Ask your mail')}
           style={{ ...askInputStyle, fontSize: phone ? 16 : 13 }}
         />
         {streaming
@@ -163,7 +165,9 @@ export default function Ask({ props = {} }) {
   );
 
   const main = (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 22, flex: '1 1 420px', minWidth: 0 }}>
+    // The answer takes the room; Earlier questions sits beside it when the pane is wide and runs the
+    // full width under it when not.
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 22, flex: '999 1 420px', minWidth: 0 }}>
       {form}
       <TierNote />
       <ErrorLine error={error} />
@@ -186,7 +190,7 @@ export default function Ask({ props = {} }) {
   );
 
   const aside = (
-    <aside aria-label={tv('hedwig.v2.ask.history', 'Earlier questions')} style={{ display: 'flex', flexDirection: 'column', flex: '1 1 240px', maxWidth: phone ? 'none' : 340, minWidth: 0 }}>
+    <aside aria-label={tv('hedwig.v2.ask.history', 'Earlier questions')} style={{ display: 'flex', flexDirection: 'column', flex: '1 1 260px', minWidth: 0 }}>
       <SectionLabel as="h2" style={{ padding: '0 0 6px' }}>{tv('hedwig.v2.ask.history', 'Earlier questions')}</SectionLabel>
       {history.error && <ErrorLine error={history.error} onRetry={() => history.reload()} retryLabel={tv('hedwig.v2.action.retry', 'Try again')} />}
       {history.data && !entries.length && <span style={{ fontSize: 13, color: V.muted, padding: '8px 0' }}>{tv('hedwig.v2.ask.noHistory', 'Nothing asked yet.')}</span>}
@@ -239,11 +243,12 @@ export default function Ask({ props = {} }) {
 }
 
 function Earlier({ answer }) {
+  const ro = readingOrder(answer.answer, answer.sources || []);
   return (
     <section style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingBottom: 14, borderBottom: `1px solid ${V.line}` }}>
       <span style={{ fontSize: 15, fontWeight: 600, lineHeight: 1.3 }}>{answer.question}</span>
       <div style={{ color: V.muted, fontSize: 13 }}>
-        <Markdown text={tidyCites(answer.answer)} onCite={(n) => { const m = (answer.sources || []).find((x) => x.n === n)?.message; if (m?.id) openThread(sourceItem(m)); }} />
+        <Markdown text={tidyCites(ro.text)} onCite={(d) => { const n = ro.toSource(d); const m = (answer.sources || []).find((x) => x.n === n)?.message; if (m?.id) openThread(sourceItem(m)); }} />
       </div>
     </section>
   );
@@ -257,9 +262,11 @@ function AnswerBlock({ state, phone, onFeedback, onAgain, onAgent }) {
   const streaming = state.status === 'streaming' || state.status === 'loading';
   const done = state.status === 'done';
   const sources = state.sources || [];
-  const cited = new Set(state.citations || []);
   const bySource = new Map(sources.map((s) => [s.n, s.message]));
   const openSource = (n) => { const m = bySource.get(n); if (m?.id) openThread(sourceItem(m)); };
+  // Citations renumbered 1, 2, 3 in reading order, the uncited sources after them.
+  const ro = readingOrder(state.answer, sources);
+  const anyCited = ro.sources.some((s) => s.cited);
   // Nothing close enough to the question was found: no model was asked, and the canned sentence
   // the server sends says less than this line does.
   const nothing = done && state.notFound && !sources.length;
@@ -299,7 +306,7 @@ function AnswerBlock({ state, phone, onFeedback, onAgain, onAgent }) {
         </div>
       )}
       {!nothing && (state.answer
-        ? <Markdown text={tidyCites(state.answer)} onCite={openSource} />
+        ? <Markdown text={tidyCites(ro.text)} onCite={(d) => openSource(ro.toSource(d))} />
         : streaming && <Quiet style={{ padding: 0 }}>{sources.length ? tvn(sources.length, ['hedwig.v2.ask.readingOne', 'Reading 1 message…'], ['hedwig.v2.ask.readingMany', 'Reading {{n}} messages…']) : tv('hedwig.v2.ask.searching', 'Searching your mail…')}</Quiet>)}
       {(lighter || (done && coverageGap(state.coverage) && !nothing)) && (
         <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -339,7 +346,7 @@ function AnswerBlock({ state, phone, onFeedback, onAgain, onAgent }) {
               <IconButton icon="undo" data-undo="" label={tv('hedwig.v2.today.undo', 'Undo')} size={phone ? 44 : 28} disabled={sending} onClick={() => feedback(false)} style={{ color: V.muted }} />
             </>
           )}
-          {state.answer && <IconButton icon="copy" data-copy="" label={tv('hedwig.v2.ask.copy', 'Copy')} size={phone ? 44 : 28} onClick={() => navigator.clipboard?.writeText(state.answer)} style={{ color: V.muted }} />}
+          {state.answer && <IconButton icon="copy" data-copy="" label={tv('hedwig.v2.ask.copy', 'Copy')} size={phone ? 44 : 28} onClick={() => navigator.clipboard?.writeText(ro.text)} style={{ color: V.muted }} />}
           {onAgent && <LinkBtn muted hit={phone} onClick={onAgent}>{tv('hedwig.v2.ask.agent', 'Ask the agent instead')}</LinkBtn>}
         </div>
       )}
@@ -364,15 +371,15 @@ function AnswerBlock({ state, phone, onFeedback, onAgain, onAgent }) {
         <section aria-label={tv('hedwig.v2.ask.sources', 'Sources')} style={{ display: 'flex', flexDirection: 'column', paddingTop: 6 }}>
           <SectionLabel as="h3" style={{ padding: '0 0 4px' }}>{tv('hedwig.v2.ask.sources', 'Sources')}</SectionLabel>
           <ol style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-            {sources.map((s, i) => {
+            {ro.sources.map((s, i) => {
               const m = s.message || {};
-              const isCited = !cited.size || cited.has(s.n);
+              const isCited = !anyCited || s.cited;
               return (
-                <li key={s.n}>
+                <li key={s.source}>
                   {i > 0 && <Hair />}
                   <button
                     type="button"
-                    onClick={() => openSource(s.n)}
+                    onClick={() => openSource(s.source)}
                     style={{ display: 'grid', gridTemplateColumns: '28px minmax(0, 1fr) auto', columnGap: 10, alignItems: 'baseline', width: '100%', padding: '10px 0', minHeight: 44, border: 0, background: 'none', color: isCited ? V.ink : V.muted, font: 'inherit', fontSize: 13, textAlign: 'left', cursor: 'pointer' }}
                   >
                     <Mono size={11} color={isCited ? V.accentInk : V.muted} style={{ fontWeight: 600 }}>{s.n}</Mono>

@@ -333,7 +333,8 @@ const CITE_CSS = `
 .hw-md .hw-cite{display:inline-flex;align-items:center;justify-content:center;min-width:12px;height:auto;padding:0 2px;margin:0 1px;
   vertical-align:super;font:600 10px/1 var(--hw-font-body, system-ui, sans-serif);font-variant-numeric:tabular-nums;color:var(--hw-accent-ink, #0062CC);
   background:none;border:0;border-radius:4px;cursor:pointer}
-.hw-md .hw-cite:hover,.hw-md .hw-cite:focus-visible{background:var(--hw-accent-tint, rgba(0,122,255,0.12));color:var(--hw-accent-ink, #0062CC)}`;
+.hw-md .hw-cite:hover,.hw-md .hw-cite:focus-visible{background:var(--hw-accent-tint, rgba(0,122,255,0.12));color:var(--hw-accent-ink, #0062CC)}
+.hw-md .hw-cite-sep{vertical-align:super;font:600 10px/1 var(--hw-font-body, system-ui, sans-serif);color:var(--hw-accent-ink, #0062CC);margin:0 -1px}`;
 
 /**
  * Render markdown (marked + DOMPurify). `[n]` citations become buttons: `resolveCite(n)` returns a
