@@ -61,8 +61,10 @@ describe('cut (floor, per-message cap)', () => {
 
 describe('query building', () => {
   it('ORs content words as prefixes, drops stopwords, cannot break tsquery syntax', () => {
-    expect(buildOrQuery("When is the visa form due? (& | !) 'x'")).toBe('visa:* | form:* | due:*');
-    expect(buildOrQuery('the what')).toBe('the:* | what:*');
+    expect(buildOrQuery("When is the visa form due? (& | !) 'x'")).toBe('visa:* | form:* | due');
+    expect(buildOrQuery('the what')).toBe('the | what:*');
+    // A short word is matched whole: "ai:*" would find air, airline, airport.
+    expect(buildOrQuery('AI expenses')).toBe('ai | expenses:*');
     expect(buildOrQuery('!!')).toBe('');
   });
   it('boosts phrases of two or more words only', () => {

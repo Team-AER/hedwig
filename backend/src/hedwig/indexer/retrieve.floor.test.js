@@ -95,7 +95,7 @@ describe('retrieve relevance floor', () => {
     expect(res.chunks[0].score).toBeGreaterThan(res.chunks[2].score);
     expect(res.floor).toBe(true); // two weak hits were cut and fewer than `limit` came back
     const fts = db.calls.find((c) => /ts_rank_cd/.test(c.sql));
-    expect(fts.params[5]).toEqual(['visa:*', 'documents:*', 'due:*']);
+    expect(fts.params[5]).toEqual(['visa:*', 'documents:*', 'due']);
     expect(fts.sql).toMatch(/AS coverage/);
   });
 

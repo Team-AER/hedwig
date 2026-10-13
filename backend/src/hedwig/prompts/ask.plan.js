@@ -1,5 +1,5 @@
 // ask.plan — Reflex query plan for Ask (stream G, ask2/plan.js). Used only when the rules find no
-// dates, people, folders or attachment wording in the question; runs under a ~500 ms budget, so the
+// dates, people, folders or attachment wording in the question; runs under ask.planTimeoutMs, so the
 // output is tiny and reasoning is off.
 export default {
   id: 'ask.plan',

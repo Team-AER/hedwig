@@ -34,7 +34,7 @@ vi.mock('../context/search.js', () => ({ indexComplete: vi.fn(async () => true),
 const { planRules, normaliseModelPlan, isStructured, planQuery } = await import('./plan.js');
 const { groupByThread, buildEvidence, stripContextLine } = await import('./evidence.js');
 const { checkCitations, citedNumbers, numberResults, runSources, sourcesFromMessages, _resetCitations } = await import('./citations.js');
-const { answerQuestion, NOTHING_RELEVANT } = await import('./answer.js');
+const { answerQuestion, NOTHING_RELEVANT, carriedSources } = await import('./answer.js');
 const { _resetPrompts } = await import('../prompts/index.js');
 const { _resetLlmState } = await import('../llm.js');
 const { _resetShareCache } = await import('../indexer/truth.js');
@@ -111,6 +111,17 @@ describe('planRules', () => {
     expect(plan('what I sent in June', { folders: ['Sent'] }).folders).toEqual([]);
   });
 
+  it('drops request wording, so the search looks for the thing asked about', () => {
+    expect(plan('find out all the AI expenses my team has mailed to me').text).toBe('AI expenses');
+    expect(plan('show me the invoices people sent me').text).toBe('invoices');
+    expect(plan('Can you list every flight booking?').text).toBe('flight booking?');
+    expect(plan('tell me about the deposit').text).toBe('deposit');
+    // Only the wording goes: the question itself, and what I sent, stay.
+    expect(plan('What did the solicitor charge?').text).toBe('What did the solicitor charge?');
+    expect(plan('the report I sent to the board').text).toBe('the report I sent to the board');
+    expect(plan('find').text).toBe('find');
+  });
+
   it('isStructured is false for a plain question', () => {
     expect(isStructured(plan('what is the solicitor fee'))).toBe(false);
     expect(isStructured(plan('what is the solicitor fee from Thomas'))).toBe(true);
@@ -119,6 +130,23 @@ describe('planRules', () => {
   it('normalises the Reflex plan: bad dates dropped, only own folders', () => {
     const p = normaliseModelPlan({ text: 'fee', people: ['Thomas'], after: 'soon', before: '2026-09-01', folders: ['Receipts', 'Nope'], hasAttachment: false, latest: true }, { folders: ['Receipts'], question: 'q' });
     expect(p).toMatchObject({ text: 'fee', people: ['thomas'], after: null, before: '2026-09-01T00:00:00.000Z', folders: ['Receipts'], hasAttachment: null, latest: true });
+  });
+});
+
+describe('carriedSources', () => {
+  const id = (i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`;
+  const sources = Array.from({ length: 46 }, (_, i) => id(i + 1));
+
+  it('keeps what the earlier answer cited, however far down the list, then the rest', () => {
+    // The September invoice was source 44 of 46; a follow-up that kept only the first 8 lost it.
+    expect(carriedSources({ sources, citations: [4, 44] }, 8)).toEqual([id(4), id(44), id(1), id(2), id(3), id(5), id(6), id(7)]);
+  });
+
+  it('copes with no citations, citations naming no source, and a zero budget', () => {
+    expect(carriedSources({ sources, citations: [] }, 3)).toEqual([id(1), id(2), id(3)]);
+    expect(carriedSources({ sources: sources.slice(0, 2), citations: [9, 'x'] }, 5)).toEqual([id(1), id(2)]);
+    expect(carriedSources({ sources, citations: [1] }, 0)).toEqual([]);
+    expect(carriedSources(null, 8)).toEqual([]);
   });
 });
 

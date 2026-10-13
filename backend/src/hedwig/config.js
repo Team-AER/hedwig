@@ -277,7 +277,7 @@ export const SCHEMA = [
   { key: 'ask.maxAnswerTokens', type: 'number', default: 1200, min: 200, max: 8000, group: 'ask', label: 'Longest answer (tokens)' },
   { key: 'ask.messageChars', type: 'number', default: 4000, min: 300, max: 40000, group: 'ask', label: 'Most characters of evidence per message' },
   { key: 'ask.planReflex', type: 'boolean', default: true, group: 'ask', label: 'Ask the Reflex model to plan a question when the rules find no dates, people or folders' },
-  { key: 'ask.planTimeoutMs', type: 'number', default: 500, min: 100, max: 10000, group: 'ask', label: 'Time allowed for the Reflex query plan (ms)' },
+  { key: 'ask.planTimeoutMs', type: 'number', default: 2500, min: 100, max: 10000, group: 'ask', label: 'Time allowed for the Reflex query plan (ms)', help: 'The plan turns a question into the words to search for. A hosted model takes one to two seconds; past this, the rules\' plan is used.' },
   { key: 'ask.followUpSources', type: 'number', default: 8, min: 0, max: 30, group: 'ask', label: 'Sources carried over from the previous answer in a follow-up' },
   { key: 'cards.enabled', type: 'boolean', default: true, group: 'cards', label: 'Records cards (receipts, deliveries, bookings, events, codes)', scope: 'user' },
   { key: 'cards.scanEverySec', type: 'number', default: 60, min: 10, max: 86400, group: 'cards', label: 'Look for newly sorted mail to make cards from every (s)' },

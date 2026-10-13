@@ -30,12 +30,14 @@ const STOPWORDS = new Set(('a an and are as at be but by can did do does for fro
 
 /**
  * OR query over the words of free text (stopwords dropped unless nothing else is left), each as a
- * prefix match. Only letters and digits reach to_tsquery, so user input cannot break its syntax.
+ * prefix match from four letters up; a shorter word is matched whole, since "ai:*" also finds
+ * "air", "airline" and "airport". Only letters and digits reach to_tsquery, so user input cannot
+ * break its syntax.
  */
 export function buildOrQuery(text) {
   const words = [...new Set(String(text || '').toLowerCase().match(/[\p{L}\p{N}]{2,}/gu) || [])];
   const content = words.filter((w) => !STOPWORDS.has(w));
-  return (content.length ? content : words).slice(0, 16).map((w) => `${w}:*`).join(' | ');
+  return (content.length ? content : words).slice(0, 16).map((w) => (w.length >= 4 ? `${w}:*` : w)).join(' | ');
 }
 
 /** Words that make a phrase worth boosting (two or more). */

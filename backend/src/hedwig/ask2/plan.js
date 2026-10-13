@@ -14,6 +14,11 @@ const NOT_NAMES = new Set([...MONTHS, ...DAYS, 'i', 'me', 'my', 'the', 'a', 'an'
   'what', 'when', 'where', 'who', 'why', 'how', 'did', 'do', 'does', 'is', 'are', 'was', 'any', 'all', 'mail', 'email', 'emails',
   'inbox', 'work', 'home', 'them', 'him', 'her', 'us', 'you', 'it', 'there', 'here', 'someone', 'anyone', 'everyone', 'june', 'may']);
 const UNIT_DAYS = { day: 1, week: 7, month: 30, year: 365 };
+// Request wording is not what to look for: "find out all the AI expenses my team has mailed to me"
+// looks for "AI expenses". Full-text hits must contain half the question's words, so filler words
+// keep real matches out.
+const REQUEST_LEAD = /^\s*(?:please\s+)?(?:(?:can|could|would) you\s+)?(?:find(?: out)?|show(?: me)?|list|get(?: me)?|give(?: me)?|tell(?: me)?|fetch|pull(?: up)?|look (?:up|for)|search(?: for)?)(?: (?:about|all|every|any|the|of|me))*\b/i;
+const SENT_TO_ME = /\s(?:that\s+|which\s+)?(?:(?:my\s+)?(?:team|colleagues|people|someone|anyone|everyone|they|he|she|we|you)\s+)?(?:has\s+|have\s+|had\s+)?(?:mailed|emailed|e-mailed|sent|forwarded|shared)(?:\s+(?:to|with))?\s+(?:me|us)\b/gi;
 
 export const EMPTY_PLAN = Object.freeze({ text: '', people: [], names: [], after: null, before: null, folders: [], hasAttachment: null, latest: false, quoted: [] });
 
@@ -152,6 +157,9 @@ export function planRules(question, { now = new Date(), tz = 'UTC', folders = []
     return ` ${picked} ${words.length === 2 && picked === words[0] ? words[1] : ''} `;
   });
   plan.people = [...new Set(plan.people)];
+
+  take(REQUEST_LEAD, () => { plan.rules.push('request'); });
+  take(SENT_TO_ME, () => { plan.rules.push('request'); });
 
   const cleaned = rest.replace(/\s+([?.!,])/g, '$1').replace(/\s+/g, ' ').replace(/^[\s,?.!]+|[\s,]+$/g, '').trim();
   plan.text = cleaned.replace(/[?.!]+$/, '').trim().length >= 2 ? cleaned : q;

@@ -58,9 +58,19 @@ async function focusLine(userId, entityId, topicId) {
   return lines.join('\n');
 }
 
+/**
+ * The earlier answer's messages a follow-up reads again: the ones it cited first, then the rest in
+ * order, up to `max`. sources are message ids in evidence order, so citation n is sources[n - 1].
+ */
+export function carriedSources(previous, max) {
+  const ids = (Array.isArray(previous?.sources) ? previous.sources : []).filter(isUuid);
+  const cited = (Array.isArray(previous?.citations) ? previous.citations : []).map((n) => ids[Number(n) - 1]).filter(Boolean);
+  return [...new Set([...cited, ...ids])].slice(0, Math.max(0, Number(max) || 0));
+}
+
 async function previousAnswer(userId, id) {
   const { rows } = await query(
-    'SELECT id, question, answer, sources, status FROM hedwig_ask_log WHERE id = $1 AND user_id = $2',
+    'SELECT id, question, answer, sources, citations, status FROM hedwig_ask_log WHERE id = $1 AND user_id = $2',
     [id, userId],
   );
   if (!rows[0]) throw httpError(404, 'Earlier answer not found');
@@ -136,7 +146,7 @@ export async function answerQuestion(userId, question, { entityId = null, topicI
     const got = await gather(userId, planned, { entityId, topicId, cfg, queryText });
     plan = { ...compactPlan(planned), queryText, retrieval: { via: got.via, chunks: got.chunks.length, floor: got.floor } };
 
-    const pinned = previous ? (Array.isArray(previous.sources) ? previous.sources : []).filter(isUuid).slice(0, cfg['ask.followUpSources']) : [];
+    const pinned = previous ? carriedSources(previous, cfg['ask.followUpSources']) : [];
     if (!got.chunks.length && !pinned.length) {
       // Nothing above the relevance floor (or nothing at all): answer without a model call.
       onEvent({ type: 'sources', sources: [], askLogId, plan: compactPlan(planned), coverage });
