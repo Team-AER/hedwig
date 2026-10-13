@@ -24,6 +24,9 @@ import { bodyCoverage, shareOf } from './truth.js';
 
 export const RRF_K = 60;
 
+/** Test hook: forget the cached vector counts. */
+export function _resetVectorCounts() { counts.clear(); }
+
 const STOPWORDS = new Set(('a an and are as at be but by can did do does for from had has have how i if in into is it its me my '
   + 'of on or our so than that the their them then there these they this to was we were what when where which who why will with '
   + 'you your about any all also been could get got just more most not now only out over some such very would').split(' '));
@@ -243,17 +246,46 @@ async function ftsSearch(userId, q, f, recipes, depth) {
 const SELECTIVE = (f) => Boolean(f.threadId || f.people.length || f.folders.length || f.entityId || f.topicId);
 
 /** Vector hits with `dist` (cosine distance), plus the embedding model that made the query vector. */
-async function vecSearch(userId, q, f, recipes, depth) {
+async function vecSearch(userId, q, f, recipes, depth, { exactBelow = 0 } = {}) {
   if (!recipes.vectors) return { rows: [], model: null };
   const e = await embedQuery(q);
   if (!e || e.dims !== VECTOR_DIMS) return { rows: [], model: null };
-  return { rows: await vecRows(userId, e, f, recipes, depth), model: e.model };
+  const exact = exactBelow > 0 && (await vectorCount(userId, recipes.vecRecipe)) <= exactBelow;
+  return { rows: await vecRows(userId, e, f, recipes, depth, { exact }), model: e.model };
 }
 
-async function vecRows(userId, e, f, recipes, depth) {
+// Vectors per person and recipe, counted at most every ten minutes.
+const counts = new Map();
+async function vectorCount(userId, recipe) {
+  const key = `${userId}\n${recipe}`;
+  const hit = counts.get(key);
+  if (hit && Date.now() - hit.at < 10 * 60_000) return hit.n;
+  const { rows } = await query('SELECT COUNT(*)::int AS n FROM hedwig_chunk_vectors WHERE user_id = $1 AND recipe = $2', [userId, recipe]);
+  const n = Number(rows[0]?.n);
+  const value = Number.isFinite(n) ? n : Infinity;
+  counts.set(key, { n: value, at: Date.now() });
+  return value;
+}
+
+async function vecRows(userId, e, f, recipes, depth, { exact = false } = {}) {
   const lit = toVectorLiteral(e.vector);
   const params = [userId, lit, depth, recipes.vecRecipe];
   const where = whereSql(f, recipes, params);
+  if (exact && !SELECTIVE(f)) {
+    // Every vector, compared exactly. At one mailbox's size (~120k chunks) this takes as long as the
+    // HNSW walk (~0.6 s), and the walk can miss a close match outright: on 2026-10-13 it never
+    // returned the 10th-nearest chunk at any ef_search. "+ 0" keeps the planner off the HNSW index.
+    const { rows } = await query(
+      `SELECT ${CHUNK_COLS}, v.vector <=> $2::vector(${VECTOR_DIMS}) AS dist
+         FROM hedwig_chunk_vectors v JOIN hedwig_chunks c ON c.id = v.chunk_id
+         JOIN messages m ON m.id = c.message_id JOIN email_accounts a ON a.id = m.account_id
+        WHERE v.user_id = $1 AND v.recipe = $4 AND ${where}
+        ORDER BY (v.vector <=> $2::vector(${VECTOR_DIMS})) + 0
+        LIMIT $3`,
+      params,
+    );
+    return rows;
+  }
   if (SELECTIVE(f)) {
     // A narrow filter: rank the small candidate set exactly instead of walking the HNSW graph.
     const { rows } = await query(
@@ -352,7 +384,7 @@ export async function retrieve({ userId, query: q, filters = {}, limit = 20, exp
   const depth = Math.max(n * 4, 40);
   const [fts, vec] = await Promise.all([
     ftsSearch(userId, text, f, recipes, depth),
-    vecSearch(userId, text, f, recipes, depth).catch((err) => {
+    vecSearch(userId, text, f, recipes, depth, { exactBelow: cfg['index.exactVectorsBelow'] ?? 0 }).catch((err) => {
       console.warn('[hedwig] retrieve: vector search failed, using full text only:', err.message);
       return { rows: [], model: null };
     }),

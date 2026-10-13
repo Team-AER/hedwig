@@ -2,9 +2,10 @@
 // fusion and the fused-score cut after it, against a mocked database.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const db = vi.hoisted(() => ({ fts: [], vec: [], calls: [] }));
+const db = vi.hoisted(() => ({ fts: [], vec: [], calls: [], vectors: null }));
 const answer = (sql, params) => {
   db.calls.push({ sql, params });
+  if (/COUNT\(\*\)::int AS n FROM hedwig_chunk_vectors/.test(sql)) return { rows: db.vectors == null ? [] : [{ n: db.vectors }] };
   if (/ts_rank_cd/.test(sql)) return { rows: db.fts };
   if (/<=>/.test(sql)) return { rows: db.vec };
   return { rows: [] };
@@ -33,7 +34,7 @@ vi.mock('./store.js', () => ({ tsConfig: vi.fn(async () => 'simple') }));
 vi.mock('../state.js', () => ({ getState: vi.fn(async () => null) }));
 
 const { SCHEMA } = await import('../config.js');
-const { retrieve, admit } = await import('./retrieve.js');
+const { retrieve, admit, _resetVectorCounts } = await import('./retrieve.js');
 const DEFAULTS = Object.fromEntries(SCHEMA.map((f) => [f.key, f.default]));
 
 const DATE = new Date('2026-09-20T12:00:00Z');
@@ -151,5 +152,33 @@ describe('retrieve relevance floor', () => {
 
   it('reports no floor when neither search found anything', async () => {
     expect(await retrieve({ userId: 'u1', query: 'nothing', expandThreads: false })).toEqual({ chunks: [], floor: false });
+  });
+});
+
+describe('exact vector search', () => {
+  beforeEach(() => {
+    _resetVectorCounts();
+    db.fts = []; db.vec = []; db.calls = []; db.vectors = null;
+    cfg.values = { ...DEFAULTS };
+  });
+  const vecSql = () => db.calls.filter((c) => /<=>/.test(c.sql)).map((c) => c.sql);
+
+  it('compares every vector while a person has no more than index.exactVectorsBelow', async () => {
+    db.vectors = 120000;
+    await retrieve({ userId: 'u1', query: 'AI expenses', limit: 10 });
+    const [sql] = vecSql();
+    expect(sql).toMatch(/\+ 0/);
+    expect(db.calls.some((c) => /hnsw\.ef_search/.test(c.sql))).toBe(false);
+  });
+
+  it('walks the HNSW index above it, when the count is unknown, and when the setting is 0', async () => {
+    for (const [vectors, below] of [[400000, 300000], [null, 300000], [10, 0]]) {
+      _resetVectorCounts();
+      db.calls = []; db.vectors = vectors;
+      cfg.values = { ...DEFAULTS, 'index.exactVectorsBelow': below };
+      await retrieve({ userId: 'u1', query: 'AI expenses', limit: 10 });
+      expect(vecSql()[0]).not.toMatch(/\+ 0/);
+      expect(db.calls.some((c) => /hnsw\.ef_search/.test(c.sql))).toBe(true);
+    }
   });
 });
