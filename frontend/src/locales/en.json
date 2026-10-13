@@ -2280,6 +2280,19 @@
       "unusable": "This model is not available on the server right now. Pick another one and save.",
       "loading": "Loading the models this server offers…",
       "error": "Could not list the models: {{error}}"
+    },
+    "models": {
+      "title": "Hedwig’s models",
+      "more": "Effort, fallback and routing…",
+      "sub": "Sorting, summaries, extraction and the agent run on these, separately from the assistant model above."
+    },
+    "settingsTabs": {
+      "group": "Hedwig",
+      "personal": "Personal",
+      "triage": "Triage",
+      "plugins": "Hedwig plugins",
+      "routing": "Models and routing",
+      "pipeline": "Pipeline"
     }
   }
 }

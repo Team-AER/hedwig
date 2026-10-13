@@ -2299,6 +2299,19 @@
       "unusable": "Tento model teď na serveru není k dispozici. Vyberte jiný a uložte.",
       "loading": "Načítám modely, které server nabízí…",
       "error": "Modely se nepodařilo načíst: {{error}}"
+    },
+    "models": {
+      "title": "Modely Hedwigu",
+      "more": "Úsilí, záloha a směrování…",
+      "sub": "Třídění, souhrny, extrakce a agent běží na těchto modelech, odděleně od modelu asistenta výše."
+    },
+    "settingsTabs": {
+      "group": "Hedwig",
+      "personal": "Osobní",
+      "triage": "Třídění",
+      "plugins": "Pluginy Hedwigu",
+      "routing": "Modely a směrování",
+      "pipeline": "Zpracování"
     }
   }
 }

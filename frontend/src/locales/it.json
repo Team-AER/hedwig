@@ -2280,6 +2280,19 @@
       "unusable": "Questo modello non è disponibile sul server in questo momento. Scegline un altro e salva.",
       "loading": "Caricamento dei modelli offerti da questo server…",
       "error": "Impossibile elencare i modelli: {{error}}"
+    },
+    "models": {
+      "title": "Modelli di Hedwig",
+      "more": "Impegno, riserva e instradamento…",
+      "sub": "Smistamento, riepiloghi, estrazione e agente usano questi modelli, separati dal modello dell’assistente qui sopra."
+    },
+    "settingsTabs": {
+      "group": "Hedwig",
+      "personal": "Personale",
+      "triage": "Smistamento",
+      "plugins": "Plugin di Hedwig",
+      "routing": "Modelli e instradamento",
+      "pipeline": "Elaborazione"
     }
   }
 }

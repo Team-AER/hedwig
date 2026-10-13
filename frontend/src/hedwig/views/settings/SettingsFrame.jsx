@@ -1,4 +1,7 @@
 // Shared frame for Hedwig settings pages: title row plus a nav across the Hedwig settings views.
+// Inside the Settings dialog (EmbeddedSettings.jsx) the dialog's sidebar is the nav and its content
+// area scrolls, so the frame drops both.
+import { createContext, useContext } from 'react';
 import { useHedwig } from '../../store.js';
 import { useStore } from '../../../store/index.js';
 import { useIsAdmin } from '../hooks.js';
@@ -14,10 +17,25 @@ const PAGES = [
   { id: 'hedwig.settings.models', label: 'Pipeline', admin: true },
 ];
 
+export const SettingsEmbedded = createContext(false);
+
 export default function SettingsFrame({ active, title, sub, right, children, label }) {
   const openView = useHedwig((s) => s.openView);
   const isAdmin = useIsAdmin();
   const phone = usePhone();
+  const embedded = useContext(SettingsEmbedded);
+  if (embedded) {
+    return (
+      <section aria-label={label || title} style={{ display: 'flex', flexDirection: 'column', gap: 18, color: T.ink, fontFamily: T.body, fontSize: 13, lineHeight: 1.45 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
+          <h1 style={{ margin: 0, fontSize: 15, fontWeight: 600, lineHeight: 1.3, color: 'var(--text-primary)' }}>{title}</h1>
+          {sub && <span style={{ fontSize: 12, color: T.muted }}>{sub}</span>}
+          {right && <><span style={{ flexGrow: 1 }} />{right}</>}
+        </div>
+        {children}
+      </section>
+    );
+  }
   const openMailSettings = () => { const st = useStore.getState(); st.setAdminTab?.('accounts'); st.setShowAdmin?.(true); };
   return (
     <section aria-label={label || title} style={{

@@ -2280,6 +2280,19 @@
       "unusable": "Ce modèle n’est pas disponible sur le serveur pour le moment. Choisissez-en un autre et enregistrez.",
       "loading": "Chargement des modèles proposés par ce serveur…",
       "error": "Impossible de lister les modèles : {{error}}"
+    },
+    "models": {
+      "title": "Modèles de Hedwig",
+      "more": "Effort, secours et routage…",
+      "sub": "Le tri, les résumés, l’extraction et l’agent utilisent ces modèles, indépendamment du modèle de l’assistant ci-dessus."
+    },
+    "settingsTabs": {
+      "group": "Hedwig",
+      "personal": "Personnel",
+      "triage": "Tri",
+      "plugins": "Extensions Hedwig",
+      "routing": "Modèles et routage",
+      "pipeline": "Traitement"
     }
   }
 }

@@ -2280,6 +2280,19 @@
       "unusable": "此模型目前在服务器上不可用。请选择其他模型并保存。",
       "loading": "正在加载此服务器提供的模型…",
       "error": "无法列出模型：{{error}}"
+    },
+    "models": {
+      "title": "Hedwig 的模型",
+      "more": "推理强度、备用模型和路由…",
+      "sub": "分拣、摘要、信息提取和智能代理使用这些模型，与上方的助手模型相互独立。"
+    },
+    "settingsTabs": {
+      "group": "Hedwig",
+      "personal": "个人",
+      "triage": "分拣",
+      "plugins": "Hedwig 插件",
+      "routing": "模型与路由",
+      "pipeline": "处理流程"
     }
   }
 }

@@ -2280,6 +2280,19 @@
       "unusable": "Dieses Modell ist auf dem Server gerade nicht verfügbar. Wähle ein anderes und speichere.",
       "loading": "Lade die Modelle, die dieser Server anbietet…",
       "error": "Die Modelle konnten nicht geladen werden: {{error}}"
+    },
+    "models": {
+      "title": "Hedwigs Modelle",
+      "more": "Aufwand, Ersatz und Routing…",
+      "sub": "Sortierung, Zusammenfassungen, Extraktion und der Agent laufen auf diesen Modellen, getrennt vom Assistenten-Modell oben."
+    },
+    "settingsTabs": {
+      "group": "Hedwig",
+      "personal": "Persönlich",
+      "triage": "Priorisierung",
+      "plugins": "Hedwig-Plugins",
+      "routing": "Modelle und Routing",
+      "pipeline": "Verarbeitung"
     }
   }
 }

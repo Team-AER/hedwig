@@ -40,6 +40,9 @@ import AddAccount from '../hedwig/accounts/AddAccount.jsx';
 import { openSignIn, listenForSignIn } from '../hedwig/accounts/signIn.js';
 import { tv } from '../hedwig/v2/i18n.js';
 import { modelOptions, modelIsUsable } from '../hedwig/aiModels.js';
+import HedwigModelsCard from '../hedwig/views/settings/HedwigModelsCard.jsx';
+import EmbeddedSettings from '../hedwig/views/settings/EmbeddedSettings.jsx';
+import { HEDWIG_SETTINGS_TABS, settingsViewFor } from '../hedwig/settingsTabs.js';
 
 // ─── Shared field component ───────────────────────────────────────────────────
 function Field({ label, required, children }) {
@@ -4574,6 +4577,8 @@ function AISection() {
           {saving ? t('common.saving') : t('common.save')}
         </button>
       </form>
+
+      <HedwigModelsCard />
     </div>
   );
 }
@@ -7231,6 +7236,8 @@ function MailboxCleanupTab() {
 
 const TAB_GROUPS = [
   { id: 'account-mail', labelKey: 'admin.tabs.groupAccountMail', tabIds: ['accounts', 'notifications', 'rules', 'categories', 'cleanup', 'antispam'] },
+  // Hedwig's own settings pages (hedwig/settingsTabs.js), shown in this dialog rather than a pane.
+  { id: 'hedwig', labelKey: 'hedwig.settingsTabs.group', tabIds: HEDWIG_SETTINGS_TABS.map((tab) => tab.id) },
   { id: 'display', labelKey: 'admin.tabs.groupDisplay', tabIds: ['appearance', 'shortcuts'] },
   { id: 'security-integrations', labelKey: 'admin.tabs.groupSecurityIntegrations', tabIds: ['security', 'integrations', 'ai', 'ai-actions', 'plugins'] },
   { id: 'admin', labelKey: 'admin.tabs.groupAdmin', tabIds: ['users', 'sso'] },
@@ -7262,6 +7269,10 @@ const TABS = [
     id: 'antispam', labelKey: 'admin.tabs.antispam',
     icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3l1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5L12 3z"/><path d="M19 14l.8 2.2L22 17l-2.2.8L19 20l-.8-2.2L16 17l2.2-.8L19 14z"/><path d="M5 15l.6 1.8L7.5 17l-1.9.7L5 19.5l-.6-1.8L2.5 17l1.9-.7L5 15z"/></svg>,
   },
+  // Hedwig
+  ...HEDWIG_SETTINGS_TABS.map((tab) => ({
+    id: tab.id, labelKey: tab.labelKey, adminOnly: tab.adminOnly, icon: <Icon name={tab.icon} size={15} strokeWidth={1.75} />,
+  })),
   // Display
   {
     id: 'appearance', labelKey: 'admin.tabs.appearance',
@@ -8914,6 +8925,7 @@ export default function AdminPanel() {
       {adminTab === 'ai-actions' && <AiActionsTab />}
       {adminTab === 'plugins' && <PluginsSection onNavigate={navigateTo} />}
       {adminTab === 'about' && <AboutTab />}
+      {settingsViewFor(adminTab) && <EmbeddedSettings tabId={adminTab} />}
     </>
   );
 

@@ -2299,6 +2299,19 @@
       "unusable": "Ten model jest teraz niedostępny na serwerze. Wybierz inny i zapisz.",
       "loading": "Wczytywanie modeli oferowanych przez ten serwer…",
       "error": "Nie udało się pobrać listy modeli: {{error}}"
+    },
+    "models": {
+      "title": "Modele Hedwiga",
+      "more": "Wysiłek, zapas i routing…",
+      "sub": "Sortowanie, podsumowania, ekstrakcja i agent działają na tych modelach, niezależnie od modelu asystenta powyżej."
+    },
+    "settingsTabs": {
+      "group": "Hedwig",
+      "personal": "Osobiste",
+      "triage": "Sortowanie",
+      "plugins": "Wtyczki Hedwiga",
+      "routing": "Modele i routing",
+      "pipeline": "Przetwarzanie"
     }
   }
 }

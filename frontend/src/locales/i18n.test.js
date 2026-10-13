@@ -144,6 +144,8 @@ const SAME_VALUE_ALLOWED = {
   'login.totp.placeholder':                 'any', // 000000
 
   'hedwig.v2.brand':                       'any', // Hedwig — product name, same everywhere
+  'hedwig.settingsTabs.group':             'any', // Hedwig — product name, same everywhere
+  'hedwig.settingsTabs.personal':          [['en', 'es']], // "Personal"
 
   // ── Specific language groups ───────────────────────────────────────────────
   // Hedwig v2: French shares these words with English ("Message", "Conversation"); Spanish and

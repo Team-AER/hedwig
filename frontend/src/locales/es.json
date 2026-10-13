@@ -2280,6 +2280,19 @@
       "unusable": "Este modelo no está disponible en el servidor ahora mismo. Elige otro y guarda.",
       "loading": "Cargando los modelos que ofrece este servidor…",
       "error": "No se pudieron listar los modelos: {{error}}"
+    },
+    "models": {
+      "title": "Modelos de Hedwig",
+      "more": "Esfuerzo, respaldo y enrutamiento…",
+      "sub": "La clasificación, los resúmenes, la extracción y el agente usan estos modelos, aparte del modelo del asistente de arriba."
+    },
+    "settingsTabs": {
+      "group": "Hedwig",
+      "personal": "Personal",
+      "triage": "Clasificación",
+      "plugins": "Complementos de Hedwig",
+      "routing": "Modelos y enrutamiento",
+      "pipeline": "Procesamiento"
     }
   }
 }
