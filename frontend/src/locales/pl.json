@@ -2222,6 +2222,7 @@
         "readingOne": "Czytam 1 wiadomość…",
         "readingMany": "Czytam wiadomości: {{n}}…",
         "searching": "Przeszukuję twoją pocztę…",
+        "searchedFor": "Szukano",
         "unsupportedWhy": "Odpowiedź nie wskazuje żadnej z twoich wiadomości. Sprawdź ją, zanim na niej polegniesz.",
         "invalidOne": "Cytat {{list}} nie wskazywał żadnego źródła i został usunięty.",
         "invalidMany": "Cytaty {{list}} nie wskazywały żadnego źródła i zostały usunięte.",

@@ -2222,6 +2222,7 @@
         "readingOne": "Čtu 1 zprávu…",
         "readingMany": "Čtu zprávy: {{n}}…",
         "searching": "Hledám ve vaší poště…",
+        "searchedFor": "Hledáno",
         "unsupportedWhy": "Odpověď necituje žádnou z vašich zpráv. Než se na ni spolehnete, ověřte ji.",
         "invalidOne": "Citace {{list}} neodkazovala na žádný zdroj a byla odstraněna.",
         "invalidMany": "Citace {{list}} neodkazovaly na žádný zdroj a byly odstraněny.",

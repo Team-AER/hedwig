@@ -299,6 +299,16 @@ function AnswerBlock({ state, phone, onFeedback, onAgain, onAgent }) {
           <LinkBtn hit={phone} onClick={onAgain}>{tv('hedwig.v2.ask.again', 'Ask again')}</LinkBtn>
         </div>
       )}
+      {(state.searches || []).length > 0 && (
+        <div data-ask-searches="" style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 6px', fontSize: 12, lineHeight: '18px', color: V.muted }}>
+          <span>{tv('hedwig.v2.ask.searchedFor', 'Searched for')}</span>
+          {state.searches.map((s, i) => (
+            <span key={`${i}:${s.text}`} style={{ color: s.round > 0 && s.found > 0 ? V.ink : V.muted }}>
+              “{s.text}”{i < state.searches.length - 1 ? ' ·' : ''}
+            </span>
+          ))}
+        </div>
+      )}
       {nothing && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <p style={{ margin: 0, fontSize: 14, fontWeight: 500 }}>{tv('hedwig.v2.ask.notFound', 'Nothing in your mail answers this.')}</p>

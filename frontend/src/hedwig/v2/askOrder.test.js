@@ -1,7 +1,7 @@
 // node --test src/hedwig/v2/askOrder.test.js
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readingOrder, distinctQuestions } from './ask.js';
+import { readingOrder, distinctQuestions, reduceAsk2, askStarted, fromSaved } from './ask.js';
 
 const sources = Array.from({ length: 46 }, (_, i) => ({ n: i + 1, message: { id: `m${i + 1}` } }));
 
@@ -35,4 +35,19 @@ test('earlier questions show each question once: the newest, or the copy on scre
   assert.deepEqual(distinctQuestions(h).map((e) => e.id), ['c', 'f']);
   assert.deepEqual(distinctQuestions(h, 'a').map((e) => e.id), ['f', 'a']);
   assert.deepEqual(distinctQuestions(null), []);
+});
+
+test('the searches Ask runs, and runs again in its own words, are kept as they stream and when saved', () => {
+  let st = askStarted('find out all the AI expenses my team has mailed to me');
+  for (const ev of [
+    { type: 'search', text: 'AI expenses', found: 40, round: 0 },
+    { type: 'search', text: 'AI subscription reimbursement', found: 3, round: 1 },
+    { type: 'search', text: '' },
+    { type: 'sources', sources: [], askLogId: 'a1' },
+  ]) st = reduceAsk2(st, ev);
+  assert.deepEqual(st.searches, [{ text: 'AI expenses', found: 40, round: 0 }, { text: 'AI subscription reimbursement', found: 3, round: 1 }]);
+  assert.equal(st.status, 'streaming');
+  const saved = fromSaved({ id: 'a1', question: 'q', status: 'done', answer: 'a', plan: { searches: [{ text: 'AI expenses', found: 40 }, { text: 'Claude subscription', found: 1 }] } });
+  assert.deepEqual(saved.searches, [{ text: 'AI expenses', found: 40, round: 0 }, { text: 'Claude subscription', found: 1, round: 1 }]);
+  assert.deepEqual(fromSaved({ id: 'a2', question: 'q', status: 'done', answer: 'a' }).searches, []);
 });

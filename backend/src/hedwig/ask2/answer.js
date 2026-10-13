@@ -16,6 +16,7 @@ import { loadMessagesLite } from '../context/shapes.js';
 import { ownsEntity, ownsTopic } from '../context/cards.js';
 import { httpError, isoDay, isUuid } from '../context/util.js';
 import { planQuery } from './plan.js';
+import { runPrompt } from '../prompts/index.js';
 import { groupByThread, buildEvidence } from './evidence.js';
 import { checkCitations } from './citations.js';
 import { ANSWER_PROMPT, answerMessages, ownerLine } from './prompt.js';
@@ -75,6 +76,83 @@ async function previousAnswer(userId, id) {
   );
   if (!rows[0]) throw httpError(404, 'Earlier answer not found');
   return rows[0];
+}
+
+const messageCount = (chunks) => new Set((chunks || []).map((c) => c.messageId)).size;
+const sameSearch = (a, b) => String(a).trim().toLowerCase().replace(/\s+/g, ' ') === String(b).trim().toLowerCase().replace(/\s+/g, ' ');
+
+/**
+ * Reciprocal rank fusion of several searches' chunks (each list best first), best first, with the
+ * fused score. A chunk several searches found rises; each search's best hits come next. One search
+ * comes back as it was.
+ */
+export function mergeRuns(runs, { k = 60, limit = Infinity } = {}) {
+  const lists = (runs || []).filter((r) => Array.isArray(r?.chunks));
+  if (lists.length === 1) return lists[0].chunks.slice(0, limit);
+  const byId = new Map();
+  for (const run of lists) {
+    run.chunks.forEach((c, i) => {
+      const id = c.chunkId != null ? `c${c.chunkId}` : `m${c.messageId}:${c.kind}:${c.ordinal}`;
+      const cur = byId.get(id) || { chunk: c, score: 0 };
+      cur.score += 1 / (k + i + 1);
+      byId.set(id, cur);
+    });
+  }
+  return [...byId.values()]
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map(({ chunk, score }) => ({ ...chunk, score: Math.round(score * 1e5) / 1e5 }));
+}
+
+/**
+ * Ask searches again with its own words. After each round the Reflex model (ask.refine) sees the
+ * question and what the searches found, and either says that is enough or names up to three new
+ * searches in the words the missing mail would use ("AI subscription reimbursement" for "AI
+ * expenses"). Stops after ask.searchRounds rounds, when it is satisfied, or when a round finds no
+ * new message. A model failure or timeout ends the searching, never the answer.
+ * @returns {{ chunks: object[], searches: { text: string, found: number }[] }}
+ */
+export async function searchAgain(userId, question, planned, first, { previous = null, entityId = null, topicId = null, cfg, signal, onEvent = () => {} } = {}) {
+  const runs = [first];
+  const searches = [{ text: first.text, found: messageCount(first.chunks) }];
+  const seen = new Set(first.chunks.map((c) => c.messageId));
+  // Up to twice what one search returns; the evidence's token budget trims the rest.
+  const limit = () => Math.max(...runs.map((r) => r.chunks.length)) * Math.min(runs.length, 2);
+  for (let round = 1; round <= (Number(cfg['ask.searchRounds']) || 0); round++) {
+    const merged = mergeRuns(runs, { limit: limit() });
+    const ids = [...new Set(merged.map((c) => c.messageId))].slice(0, 40);
+    const lite = await loadMessagesLite(userId, ids, { dedupe: false });
+    const found = lite.map((m) => `${m.date ? new Date(m.date).toISOString().slice(0, 10) : '?'} · ${m.from_name || m.from_email || '?'} · ${String(m.subject || '(no subject)').slice(0, 120)}`).join('\n');
+    const timeout = AbortSignal.timeout(cfg['ask.refineTimeoutMs'] || 8000);
+    let data;
+    try {
+      ({ data } = await runPrompt('ask.refine', {
+        question, previous: previous?.question || '', searches: runs.map((r) => r.text), found, count: lite.length,
+      }, { userId, feature: 'ask', lane: 'interactive', signal: signal ? AbortSignal.any([signal, timeout]) : timeout }));
+    } catch (err) {
+      if (signal?.aborted) throw err;
+      break;
+    }
+    const next = [];
+    for (const raw of Array.isArray(data?.searches) ? data.searches : []) {
+      const text = String(raw || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+      if (text.length >= 2 && ![...runs.map((r) => r.text), ...next].some((t) => sameSearch(t, text))) next.push(text);
+    }
+    if (data?.enough === true || !next.length) break;
+    const results = await Promise.all(next.slice(0, 3).map((text) => gather(userId, { ...planned, text }, { entityId, topicId, cfg, queryText: text })));
+    let fresh = 0;
+    next.slice(0, 3).forEach((text, i) => {
+      const chunks = results[i].chunks;
+      const added = new Set(chunks.map((c) => c.messageId).filter((id) => !seen.has(id)));
+      for (const id of added) seen.add(id);
+      fresh += added.size;
+      runs.push({ text, chunks });
+      searches.push({ text, found: added.size });
+      onEvent({ type: 'search', text, found: added.size, round });
+    });
+    if (!fresh) break;
+  }
+  return { chunks: mergeRuns(runs, { limit: limit() }), searches };
 }
 
 /** Retrieval, with the old message-level search as a stand-in while the chunk index is incomplete. */
@@ -143,8 +221,11 @@ export async function answerQuestion(userId, question, { entityId = null, topicI
     // A short follow-up ("and the fee?") searches with the earlier question for context.
     const shortFollowUp = previous && q.split(/\s+/).length < 7;
     const queryText = shortFollowUp ? `${previous.question} ${planned.text}` : planned.text;
-    const got = await gather(userId, planned, { entityId, topicId, cfg, queryText });
-    plan = { ...compactPlan(planned), queryText, retrieval: { via: got.via, chunks: got.chunks.length, floor: got.floor } };
+    const first = await gather(userId, planned, { entityId, topicId, cfg, queryText });
+    onEvent({ type: 'search', text: queryText, found: messageCount(first.chunks), round: 0 });
+    const searched = await searchAgain(userId, q, planned, { text: queryText, chunks: first.chunks }, { previous, entityId, topicId, cfg, signal, onEvent });
+    const got = { ...first, chunks: searched.chunks };
+    plan = { ...compactPlan(planned), queryText, retrieval: { via: first.via, chunks: got.chunks.length, floor: first.floor }, searches: searched.searches };
 
     const pinned = previous ? carriedSources(previous, cfg['ask.followUpSources']) : [];
     if (!got.chunks.length && !pinned.length) {

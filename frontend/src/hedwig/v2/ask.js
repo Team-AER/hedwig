@@ -10,6 +10,7 @@ import { citedNumbers } from '../views/helpers.js';
 export const ASK2_INITIAL = Object.freeze({
   status: 'idle', id: null, question: '', sources: [], answer: '', citations: [], unsupported: false, notFound: false,
   invalidCitations: [], error: null, followUpOf: null, feedback: null, saved: false, createdAt: null, provenance: null, coverage: null,
+  searches: [],
 });
 
 /**
@@ -49,6 +50,11 @@ export function askStarted(question, { followUpOf = null } = {}) {
 export function reduceAsk2(state, event) {
   if (!event || typeof event !== 'object') return state;
   switch (event.type) {
+    case 'search':
+      // Ask searching, and searching again with its own words: { text, found, round }.
+      return typeof event.text === 'string' && event.text
+        ? { ...state, status: 'streaming', searches: [...(state.searches || []), { text: event.text, found: Number(event.found) || 0, round: Number(event.round) || 0 }] }
+        : state;
     case 'sources':
       return { ...state, status: 'streaming', id: event.askLogId || state.id, sources: Array.isArray(event.sources) ? event.sources : [], coverage: coverageOf(event) || state.coverage };
     case 'delta':
@@ -73,6 +79,12 @@ export function reduceAsk2(state, event) {
   }
 }
 
+/** The searches a saved answer ran (plan.searches: [{ text, found }]), first one round 0. */
+function savedSearches(plan) {
+  const list = Array.isArray(plan?.searches) ? plan.searches : [];
+  return list.filter((x) => x && typeof x.text === 'string' && x.text).map((x, i) => ({ text: x.text, found: Number(x.found) || 0, round: i ? 1 : 0 }));
+}
+
 /** A saved answer (a history entry or GET /context/ask/:id) as answer state. */
 export function fromSaved(entry) {
   if (!entry || typeof entry !== 'object') return ASK2_INITIAL;
@@ -90,6 +102,7 @@ export function fromSaved(entry) {
     error: entry.status === 'error' || entry.status === 'aborted' ? (entry.error || null) : null,
     followUpOf: entry.followUpOf || null,
     feedback: entry.feedback || null,
+    searches: savedSearches(entry.plan),
     saved: true,
     createdAt: entry.created_at || entry.createdAt || null,
     unfinished: !done,

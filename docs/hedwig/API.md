@@ -59,8 +59,11 @@ MessageContext = { sender: EntityCard|null, topic: { id, label }|null, commitmen
                    facts: Fact[], related: MessageLite[] }
 ```
 
-Ask events: `{ type: 'sources', sources: [{ n, message: MessageLite }] }`, `{ type: 'delta', text }`,
-`{ type: 'done', answer, citations: [n] }`. Answers cite sources as `[n]`.
+Ask events: `{ type: 'search', text, found, round }` for each search Ask runs (round 0 is the
+question's own; later rounds are searches Ask chose itself after reading what it had found, see
+`ask.searchRounds`), then `{ type: 'sources', sources: [{ n, message: MessageLite }] }`,
+`{ type: 'delta', text }`, `{ type: 'done', answer, citations: [n] }`. Answers cite sources as
+`[n]`. A saved answer's `plan.searches` lists the searches as `[{ text, found }]`.
 
 Service exports (`context/service.js`) other modules may import:
 `searchMessages(userId, opts)`, `findEntities(userId, q, limit)`, `getEntityCard(userId, id)`,

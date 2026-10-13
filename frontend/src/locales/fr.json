@@ -2203,6 +2203,7 @@
         "readingOne": "Lecture d’un message…",
         "readingMany": "Lecture de {{n}} messages…",
         "searching": "Recherche dans votre courrier…",
+        "searchedFor": "Recherches",
         "unsupportedWhy": "La réponse ne cite aucun de vos messages. Vérifiez-la avant de vous y fier.",
         "invalidOne": "La citation {{list}} ne renvoyait à aucune source et a été retirée.",
         "invalidMany": "Les citations {{list}} ne renvoyaient à aucune source et ont été retirées.",

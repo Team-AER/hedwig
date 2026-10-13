@@ -2203,6 +2203,7 @@
         "readingOne": "正在读 1 封邮件……",
         "readingMany": "正在读 {{n}} 封邮件……",
         "searching": "正在搜索你的邮件……",
+        "searchedFor": "搜索了",
         "unsupportedWhy": "这个回答没有引用你的任何邮件，采信前请先核实。",
         "invalidOne": "引用 {{list}} 没有对应的来源，已删除。",
         "invalidMany": "引用 {{list}} 没有对应的来源，已删除。",

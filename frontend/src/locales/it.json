@@ -2203,6 +2203,7 @@
         "readingOne": "Leggo 1 messaggio…",
         "readingMany": "Leggo {{n}} messaggi…",
         "searching": "Cerco nella tua posta…",
+        "searchedFor": "Cercato",
         "unsupportedWhy": "La risposta non cita nessuno dei tuoi messaggi. Controllala prima di fidarti.",
         "invalidOne": "La citazione {{list}} non rimandava ad alcuna fonte ed è stata rimossa.",
         "invalidMany": "Le citazioni {{list}} non rimandavano ad alcuna fonte e sono state rimosse.",

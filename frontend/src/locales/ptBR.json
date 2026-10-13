@@ -2203,6 +2203,7 @@
         "readingOne": "Lendo 1 mensagem…",
         "readingMany": "Lendo {{n}} mensagens…",
         "searching": "Procurando nos seus e-mails…",
+        "searchedFor": "Pesquisado",
         "unsupportedWhy": "A resposta não cita nenhuma das suas mensagens. Confira antes de confiar nela.",
         "invalidOne": "A citação {{list}} não apontava para nenhuma fonte e foi removida.",
         "invalidMany": "As citações {{list}} não apontavam para nenhuma fonte e foram removidas.",

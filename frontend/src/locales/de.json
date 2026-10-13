@@ -2203,6 +2203,7 @@
         "readingOne": "Lese 1 Nachricht…",
         "readingMany": "Lese {{n}} Nachrichten…",
         "searching": "Durchsuche deine Mails…",
+        "searchedFor": "Gesucht nach",
         "unsupportedWhy": "Die Antwort nennt keine deiner Nachrichten. Prüfe sie, bevor du dich darauf verlässt.",
         "invalidOne": "Zitat {{list}} verwies auf keine Quelle und wurde entfernt.",
         "invalidMany": "Zitate {{list}} verwiesen auf keine Quelle und wurden entfernt.",

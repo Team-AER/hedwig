@@ -2203,6 +2203,7 @@
         "readingOne": "Reading 1 message…",
         "readingMany": "Reading {{n}} messages…",
         "searching": "Searching your mail…",
+        "searchedFor": "Searched for",
         "unsupportedWhy": "The answer cites none of your messages. Check it before you rely on it.",
         "invalidOne": "Citation {{list}} named no source and was removed.",
         "invalidMany": "Citations {{list}} named no source and were removed.",

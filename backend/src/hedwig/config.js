@@ -279,6 +279,8 @@ export const SCHEMA = [
   { key: 'ask.messageChars', type: 'number', default: 4000, min: 300, max: 40000, group: 'ask', label: 'Most characters of evidence per message' },
   { key: 'ask.planReflex', type: 'boolean', default: true, group: 'ask', label: 'Ask the Reflex model to plan a question when the rules find no dates, people or folders' },
   { key: 'ask.planTimeoutMs', type: 'number', default: 2500, min: 100, max: 10000, group: 'ask', label: 'Time allowed for the Reflex query plan (ms)', help: 'The plan turns a question into the words to search for. A hosted model takes one to two seconds; past this, the rules\' plan is used.' },
+  { key: 'ask.searchRounds', type: 'number', default: 2, min: 0, max: 4, group: 'ask', label: 'Rounds in which Ask searches again with its own words', help: 'After each search the Reflex model looks at what was found and may run up to three more searches with other words (ask.refine). 0 searches once.' },
+  { key: 'ask.refineTimeoutMs', type: 'number', default: 8000, min: 500, max: 30000, group: 'ask', label: 'Time allowed for each decision to search again (ms)' },
   { key: 'ask.followUpSources', type: 'number', default: 8, min: 0, max: 30, group: 'ask', label: 'Sources carried over from the previous answer in a follow-up' },
   { key: 'cards.enabled', type: 'boolean', default: true, group: 'cards', label: 'Records cards (receipts, deliveries, bookings, events, codes)', scope: 'user' },
   { key: 'cards.scanEverySec', type: 'number', default: 60, min: 10, max: 86400, group: 'cards', label: 'Look for newly sorted mail to make cards from every (s)' },

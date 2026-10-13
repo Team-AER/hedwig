@@ -34,7 +34,7 @@ vi.mock('../context/search.js', () => ({ indexComplete: vi.fn(async () => true),
 const { planRules, normaliseModelPlan, isStructured, planQuery } = await import('./plan.js');
 const { groupByThread, buildEvidence, stripContextLine } = await import('./evidence.js');
 const { checkCitations, citedNumbers, numberResults, runSources, sourcesFromMessages, _resetCitations } = await import('./citations.js');
-const { answerQuestion, NOTHING_RELEVANT, carriedSources } = await import('./answer.js');
+const { answerQuestion, NOTHING_RELEVANT, carriedSources, mergeRuns } = await import('./answer.js');
 const { _resetPrompts } = await import('../prompts/index.js');
 const { _resetLlmState } = await import('../llm.js');
 const { _resetShareCache } = await import('../indexer/truth.js');
@@ -44,7 +44,8 @@ const NOW = new Date('2026-09-23T10:00:00Z'); // a Wednesday
 const M = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
 beforeEach(() => {
-  cfg = { ...defaults, 'llm.baseUrl': gw.baseUrl, 'llm.catalogUrl': gw.catalogUrl, 'insights.timezone': 'Europe/London' };
+  // One search per question unless a test turns the search-again rounds on.
+  cfg = { ...defaults, 'llm.baseUrl': gw.baseUrl, 'llm.catalogUrl': gw.catalogUrl, 'insights.timezone': 'Europe/London', 'ask.searchRounds': 0 };
   db.calls.length = 0; db.rows.clear(); db.log.clear(); db.prev = null; db.entities = []; db.coverage = [];
   _resetShareCache();
   retrieveMock.mockReset();
@@ -130,6 +131,22 @@ describe('planRules', () => {
   it('normalises the Reflex plan: bad dates dropped, only own folders', () => {
     const p = normaliseModelPlan({ text: 'fee', people: ['Thomas'], after: 'soon', before: '2026-09-01', folders: ['Receipts', 'Nope'], hasAttachment: false, latest: true }, { folders: ['Receipts'], question: 'q' });
     expect(p).toMatchObject({ text: 'fee', people: ['thomas'], after: null, before: '2026-09-01T00:00:00.000Z', folders: ['Receipts'], hasAttachment: null, latest: true });
+  });
+});
+
+describe('mergeRuns', () => {
+  it('ranks what several searches found first, then each search\'s best', () => {
+    const a = { text: 'AI expenses', chunks: [chunk(1, 't1', 0.9), chunk(2, 't2', 0.8), chunk(3, 't3', 0.7)] };
+    const b = { text: 'AI subscription reimbursement', chunks: [chunk(4, 't4', 0.9), chunk(2, 't2', 0.5)] };
+    const merged = mergeRuns([a, b]);
+    expect(merged.map((c) => c.messageId)).toEqual([M(2), M(1), M(4), M(3)]);
+    expect(merged[0].score).toBeGreaterThan(merged[1].score);
+    expect(mergeRuns([a, b], { limit: 2 })).toHaveLength(2);
+  });
+
+  it('gives one search back as it was', () => {
+    const a = { text: 'q', chunks: [chunk(1, 't1', 0.42)] };
+    expect(mergeRuns([a])).toEqual(a.chunks);
   });
 });
 
@@ -279,7 +296,7 @@ describe('answerQuestion', () => {
     const { events, onEvent } = collect();
     const out = await answerQuestion(USER, 'What colour is the office carpet in Oslo?', { onEvent, now: NOW });
     expect(out).toMatchObject({ answer: NOTHING_RELEVANT, notFound: true, unsupported: false });
-    expect(events.map((e) => e.type)).toEqual(['sources', 'delta', 'done']);
+    expect(events.map((e) => e.type)).toEqual(['search', 'sources', 'delta', 'done']);
     expect(gw.calls.filter((c) => c.workflow === 'ask.answer')).toHaveLength(0);
     const log = [...db.log.values()][0];
     expect(JSON.parse(log.finish[6])).toMatchObject({ retrieval: { floor: true, chunks: 0 } });
@@ -303,7 +320,8 @@ describe('answerQuestion', () => {
     const done = events.find((e) => e.type === 'done');
     expect(done).toMatchObject({ citations: [1, 2], invalidCitations: [5], unsupported: false, askLogId: out.askLogId });
     expect(done.answer).not.toContain('[5]');
-    expect(events[0]).toMatchObject({ type: 'sources', sources: [{ n: 1, message: { id: M(1) } }, { n: 2, message: { id: M(2) } }] });
+    expect(events[0]).toMatchObject({ type: 'search', text: 'What is the solicitor fee Thomas?', found: 2, round: 0 });
+    expect(events[1]).toMatchObject({ type: 'sources', sources: [{ n: 1, message: { id: M(1) } }, { n: 2, message: { id: M(2) } }] });
     const log = [...db.log.values()][0];
     expect(JSON.parse(log.finish[4])).toEqual([M(1), M(2)]);
     expect(log.finish[7]).toBe(false); // unsupported
@@ -338,6 +356,58 @@ describe('answerQuestion', () => {
     expect([...db.log.values()][0].params[4]).toBe(PREV);
   });
 
+  it('searches again with its own words until the model is satisfied, and answers from every search', async () => {
+    cfg['ask.searchRounds'] = 2;
+    db.rows.set(M(1), row(1, 'ai', 30, { subject: 'AI expenditure - September', body_text: 'Invoice amount: Rs. 6195.63' }));
+    db.rows.set(M(2), row(2, 'reimb', 20, { subject: 'AI Subscription Reimbursement - September 2026', body_text: 'Please reimburse my AI subscription.' }));
+    db.rows.set(M(3), row(3, 'claude', 6, { subject: 'Reimbursement Request – Claude Monthly Subscription', body_text: 'Claude Pro, USD 20.' }));
+    retrieveMock.mockImplementation(async ({ query: text }) => {
+      if (/reimbursement/i.test(text)) return { chunks: [chunk(2, 'reimb', 0.7), chunk(3, 'claude', 0.6)], floor: false };
+      if (/claude/i.test(text)) return { chunks: [chunk(3, 'claude', 0.8)], floor: false };
+      return { chunks: [chunk(1, 'ai', 0.8)], floor: false };
+    });
+    gw.on('ask.refine', [
+      { enough: false, searches: ['AI subscription reimbursement', 'AI expenses', 'Claude ChatGPT subscription'] },
+      { enough: true, searches: [] },
+    ]);
+    gw.on('ask.answer', 'September invoice [1]; two reimbursement requests [2][3].');
+    const { events, onEvent } = collect();
+    const out = await answerQuestion(USER, 'find out all the AI expenses my team has mailed to me', { onEvent, now: NOW });
+
+    // The first search, then the two new ones ("AI expenses" was already run), in order.
+    expect(events.filter((e) => e.type === 'search').map((e) => [e.text, e.found, e.round])).toEqual([
+      ['AI expenses', 1, 0],
+      ['AI subscription reimbursement', 2, 1],
+      ['Claude ChatGPT subscription', 0, 1],
+    ]);
+    const refine = gw.callsFor('ask.refine');
+    expect(refine).toHaveLength(2);
+    expect(refine[0].text).toContain('Searches run: "AI expenses"');
+    expect(refine[0].text).toContain('AI expenditure - September');
+    expect(refine[1].text).toContain('AI Subscription Reimbursement - September 2026');
+    expect(new Set(out.sources.map((s) => s.message.id))).toEqual(new Set([M(1), M(2), M(3)]));
+    const plan = JSON.parse([...db.log.values()][0].finish[6]);
+    expect(plan.searches).toEqual([{ text: 'AI expenses', found: 1 }, { text: 'AI subscription reimbursement', found: 2 }, { text: 'Claude ChatGPT subscription', found: 0 }]);
+  });
+
+  it('stops searching when a round finds nothing new, and when the model cannot be reached', async () => {
+    cfg['ask.searchRounds'] = 3;
+    db.rows.set(M(1), row(1, 'a', 3));
+    retrieveMock.mockResolvedValue({ chunks: [chunk(1, 'a', 0.8)], floor: false });
+    gw.on('ask.refine', { enough: false, searches: ['other words'] });
+    gw.on('ask.answer', 'It is here [1].');
+    await answerQuestion(USER, 'where is the thing', { now: NOW });
+    expect(gw.callsFor('ask.refine')).toHaveLength(1);
+    expect(retrieveMock).toHaveBeenCalledTimes(2);
+
+    gw.reset(); retrieveMock.mockClear();
+    gw.on('ask.refine', gw.error(500, 'down'));
+    gw.on('ask.answer', 'Still answered [1].');
+    const out = await answerQuestion(USER, 'where is the thing', { now: NOW });
+    expect(out.answer).toBe('Still answered [1].');
+    expect(retrieveMock).toHaveBeenCalledTimes(1);
+  });
+
   it('says how much of the mail it could see while the index is incomplete, in the events and the not-found answer', async () => {
     db.coverage = [
       { spam: false, state: 'running', total: 1000, dupes: 0, chunked: 900, embedded: 640 },
@@ -348,7 +418,7 @@ describe('answerQuestion', () => {
     const out = await answerQuestion(USER, 'What colour is the office carpet in Oslo?', { onEvent, now: NOW });
     expect(out.coverage).toEqual({ share: 0.64, indexed: 640, total: 1000, complete: false });
     expect(out.answer).toBe(`${NOTHING_RELEVANT} Only 64% of your mail is indexed so far, so it may still turn up.`);
-    expect(events[0].coverage).toMatchObject({ share: 0.64 });
+    expect(events.find((e) => e.type === 'sources').coverage).toMatchObject({ share: 0.64 });
     expect(events.at(-1)).toMatchObject({ type: 'done', notFound: true, coverage: { share: 0.64 } });
   });
 
