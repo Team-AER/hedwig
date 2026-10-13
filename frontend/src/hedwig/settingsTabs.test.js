@@ -8,7 +8,7 @@ const ids = (groups) => groups.map((g) => `${g.id}: ${g.pages.map((p) => p.key).
 test('an admin on a computer sees every group and page, Hedwig first', () => {
   const groups = visibleGroups({ isAdmin: true, phone: false });
   assert.deepEqual(groups.map((g) => g.id), ['hedwig', 'account-mail', 'display', 'security-integrations', 'admin']);
-  assert.equal(groups[0].pages.length, 6);
+  assert.equal(groups[0].pages.length, 7);
   assert.equal(groups[0].pages.at(-1).key, 'mail:about');
   assert.ok(groups.find((g) => g.id === 'display').pages.some((p) => p.tab === 'shortcuts'));
 });
@@ -16,7 +16,7 @@ test('an admin on a computer sees every group and page, Hedwig first', () => {
 test('someone else loses the admin pages, and the Administration group with them; phones lose Shortcuts', () => {
   const groups = visibleGroups({ isAdmin: false, phone: true });
   assert.deepEqual(ids(groups), [
-    'hedwig: hedwig.settings.personal hedwig.settings.triage hedwig.settings.plugins mail:about',
+    'hedwig: hedwig.settings.personal hedwig.settings.triage hedwig.settings.plugins hedwig.settings.connectors mail:about',
     'account-mail: mail:accounts mail:notifications mail:rules mail:categories mail:cleanup mail:antispam',
     'display: mail:appearance',
     'security-integrations: mail:security mail:integrations mail:ai-actions mail:plugins',

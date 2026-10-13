@@ -6,6 +6,7 @@ import { requireAuth, requireAdmin } from '../middleware/auth.js';
 import { runHedwigMigrations } from './migrate.js';
 import { MODULES } from './modules.js';
 import { claim, runJob, definedJobs } from './jobs.js';
+import { mountMcpPublic } from './mcp/index.js';
 
 import { hedwigStatus } from './status.js';
 export { hedwigStatus };
@@ -26,6 +27,8 @@ export function mountHedwig(app) {
   // Admin first so /admin/* is not swallowed by a user route with a param.
   app.use('/api/hedwig/admin', adminRouter);
   app.use('/api/hedwig', userRouter);
+  // Connectors: POST /mcp, OAuth and its discovery documents, outside /api (bearer tokens, no session).
+  mountMcpPublic(app);
 }
 
 let apiLoopStarted = false;

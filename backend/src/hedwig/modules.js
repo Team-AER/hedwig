@@ -24,5 +24,6 @@ import cards from './cards/index.js';
 import profile from './profile/index.js';
 import onboarding from './onboarding/index.js';
 import accounts from './accounts/index.js';
+import mcp from './mcp/index.js';
 
-export const MODULES = [core, context, triage, insights, agent, pluginsV2, sort, labels, indexer, work, ask2, cards, profile, onboarding, accounts];
+export const MODULES = [core, context, triage, insights, agent, pluginsV2, sort, labels, indexer, work, ask2, cards, profile, onboarding, accounts, mcp];

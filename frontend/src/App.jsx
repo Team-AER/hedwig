@@ -9,6 +9,8 @@ import LoginPage from './components/LoginPage.jsx';
 import MailApp from './components/MailApp.jsx';
 import LockScreen from './components/LockScreen.jsx';
 import { signInResultFromUrl, reportSignInResult } from './hedwig/accounts/signIn.js';
+import ConnectPage from './hedwig/connect/ConnectPage.jsx';
+import { connectPath, pendingRequest, rememberRequest, requestFromUrl } from './hedwig/connect/pending.js';
 import { tv } from './hedwig/v2/i18n.js';
 
 export default function App() {
@@ -78,6 +80,8 @@ export default function App() {
         if (m) sessionStorage.setItem('mailflow_deep_link_id', m);
         const resetToken = params.get('reset_token');
         if (resetToken) sessionStorage.setItem('mailflow_reset_token', resetToken);
+        // A connector asking for access (/connect): back to it once signed in.
+        rememberRequest(sessionStorage, requestFromUrl(window.location.pathname, window.location.search));
         setUser(null);
         // Clear any stale client lock so a locked session that has since expired
         // doesn't strand the user back on the lock screen after they re-login (#235).
@@ -123,11 +127,15 @@ export default function App() {
     );
   }
 
+  const connecting = user ? pendingRequest(sessionStorage) : null;
   return (
     <Routes>
       <Route path="/login" element={user ? <Navigate to="/" replace /> : <LoginPage />} />
       <Route path="/register" element={user ? <Navigate to="/" replace /> : <LoginPage />} />
-      <Route path="/*" element={user ? (isLocked ? <LockScreen /> : <MailApp />) : <Navigate to="/login" replace />} />
+      <Route path="/connect" element={user ? (isLocked ? <LockScreen /> : <ConnectPage />) : <Navigate to="/login" replace />} />
+      <Route path="/*" element={user
+        ? (isLocked ? <LockScreen /> : connecting ? <Navigate to={connectPath(connecting)} replace /> : <MailApp />)
+        : <Navigate to="/login" replace />} />
     </Routes>
   );
 }

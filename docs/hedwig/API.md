@@ -301,3 +301,18 @@ The sign-in itself is upstream's OAuth routes, outside `/api`:
 
 `GET /api/integrations/status` reports a provider `configured` only when it has a client ID and a
 redirect URI.
+
+## Connectors (MCP) — `backend/src/hedwig/mcp/`
+
+Hedwig as a remote MCP server for Claude, ChatGPT and other MCP clients; see `CONNECTORS.md`. Public,
+outside `/api` (bearer tokens, no session): `POST /mcp`, `/mcp/oauth/{register,authorize,token,revoke}`,
+`/.well-known/oauth-protected-resource[/mcp]`, `/.well-known/oauth-authorization-server[/mcp]`.
+Signed in, under `/api/hedwig`:
+
+| Method | Path | Body | Returns |
+| --- | --- | --- | --- |
+| GET | `/mcp/requests/:id` | | `{ id, client: { name, uri }, redirectHost, scopes, expiresAt }` (404 once expired or used) |
+| POST | `/mcp/requests/:id/approve` | `{ write?: boolean }` (false connects read-only) | `{ redirect }`: the client's redirect URI with `code`, `state`, `iss` |
+| POST | `/mcp/requests/:id/deny` | | `{ redirect }` with `error=access_denied` |
+| GET | `/mcp/connections` | | `{ endpoint, connections: [{ id, name, host, scopes, calls, connectedAt, lastUsedAt }], activity: [{ id, app, tool, summary, ok, at }] }` |
+| DELETE | `/mcp/connections/:id` | | `{ ok }`; the app's tokens stop working at once |

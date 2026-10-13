@@ -21,6 +21,7 @@ import ModelSettings from './settings/ModelSettings.jsx';
 import PersonalSettings from './settings/PersonalSettings.jsx';
 import RoutingSettings from './settings/RoutingSettings.jsx';
 import MailSettings from './settings/MailSettings.jsx';
+import ConnectorSettings from './settings/ConnectorSettings.jsx';
 import { registerV2 } from '../v2/index.js';
 
 export const HEDWIG_VIEWS = [
@@ -48,6 +49,8 @@ export const HEDWIG_VIEWS = [
     description: 'Admin: model gateway, embeddings, budgets, pipeline health.' },
   { id: 'hedwig.settings.personal', title: 'Hedwig settings', icon: 'settings', group: 'settings', component: PersonalSettings,
     description: 'Your Hedwig features, preferences and today’s model usage.' },
+  { id: 'hedwig.settings.connectors', title: 'Connectors', icon: 'plugin', group: 'settings', component: ConnectorSettings,
+    description: 'Use your mail from Claude, ChatGPT and other AI apps (MCP), and see what connected apps did.' },
   { id: 'hedwig.settings.mail', title: 'Settings', icon: 'settings', group: 'settings', component: MailSettings,
     description: 'Accounts, notifications, rules, appearance, security, integrations and the AI assistant.' },
 ];

@@ -148,6 +148,13 @@ const SAME_VALUE_ALLOWED = {
   'hedwig.settingsTabs.personal':          [['en', 'es']], // "Personal"
   'hedwig.v2.ask.progress.messagesOne':    [['en', 'fr']], // "1 message"
   'hedwig.v2.ask.progress.messagesMany':   [['en', 'fr']], // "{{n}} messages"
+  'hedwig.settingsTabs.connectors':        [['cs', 'pl'], ['es', 'ptBR']], // "Konektory", "Conectores"
+  'hedwig.connectors.title':               [['cs', 'pl'], ['es', 'ptBR']], // "Konektory", "Conectores"
+  'hedwig.connect.connected':              [['es', 'ptBR']], // "Conectado"
+  'hedwig.connectors.connectedAt':         [['es', 'ptBR']], // "Conectado"
+  'hedwig.connectors.copied':              [['es', 'ptBR']], // "Copiado"
+  'hedwig.connectors.lastUsed':            [['es', 'ptBR']], // "Último uso"
+  'hedwig.connectors.disconnect':          [['es', 'ptBR']], // "Desconectar"
 
   // ── Specific language groups ───────────────────────────────────────────────
   // Hedwig v2: French shares these words with English ("Message", "Conversation"); Spanish and

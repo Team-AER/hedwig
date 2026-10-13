@@ -18,6 +18,7 @@ export const SETTINGS_GROUPS = [
     view('hedwig.settings.personal', 'hedwig.settingsTabs.personal', 'Personal'),
     view('hedwig.settings.triage', 'hedwig.settingsTabs.triage', 'Triage'),
     view('hedwig.settings.plugins', 'hedwig.settingsTabs.plugins', 'Hedwig plugins'),
+    view('hedwig.settings.connectors', 'hedwig.settingsTabs.connectors', 'Connectors'),
     view('hedwig.settings.routing', 'hedwig.settingsTabs.routing', 'Models and routing', { adminOnly: true }),
     view('hedwig.settings.models', 'hedwig.settingsTabs.pipeline', 'Pipeline', { adminOnly: true }),
     // About is the app's version and licence; the dialog shows it below its groups.
