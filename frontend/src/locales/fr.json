@@ -2271,6 +2271,15 @@
       "signInAgain": "Se reconnecter",
       "viaGoogle": "Connecté avec Google",
       "viaMicrosoft": "Connecté avec Microsoft"
+    },
+    "aiModels": {
+      "refresh": "Actualiser la liste",
+      "choose": "Choisissez un modèle",
+      "offline": "hors ligne",
+      "missing": "non proposé par ce serveur",
+      "unusable": "Ce modèle n’est pas disponible sur le serveur pour le moment. Choisissez-en un autre et enregistrez.",
+      "loading": "Chargement des modèles proposés par ce serveur…",
+      "error": "Impossible de lister les modèles : {{error}}"
     }
   }
 }

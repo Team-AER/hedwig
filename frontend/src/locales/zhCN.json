@@ -2271,6 +2271,15 @@
       "signInAgain": "重新登录",
       "viaGoogle": "已通过 Google 登录",
       "viaMicrosoft": "已通过 Microsoft 登录"
+    },
+    "aiModels": {
+      "refresh": "刷新列表",
+      "choose": "选择模型",
+      "offline": "离线",
+      "missing": "此服务器未提供",
+      "unusable": "此模型目前在服务器上不可用。请选择其他模型并保存。",
+      "loading": "正在加载此服务器提供的模型…",
+      "error": "无法列出模型：{{error}}"
     }
   }
 }

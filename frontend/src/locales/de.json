@@ -2271,6 +2271,15 @@
       "signInAgain": "Erneut anmelden",
       "viaGoogle": "Mit Google angemeldet",
       "viaMicrosoft": "Mit Microsoft angemeldet"
+    },
+    "aiModels": {
+      "refresh": "Liste aktualisieren",
+      "choose": "Wähle ein Modell",
+      "offline": "nicht erreichbar",
+      "missing": "auf diesem Server nicht verfügbar",
+      "unusable": "Dieses Modell ist auf dem Server gerade nicht verfügbar. Wähle ein anderes und speichere.",
+      "loading": "Lade die Modelle, die dieser Server anbietet…",
+      "error": "Die Modelle konnten nicht geladen werden: {{error}}"
     }
   }
 }

@@ -2271,6 +2271,15 @@
       "signInAgain": "Accedi di nuovo",
       "viaGoogle": "Accesso effettuato con Google",
       "viaMicrosoft": "Accesso effettuato con Microsoft"
+    },
+    "aiModels": {
+      "refresh": "Aggiorna elenco",
+      "choose": "Scegli un modello",
+      "offline": "non disponibile",
+      "missing": "non offerto da questo server",
+      "unusable": "Questo modello non è disponibile sul server in questo momento. Scegline un altro e salva.",
+      "loading": "Caricamento dei modelli offerti da questo server…",
+      "error": "Impossibile elencare i modelli: {{error}}"
     }
   }
 }

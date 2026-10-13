@@ -2271,6 +2271,15 @@
       "signInAgain": "Sign in again",
       "viaGoogle": "Signed in with Google",
       "viaMicrosoft": "Signed in with Microsoft"
+    },
+    "aiModels": {
+      "refresh": "Refresh list",
+      "choose": "Choose a model",
+      "offline": "offline",
+      "missing": "not offered by this server",
+      "unusable": "This model is not available on the server right now. Pick another one and save.",
+      "loading": "Loading the models this server offers…",
+      "error": "Could not list the models: {{error}}"
     }
   }
 }

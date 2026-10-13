@@ -596,3 +596,88 @@ describe('Hedwig gateway call options', () => {
     expect(gatewayCompleteFn).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ budgetExempt: 'admin connection test' }));
   });
 });
+
+describe('listModels (Settings → AI Assistant model picker)', () => {
+  const GATEWAY = { baseUrl: 'http://llm-proxy.example/v1', apiKey: 'gw-key', model: 'gemma' };
+  const CATALOG = {
+    models: [
+      { id: 'flux-1-schnell', status: 'ready', capabilities: ['image_generation'] },
+      { id: 'qwen-next', display_name: 'Qwen Next', status: 'offline', capabilities: ['chat', 'tools'] },
+      { id: 'bge-m3', status: 'ready', capabilities: ['embeddings'] },
+      { id: 'kimi-k3', display_name: 'Kimi K3', status: 'ready', capabilities: ['chat', 'tools'] },
+      { id: 'clef-flash', status: 'ready', capabilities: ['systemone', 'vision'] },
+      { id: 'deepseek', status: 'ready', capabilities: ['chat'] },
+      { id: 'legacy', status: 'ready' },
+    ],
+  };
+
+  it('answers the Hedwig gateway from its catalog: chat models only, usable ones first', async () => {
+    const { provider, deps } = factory({
+      defaultGatewayFn: async () => GATEWAY,
+      gatewayCatalogFn: async () => CATALOG,
+    });
+    const out = await provider.listModels({ baseUrl: 'http://llm-proxy.example/v1/' });
+    expect(out.source).toBe('catalog');
+    expect(out.models).toEqual([
+      { id: 'deepseek', label: 'deepseek', status: 'ready', available: true },
+      { id: 'kimi-k3', label: 'Kimi K3', status: 'ready', available: true },
+      { id: 'legacy', label: 'legacy', status: 'ready', available: true },
+      { id: 'qwen-next', label: 'Qwen Next', status: 'offline', available: false },
+    ]);
+    expect(deps.fetchFn).not.toHaveBeenCalled();
+    expect(deps.validateHostFn).not.toHaveBeenCalled();
+  });
+
+  it('falls back to GET /models on the gateway when the catalog is empty, with the gateway key', async () => {
+    const fetchFn = vi.fn(async () => jsonResponse({ data: [{ id: 'b' }, { id: 'a' }, { id: 'a' }] }));
+    const { provider } = factory({
+      defaultGatewayFn: async () => GATEWAY,
+      gatewayCatalogFn: async () => ({ models: [] }),
+      fetchFn,
+    });
+    const out = await provider.listModels({ baseUrl: GATEWAY.baseUrl });
+    expect(out).toEqual({ source: 'models', models: [
+      { id: 'a', label: 'a', status: null, available: true },
+      { id: 'b', label: 'b', status: null, available: true },
+    ] });
+    expect(fetchFn.mock.calls[0][0]).toBe('http://llm-proxy.example/v1/models');
+    expect(fetchFn.mock.calls[0][1].headers.Authorization).toBe('Bearer gw-key');
+  });
+
+  it('lists another server by GET /models after checking the host, with the key typed in the form', async () => {
+    const fetchFn = vi.fn(async () => jsonResponse({ data: [{ id: 'gpt-x' }] }));
+    const { provider, deps } = factory({ fetchFn });
+    const out = await provider.listModels({ baseUrl: 'https://api.example.com/v1', apiKey: 'typed-key' });
+    expect(out.models.map((m) => m.id)).toEqual(['gpt-x']);
+    expect(deps.validateHostFn).toHaveBeenCalledWith('api.example.com', { allowPrivate: false });
+    expect(fetchFn.mock.calls[0][1].headers.Authorization).toBe('Bearer typed-key');
+  });
+
+  it('uses the stored key when the form shows it masked and the URL is the saved one', async () => {
+    const fetchFn = vi.fn(async () => jsonResponse({ data: [{ id: 'm' }] }));
+    const { provider } = factory({
+      fetchFn,
+      initial: { provider: AI_PROVIDER_API_KEY, apiKeyConfig: { baseUrl: 'https://api.example.com/v1', apiKey: 'encrypted:stored-key', model: 'm' } },
+    });
+    await provider.listModels({ baseUrl: 'https://api.example.com/v1', apiKey: MASKED_API_KEY });
+    expect(fetchFn.mock.calls[0][1].headers.Authorization).toBe('Bearer stored-key');
+  });
+
+  it('refuses a host the connection policy rejects, and a missing or malformed URL', async () => {
+    const { provider, deps } = factory({ validateHostFn: vi.fn().mockResolvedValue('private addresses are not allowed') });
+    await expect(provider.listModels({ baseUrl: 'http://10.0.0.9/v1' })).rejects.toMatchObject({ status: 400 });
+    expect(deps.fetchFn).not.toHaveBeenCalled();
+    await expect(provider.listModels({})).rejects.toMatchObject({ status: 400, message: 'Enter the API base URL first' });
+    await expect(provider.listModels({ baseUrl: 'not a url' })).rejects.toMatchObject({ status: 400 });
+  });
+
+  it('reports a provider error with the key redacted', async () => {
+    const fetchFn = vi.fn(async () => jsonResponse({ error: { message: 'bad key typed-key' } }, 401));
+    const { provider } = factory({ fetchFn });
+    const err = await provider.listModels({ baseUrl: 'https://api.example.com/v1', apiKey: 'typed-key' }).catch((e) => e);
+    expect(err.status).toBe(502);
+    expect(err.expose).toBe(true);
+    expect(err.message).toContain('[redacted]');
+    expect(err.message).not.toContain('typed-key');
+  });
+});

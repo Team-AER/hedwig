@@ -2290,6 +2290,15 @@
       "signInAgain": "Přihlásit se znovu",
       "viaGoogle": "Přihlášeno přes Google",
       "viaMicrosoft": "Přihlášeno přes Microsoft"
+    },
+    "aiModels": {
+      "refresh": "Obnovit seznam",
+      "choose": "Vyberte model",
+      "offline": "nedostupný",
+      "missing": "tento server ho nenabízí",
+      "unusable": "Tento model teď na serveru není k dispozici. Vyberte jiný a uložte.",
+      "loading": "Načítám modely, které server nabízí…",
+      "error": "Modely se nepodařilo načíst: {{error}}"
     }
   }
 }

@@ -2290,6 +2290,15 @@
       "signInAgain": "Zaloguj się ponownie",
       "viaGoogle": "Zalogowano przez Google",
       "viaMicrosoft": "Zalogowano przez Microsoft"
+    },
+    "aiModels": {
+      "refresh": "Odśwież listę",
+      "choose": "Wybierz model",
+      "offline": "niedostępny",
+      "missing": "ten serwer go nie oferuje",
+      "unusable": "Ten model jest teraz niedostępny na serwerze. Wybierz inny i zapisz.",
+      "loading": "Wczytywanie modeli oferowanych przez ten serwer…",
+      "error": "Nie udało się pobrać listy modeli: {{error}}"
     }
   }
 }

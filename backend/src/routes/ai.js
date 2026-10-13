@@ -5,6 +5,7 @@ import {
   deleteAiConfig,
   getAdminAiConfig,
   getAiStatus,
+  listAiModels,
   saveAiConfig,
   streamChat,
   testAiProvider,
@@ -101,6 +102,15 @@ router.post('/admin/ai/test', requireAdmin, async (req, res) => {
     res.json(await testAiProvider({ userId: req.session?.userId }));
   } catch (error) {
     serviceError(res, error, 'AI provider test failed');
+  }
+});
+
+// The model picker. POST so a key typed into the form (not yet saved) stays out of URLs and logs.
+router.post('/admin/ai/models', requireAdmin, async (req, res) => {
+  try {
+    res.json(await listAiModels({ baseUrl: req.body?.baseUrl, apiKey: req.body?.apiKey }));
+  } catch (error) {
+    serviceError(res, error, 'Failed to list AI models');
   }
 });
 

@@ -38,6 +38,27 @@ function normalizeBaseUrl(value) {
   return cleanString(value).replace(/\/+$/, '');
 }
 
+const READY = new Set(['ready', 'degraded']);
+
+/**
+ * The chat models in a gateway catalog ({ models: [{ id, display_name, status, capabilities }] },
+ * llm-proxy's catalog.json), usable ones first. A model that lists capabilities must include
+ * 'chat'; embeddings, image, speech and System One models are left out.
+ */
+export function chatModelsFromCatalog(catalog) {
+  const models = Array.isArray(catalog?.models) ? catalog.models : [];
+  return models
+    .filter((m) => m && typeof m.id === 'string' && m.id
+      && (!Array.isArray(m.capabilities) || !m.capabilities.length || m.capabilities.includes('chat')))
+    .map((m) => ({
+      id: m.id,
+      label: cleanString(m.display_name) || m.id,
+      status: cleanString(m.status) || null,
+      available: !m.status || READY.has(m.status),
+    }))
+    .sort((a, b) => (Number(b.available) - Number(a.available)) || a.id.localeCompare(b.id));
+}
+
 export function normalizeAiConfig(raw = {}) {
   const hasStructuredConfig = raw.apiKeyConfig && typeof raw.apiKeyConfig === 'object';
   const apiSource = hasStructuredConfig ? raw.apiKeyConfig : raw;
@@ -154,6 +175,9 @@ export function createAiProvider({
   // get its fallback model, budgets and call log. completeFn resolves to text; streamFn yields text.
   gatewayCompleteFn = null,
   gatewayStreamFn = null,
+  // Hedwig: the gateway's model catalog (hedwig/llm.js getCatalog), so the model picker can say
+  // which models chat and which are offline. Without it the picker falls back to GET /models.
+  gatewayCatalogFn = null,
 } = {}) {
   async function loadAiConfig() {
     const result = await queryFn("SELECT value FROM system_settings WHERE key = 'ai_config'");
@@ -400,6 +424,57 @@ export function createAiProvider({
     return { ok: true };
   }
 
+  /**
+   * Settings → AI Assistant model picker: the chat models a base URL offers, as
+   * { source: 'catalog'|'models', models: [{ id, label, status, available }] }. Hedwig's own
+   * gateway answers from its catalog; any other OpenAI-compatible server from GET /models, which
+   * lists ids only. Same host rules as saving; the key is the one typed in the form, else the
+   * stored one for that URL, else the gateway's.
+   */
+  async function listModels({ baseUrl, apiKey } = {}) {
+    const existing = await loadAiConfig().catch(() => null);
+    const url = normalizeBaseUrl(baseUrl) || existing?.apiKeyConfig.baseUrl || '';
+    if (!url) throw new AiProviderError('Enter the API base URL first', { status: 400 });
+    let hostname;
+    try {
+      hostname = new URL(url).hostname;
+    } catch {
+      throw new AiProviderError('Invalid API base URL', { status: 400 });
+    }
+    const gw = defaultGatewayFn ? await defaultGatewayFn().catch(() => null) : null;
+    const trustedGateway = Boolean(gw?.baseUrl) && normalizeBaseUrl(gw.baseUrl) === url;
+    if (trustedGateway && gatewayCatalogFn) {
+      const models = chatModelsFromCatalog(await gatewayCatalogFn().catch(() => null));
+      if (models.length) return { source: 'catalog', models };
+    }
+    if (!trustedGateway) {
+      const policy = await getConnectionPolicyFn();
+      const hostError = await validateHostFn(hostname, { allowPrivate: policy.allowPrivateHosts });
+      if (hostError) throw new AiProviderError(`API base URL: ${hostError}`, { status: 400 });
+    }
+    const typedKey = typeof apiKey === 'string' && apiKey && apiKey !== MASKED_API_KEY ? apiKey : null;
+    const storedKey = existing?.apiKeyConfig.baseUrl === url && existing.apiKeyConfig.apiKey
+      ? decryptFn(existing.apiKeyConfig.apiKey) : null;
+    const key = typedKey || storedKey || (trustedGateway ? gw.apiKey : null);
+    const request = await openProviderRequest(fetchFn, `${url}/models`, {
+      method: 'GET',
+      headers: apiKeyHeaders(key),
+    }, { timeoutMs: 15_000 });
+    try {
+      const { response } = request;
+      const text = await readLimited(response, response.ok ? JSON_BODY_LIMIT_BYTES : ERROR_BODY_LIMIT_BYTES);
+      if (!response.ok) throw providerError(response.status, text, [key]);
+      const data = parseJson(text)?.data;
+      if (!Array.isArray(data)) throw new AiProviderError('AI provider returned an invalid model list', { status: 502, expose: true });
+      const ids = [...new Set(data.map((m) => (typeof m?.id === 'string' ? m.id.trim() : '')).filter(Boolean))].sort();
+      return { source: 'models', models: ids.map((id) => ({ id, label: id, status: null, available: true })) };
+    } catch (error) {
+      throw providerRequestError(error, request);
+    } finally {
+      request.cleanup();
+    }
+  }
+
   return {
     loadAiConfig,
     getAdminAiConfig,
@@ -407,9 +482,15 @@ export function createAiProvider({
     deleteAiConfig,
     getAiStatus,
     testAiProvider,
+    listModels,
     streamChat,
     completeText,
   };
+}
+
+async function hedwigCatalog() {
+  const { getCatalog } = await import('../hedwig/llm.js');
+  return getCatalog();
 }
 
 // Hedwig's gateway as the default assistant provider: its base URL, key, and whichever model is
@@ -468,6 +549,7 @@ const defaultProvider = createAiProvider({
   defaultGatewayFn: hedwigGateway,
   gatewayCompleteFn: hedwigComplete,
   gatewayStreamFn: hedwigStream,
+  gatewayCatalogFn: hedwigCatalog,
 });
 
 export const loadAiConfig = defaultProvider.loadAiConfig;
@@ -476,5 +558,6 @@ export const saveAiConfig = defaultProvider.saveAiConfig;
 export const deleteAiConfig = defaultProvider.deleteAiConfig;
 export const getAiStatus = defaultProvider.getAiStatus;
 export const testAiProvider = defaultProvider.testAiProvider;
+export const listAiModels = defaultProvider.listModels;
 export const streamChat = defaultProvider.streamChat;
 export const completeText = defaultProvider.completeText;
