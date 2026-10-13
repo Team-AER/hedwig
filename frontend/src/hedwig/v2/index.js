@@ -7,7 +7,7 @@ import { registerCommand, registerView, getView } from '../registry.js';
 import { useHedwig } from '../store.js';
 import { useStore } from '../../store/index.js';
 import { useV2, watchSystemScheme, unwatchSystemScheme, watchDrafts } from './state.js';
-import { showView, VIEW } from './nav.js';
+import { showView, openThread, VIEW } from './nav.js';
 import { SORT_EVENTS, REFRESH_DEBOUNCE_MS, isMockMode } from './client.js';
 import StreamView from './StreamView.jsx';
 import Screener from './Screener.jsx';
@@ -114,6 +114,18 @@ export function v2SessionAllowed({ userId, shellMode, status }) {
 }
 
 export function isV2SessionRunning() { return running; }
+
+/**
+ * Open one message (a notification tap, a ?m= link) in the v2 reader. Upstream's deep-link path
+ * only selects it in the classic store, which the streams layout never shows. Passes the message
+ * id alone: the reader resolves its thread (thread_key), which a raw thread_id would not match.
+ * Returns false when the v2 session is not running, so the caller keeps the classic path.
+ */
+export function openMessageInV2(msg, { open = openThread } = {}) {
+  if (!running || !msg?.id) return false;
+  open({ messageId: msg.id, subject: msg.subject || '' });
+  return true;
+}
 
 export function startV2Session() {
   if (running) return;

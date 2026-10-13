@@ -81,7 +81,7 @@ const { shortcutBus } = await import('../../utils/shortcutBus.js');
 const Brief = (await import('./Brief.jsx')).default;
 const Today = (await import('./Today.jsx')).default;
 const HedwigSettingsV2 = (await import('./HedwigSettings.jsx')).default;
-const { v2Views, v2SessionAllowed, startV2Session, stopV2Session, isV2SessionRunning } = await import('./index.js');
+const { v2Views, v2SessionAllowed, startV2Session, stopV2Session, isV2SessionRunning, openMessageInV2 } = await import('./index.js');
 const actions = await import('./actions.js');
 const toastTitles = () => actions.useUndo.getState().toasts.map((t) => t.title);
 
@@ -1498,6 +1498,23 @@ describe('quality-of-life sweep', () => {
     await settle(60);
     assert.equal(useV2.getState().patches[item.messageId]?.unread, false, 'the row\'s unread dot clears');
     await cleanup();
+  });
+});
+
+describe('opening a message from a notification', () => {
+  test('goes to the v2 reader by message id while the v2 session runs, and leaves it to the classic store otherwise', () => {
+    const opened = [];
+    const open = (item) => opened.push(item);
+    assert.equal(isV2SessionRunning(), false);
+    assert.equal(openMessageInV2({ id: 'm1', subject: 'Hi' }, { open }), false, 'not running: the caller keeps the classic path');
+    startV2Session();
+    try {
+      assert.equal(openMessageInV2({ id: 'm1', subject: 'Hi', thread_id: 't-raw' }, { open }), true);
+      assert.deepEqual(opened, [{ messageId: 'm1', subject: 'Hi' }], 'message id only: the reader resolves the thread key itself');
+      assert.equal(openMessageInV2(null, { open }), false);
+    } finally {
+      stopV2Session();
+    }
   });
 });
 

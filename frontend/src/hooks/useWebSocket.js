@@ -148,6 +148,9 @@ export function useWebSocket() {
               title: latest.fromName || latest.fromEmail || t('notifications.newMessage'),
               body: latest.subject || t('common.noSubject'),
               count: alertCount,
+              // Clicking the toast (or its View button) opens the message (MailApp).
+              onAction: () => window.dispatchEvent(new CustomEvent('mailflow:open-message', { detail: { id: latest.id } })),
+              openOnClick: true,
             };
 
             if (document.visibilityState === 'visible') {

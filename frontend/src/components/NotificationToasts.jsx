@@ -196,7 +196,14 @@ function Toast({ notification, onDismiss, isMobile }) {
           </svg>
         )}
       </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
+      <div
+        style={{ flex: 1, minWidth: 0, cursor: notification.openOnClick && notification.onAction ? 'pointer' : undefined }}
+        {...(notification.openOnClick && notification.onAction ? {
+          role: 'button', tabIndex: 0,
+          onClick: () => { notification.onAction(); dismiss(); },
+          onKeyDown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); notification.onAction(); dismiss(); } },
+        } : {})}
+      >
         <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)', marginBottom: 2 }}>
           {notification.title}
         </div>

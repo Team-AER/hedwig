@@ -12,15 +12,20 @@ const MODELS = [
 test('lists the models, names them, and greys out offline ones', () => {
   assert.deepEqual(modelOptions(MODELS, 'kimi-k3'), [
     { value: 'deepseek', label: 'deepseek', disabled: false },
-    { value: 'kimi-k3', label: 'Kimi K3 (kimi-k3)', disabled: false },
-    { value: 'qwen-next', label: 'Qwen Next (qwen-next) · offline', disabled: true },
+    { value: 'kimi-k3', label: 'Kimi K3 — kimi-k3', disabled: false },
+    { value: 'qwen-next', label: 'Qwen Next — qwen-next · offline', disabled: true },
   ]);
 });
 
 test('keeps the saved model selectable when it is offline, so the page does not change it', () => {
   const qwen = modelOptions(MODELS, 'qwen-next').find((o) => o.value === 'qwen-next');
   assert.equal(qwen.disabled, false);
-  assert.equal(qwen.label, 'Qwen Next (qwen-next) · offline');
+  assert.equal(qwen.label, 'Qwen Next — qwen-next · offline');
+});
+
+test('a display name that already carries the id is shown alone', () => {
+  const [opt] = modelOptions([{ id: 'deepseek-v4.1-flash', label: 'deepseek-v4.1-flash (ollama)', available: true }], '');
+  assert.equal(opt.label, 'deepseek-v4.1-flash (ollama)');
 });
 
 test('puts a saved model the server no longer lists at the top, marked', () => {

@@ -18,6 +18,7 @@ import CommandPalette from './CommandPalette.jsx';
 import { usePluginSlot, PluginRuntime } from '../plugins/PluginSlot.jsx';
 import { useHedwig } from '../hedwig/store.js';
 import { HedwigRuntime } from '../hedwig/index.js';
+import { openMessageInV2 } from '../hedwig/v2/index.js';
 import HedwigShell from '../hedwig/shell/HedwigShell.jsx';
 import HedwigMobile from '../hedwig/shell/MobileShell.jsx';
 import { useHedwigTabBar } from '../hedwig/shell/tabBar.js';
@@ -314,11 +315,15 @@ export default function MailApp() {
     // links carry the UUID and resolve via the fallback.
     return api.resolveMessage(id)
       .then(msg => {
-        // threadMessages is not cleared by setMessages(), so storing the message
-        // here keeps it available to MessagePane even after the message list loads
-        // a different folder's page (which would evict it from the main array).
-        useStore.getState().setThreadMessages(`__dl_${msg.id}`, [msg]);
-        setSelectedMessage(msg.id);
+        // Hedwig's streams layout has its own reader; selecting the message in the
+        // classic store below would not show it there.
+        if (!openMessageInV2(msg)) {
+          // threadMessages is not cleared by setMessages(), so storing the message
+          // here keeps it available to MessagePane even after the message list loads
+          // a different folder's page (which would evict it from the main array).
+          useStore.getState().setThreadMessages(`__dl_${msg.id}`, [msg]);
+          setSelectedMessage(msg.id);
+        }
         // The deep-link opens the message directly, bypassing the list/pane
         // selectAndMarkRead — so mark it read here too. Mirrors that logic exactly,
         // including the pending-read guard that stops a concurrent sync from
@@ -356,6 +361,13 @@ export default function MailApp() {
     }
     consumePendingDeepLink();
   }, [openDeepLinkMessage, consumePendingDeepLink]);
+
+  // The in-app new-mail toast (useWebSocket) asks for its message this way.
+  useEffect(() => {
+    const onOpen = (e) => { if (e.detail?.id) openDeepLinkMessage(e.detail.id); };
+    window.addEventListener('mailflow:open-message', onOpen);
+    return () => window.removeEventListener('mailflow:open-message', onOpen);
+  }, [openDeepLinkMessage]);
 
   // A notification tap that returns to a backgrounded app (the achievable iOS case)
   // fires visibilitychange; the SW also nudges via postMessage. Both just consume the

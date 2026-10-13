@@ -9,7 +9,8 @@
  */
 export function modelOptions(models = [], current = '', { offlineLabel = 'offline', missingLabel = 'not offered by this server' } = {}) {
   const list = Array.isArray(models) ? models.filter((m) => m && typeof m.id === 'string' && m.id) : [];
-  const name = (m) => (m.label && m.label !== m.id ? `${m.label} (${m.id})` : m.id);
+  // The catalog's display names often carry the id already ("deepseek-v4.1-flash (ollama)").
+  const name = (m) => (!m.label || m.label.includes(m.id) ? (m.label || m.id) : `${m.label} — ${m.id}`);
   const options = list.map((m) => ({
     value: m.id,
     label: m.available === false ? `${name(m)} · ${m.status || offlineLabel}` : name(m),
