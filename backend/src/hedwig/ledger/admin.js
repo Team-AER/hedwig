@@ -252,7 +252,8 @@ export function runtimePatch(body, { catalog = { models: [] }, cfg = {} } = {}) 
 /** PUT /admin/runtime */
 export async function updateRuntime(body) {
   const cfg = await getConfig(null);
-  const catalog = await getCatalog();
+  // Checked against the gateway's current list, so a model added since the last catalog fetch is accepted.
+  const catalog = await getCatalog({ force: true });
   const { patch, notes } = runtimePatch(body, { catalog, cfg });
   if (Object.keys(patch).length) await saveSystemConfig(patch);
   return { ...(await runtimeSettings()), changed: Object.keys(patch), notes };

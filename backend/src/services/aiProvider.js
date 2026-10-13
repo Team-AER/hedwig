@@ -488,9 +488,10 @@ export function createAiProvider({
   };
 }
 
+// Fresh, not the model client's cached copy: a model just added to the gateway shows up in the picker.
 async function hedwigCatalog() {
   const { getCatalog } = await import('../hedwig/llm.js');
-  return getCatalog();
+  return getCatalog({ force: true });
 }
 
 // Hedwig's gateway as the default assistant provider: its base URL, key, and whichever model is

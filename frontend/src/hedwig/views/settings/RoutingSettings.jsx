@@ -8,7 +8,7 @@
 // actually get, 400 on a catalog violation), GET /admin/models/catalog, POST /admin/tiers/probe
 // (the Test button), GET /admin/usage?days=7 (falls back to GET /admin/health's aiCalls24h),
 // GET/PUT /admin/routing. A route that is missing hides its section.
-import { useState } from 'react';
+import { createContext, useCallback, useContext, useState } from 'react';
 import { useHedwig } from '../../store.js';
 import { useIsAdmin } from '../hooks.js';
 import SettingsFrame from './SettingsFrame.jsx';
@@ -17,6 +17,7 @@ import { useV2Resource, isMissing } from '../../v2/hooks.js';
 import { Btn, Code, ErrorLine, Mono, Quiet, Reason, SectionLabel, V, Why } from '../../v2/primitives.jsx';
 import { tierLabel } from '../../v2/tiers.js';
 import { tv } from '../../v2/i18n.js';
+import { useStaleRefresh } from '../../useStaleRefresh.js';
 
 export const EFFORTS = ['off', 'low', 'medium', 'high', 'xhigh'];
 // Runtime tiers → the role keys PUT /admin/runtime takes for models and effort.
@@ -133,10 +134,14 @@ function Section({ title, sub, right, children }) {
   );
 }
 
+// Re-reads the catalog when a model picker is about to open (useStaleRefresh).
+const RefreshModels = createContext(null);
+
 function ModelSelect({ value, models, onChange, label, allowNone = false }) {
   const known = models.some((m) => m.id === value);
+  const refresh = useContext(RefreshModels) || undefined;
   return (
-    <select aria-label={label} value={value || ''} onChange={(e) => onChange(e.target.value)} style={{ ...selectStyle, width: '100%' }}>
+    <select aria-label={label} value={value || ''} onChange={(e) => onChange(e.target.value)} onMouseEnter={refresh} onFocus={refresh} style={{ ...selectStyle, width: '100%' }}>
       {allowNone && <option value="">{tv('hedwig.v2.routing.none', 'None')}</option>}
       {!allowNone && !value && <option value="" disabled>{tv('hedwig.v2.routing.pick', 'Pick a model')}</option>}
       {value && !known && <option value={value}>{tv('hedwig.v2.routing.notInCatalog', '{{model}} (not in the catalog)', { model: value })}</option>}
@@ -418,7 +423,10 @@ function EnabledModelsSection({ runtime, catalog, onPut }) {
 
 function AdminPage() {
   const runtime = useV2Resource('/admin/runtime', { refreshOn: [], pollMs: 30_000 });
-  const catalog = useV2Resource('/admin/models/catalog', { refreshOn: [] });
+  // refresh=1: the gateway's current list, not the server's cached copy.
+  const catalog = useV2Resource('/admin/models/catalog?refresh=1', { refreshOn: [] });
+  const reloadCatalog = catalog.reload;
+  const refreshModels = useStaleRefresh(useCallback(() => reloadCatalog({ quiet: true }), [reloadCatalog]));
   const [error, setError] = useState(null);
   const [notes, setNotes] = useState([]);
   // Every runtime change goes through PUT /admin/runtime; its answer is the new runtime, with
@@ -436,12 +444,14 @@ function AdminPage() {
     }
   };
   return (
-    <div className="hw-v2" style={{ display: 'flex', flexDirection: 'column', gap: 30, fontFamily: V.sans, color: V.ink }}>
-      <TiersSection runtime={runtime} catalog={catalog} onPut={onPut} error={error} notes={notes} />
-      <RoutingTableSection />
-      <UsageSection />
-      <EnabledModelsSection runtime={runtime} catalog={catalog} onPut={onPut} />
-    </div>
+    <RefreshModels.Provider value={refreshModels}>
+      <div className="hw-v2" style={{ display: 'flex', flexDirection: 'column', gap: 30, fontFamily: V.sans, color: V.ink }}>
+        <TiersSection runtime={runtime} catalog={catalog} onPut={onPut} error={error} notes={notes} />
+        <RoutingTableSection />
+        <UsageSection />
+        <EnabledModelsSection runtime={runtime} catalog={catalog} onPut={onPut} />
+      </div>
+    </RefreshModels.Provider>
   );
 }
 

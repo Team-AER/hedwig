@@ -40,6 +40,7 @@ import AddAccount from '../hedwig/accounts/AddAccount.jsx';
 import { openSignIn, listenForSignIn } from '../hedwig/accounts/signIn.js';
 import { tv } from '../hedwig/v2/i18n.js';
 import { modelOptions, modelIsUsable } from '../hedwig/aiModels.js';
+import { useStaleRefresh } from '../hedwig/useStaleRefresh.js';
 import HedwigModelsCard from '../hedwig/views/settings/HedwigModelsCard.jsx';
 import EmbeddedSettings from '../hedwig/views/settings/EmbeddedSettings.jsx';
 import { HEDWIG_SETTINGS_TABS, settingsViewFor } from '../hedwig/settingsTabs.js';
@@ -4169,25 +4170,33 @@ function AISection() {
   const formRef = useRef(form);
   const tRef = useRef(t);
   // Model picker: the chat models the base URL offers (llm-proxy's catalog, or GET /models), loaded
-  // when the URL is set or changes and on Refresh. Until it loads, or if it cannot, the plain text
-  // field stays.
-  const [modelList, setModelList] = useState({ state: 'idle', models: [], error: '' });
-  const [modelListNonce, setModelListNonce] = useState(0);
+  // when the URL is set or changes, on Refresh, and again when the picker is about to open
+  // (useStaleRefresh), so a model just added to the gateway is listed. Until it loads, or if it
+  // cannot, the plain text field stays. `url` is the base URL the list belongs to.
+  const [modelList, setModelList] = useState({ state: 'idle', url: '', models: [], error: '' });
   const modelBaseUrl = form.connectionMethod === AI_CONNECTION_METHOD_API ? form.apiKeyConfig.baseUrl : '';
+  const loadModels = useCallback((url) => {
+    setModelList((m) => ({ ...m, state: 'loading', error: '' }));
+    return api.ai.models({ baseUrl: url, apiKey: formRef.current.apiKeyConfig.apiKey })
+      .then((r) => {
+        if (formRef.current.apiKeyConfig.baseUrl !== url) return;
+        setModelList({ state: 'ok', url, models: Array.isArray(r?.models) ? r.models : [], error: '' });
+      })
+      .catch((err) => {
+        if (formRef.current.apiKeyConfig.baseUrl !== url) return;
+        setModelList((m) => ({ state: 'error', url: m.url, models: m.url === url ? m.models : [], error: err.message }));
+      });
+  }, []);
   useEffect(() => {
     if (loading || !modelBaseUrl) {
-      setModelList({ state: 'idle', models: [], error: '' });
+      setModelList({ state: 'idle', url: '', models: [], error: '' });
       return undefined;
     }
-    let active = true;
-    setModelList((m) => ({ ...m, state: 'loading', error: '' }));
-    const timer = setTimeout(() => {
-      api.ai.models({ baseUrl: modelBaseUrl, apiKey: formRef.current.apiKeyConfig.apiKey })
-        .then((r) => { if (active) setModelList({ state: 'ok', models: Array.isArray(r?.models) ? r.models : [], error: '' }); })
-        .catch((err) => { if (active) setModelList({ state: 'error', models: [], error: err.message }); });
-    }, 500);
-    return () => { active = false; clearTimeout(timer); };
-  }, [loading, modelBaseUrl, modelListNonce]);
+    const timer = setTimeout(() => loadModels(modelBaseUrl), 500);
+    return () => clearTimeout(timer);
+  }, [loading, modelBaseUrl, loadModels]);
+  const refreshModels = useStaleRefresh(useCallback(() => { if (modelBaseUrl) loadModels(modelBaseUrl); }, [modelBaseUrl, loadModels]));
+  const modelChoices = modelList.url === modelBaseUrl ? modelList.models : [];
 
   const persistForm = useCallback(async (nextForm) => {
     const payload = buildAiSavePayload(nextForm);
@@ -4453,11 +4462,11 @@ function AISection() {
           <>
             {field(t('admin.ai.baseUrl'), form.apiKeyConfig.baseUrl, value => setForm(f => ({ ...f, apiKeyConfig: { ...f.apiKeyConfig, baseUrl: value } })), 'text', t('admin.ai.baseUrlPh'))}
             {field(t('admin.ai.apiKey'), form.apiKeyConfig.apiKey, value => setForm(f => ({ ...f, apiKeyConfig: { ...f.apiKeyConfig, apiKey: value } })), 'password', t('admin.ai.apiKeyPh'))}
-            {modelList.state === 'ok' && modelList.models.length > 0 ? (
+            {modelChoices.length > 0 ? (
               <div style={{ marginBottom: 14 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, marginBottom: 5 }}>
                   <label htmlFor="ai-model-select" style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{t('admin.ai.model')}</label>
-                  <button type="button" onClick={() => setModelListNonce(n => n + 1)} style={{ background: 'none', border: 'none', padding: 0, color: 'var(--accent)', fontSize: 11, cursor: 'pointer' }}>
+                  <button type="button" onClick={() => loadModels(modelBaseUrl)} disabled={modelList.state === 'loading'} style={{ background: 'none', border: 'none', padding: 0, color: 'var(--accent)', fontSize: 11, cursor: 'pointer', opacity: modelList.state === 'loading' ? 0.5 : 1 }}>
                     {tv('hedwig.aiModels.refresh', 'Refresh list')}
                   </button>
                 </div>
@@ -4465,18 +4474,23 @@ function AISection() {
                   id="ai-model-select"
                   value={form.apiKeyConfig.model}
                   onChange={e => { const value = e.target.value; setForm(f => ({ ...f, apiKeyConfig: { ...f.apiKeyConfig, model: value } })); }}
+                  onMouseEnter={refreshModels}
+                  onFocus={refreshModels}
                   style={{ ...inputStyle, cursor: 'pointer' }}
                 >
                   {!form.apiKeyConfig.model && <option value="" disabled>{tv('hedwig.aiModels.choose', 'Choose a model')}</option>}
-                  {modelOptions(modelList.models, form.apiKeyConfig.model, {
+                  {modelOptions(modelChoices, form.apiKeyConfig.model, {
                     offlineLabel: tv('hedwig.aiModels.offline', 'offline'),
                     missingLabel: tv('hedwig.aiModels.missing', 'not offered by this server'),
                   }).map(o => <option key={o.value} value={o.value} disabled={o.disabled}>{o.label}</option>)}
                 </select>
-                {form.apiKeyConfig.model && !modelIsUsable(modelList.models, form.apiKeyConfig.model) && (
+                {form.apiKeyConfig.model && !modelIsUsable(modelChoices, form.apiKeyConfig.model) && (
                   <div style={{ fontSize: 11, color: 'var(--red)', marginTop: 5 }}>
                     {tv('hedwig.aiModels.unusable', 'This model is not available on the server right now. Pick another one and save.')}
                   </div>
+                )}
+                {modelList.state === 'error' && (
+                  <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 5 }}>{tv('hedwig.aiModels.error', 'Could not list the models: {{error}}', { error: modelList.error })}</div>
                 )}
               </div>
             ) : (

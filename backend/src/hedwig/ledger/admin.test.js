@@ -18,11 +18,12 @@ vi.mock('../../services/redis.js', () => ({ redisClient: {} }));
 
 const GEMMA = 'google/gemma-4-12B-it-qat-w4a16-ct';
 const QWEN = 'Qwen/Qwen3.8-Flash-Next';
-const gw = mockGateway({ catalog: [
+const CATALOG = [
   { id: GEMMA, display_name: 'Gemma 4 12B QAT', node: 'atlas-vllm', capabilities: ['chat', 'completions', 'reasoning', 'streaming'], context_window: 131072, max_output_tokens: 32768, reasoning_efforts: ['none', 'high'], status: 'ready' },
   { id: QWEN, display_name: 'Qwen 3.8 Flash Next', node: 'dgx-spark', capabilities: ['chat', 'tools', 'reasoning', 'streaming'], context_window: 262144, max_output_tokens: 65536, reasoning_efforts: ['off', 'low', 'medium', 'xhigh'], default_reasoning_effort: 'medium', status: 'ready' },
   { id: 'bge-m3', capabilities: ['embeddings'], context_window: 8192, reasoning_efforts: [], status: 'ready' },
-] });
+];
+const gw = mockGateway({ catalog: CATALOG });
 // Saved and put back after the file, so a worker reused with .env.hedwig-dev keeps its dead URLs.
 const ENV_KEYS = ['HEDWIG_LLM_BASE_URL', 'HEDWIG_LLM_CATALOG_URL', 'HEDWIG_LLM_FALLBACK_MODEL', 'HEDWIG_LLM_PROBE_ENABLED'];
 const savedEnv = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
@@ -112,6 +113,18 @@ describe('PUT /admin/runtime', () => {
     expect(out.changed).toEqual(['llm.models.long', 'llm.reasoning.long', 'llm.lanes.background.concurrency']);
     expect(out.tiers.reasoning).toMatchObject({ effort: 'xhigh', effortSource: 'admin', wireEffort: 'xhigh' });
     expect(out.lanes.background.concurrency).toBe(2);
+  });
+
+  it('accepts a model added to the gateway after the catalog was cached', async () => {
+    await getCatalog();
+    CATALOG.push({ id: 'zai/glm-new-flash', capabilities: ['chat', 'tools', 'reasoning'], reasoning_efforts: ['low', 'high'], status: 'ready' });
+    try {
+      const out = await updateRuntime({ models: { reflex: 'zai/glm-new-flash' } });
+      expect(db.system['llm.models.fast']).toBe('zai/glm-new-flash');
+      expect(out.tiers.reflex).toMatchObject({ model: 'zai/glm-new-flash', inCatalog: true });
+    } finally {
+      CATALOG.pop();
+    }
   });
 });
 

@@ -849,7 +849,7 @@ describe('admin: Models and routing', () => {
     assert.deepEqual(all('option', effort).map((o) => o.value), ['off', 'low', 'medium', 'xhigh']);
     assert.equal(effort.value, 'low');
     assert.match(rows[1].textContent, /Serving now: Qwen\/Qwen3\.8-Flash-Next · 4\.2 s/);
-    assert.ok(requests().includes('GET /admin/runtime') && requests().includes('GET /admin/models/catalog'));
+    assert.ok(requests().includes('GET /admin/runtime') && requests().includes('GET /admin/models/catalog?refresh=1'), 'the catalog is asked for fresh');
 
     mock.mockRequests({ clear: true });
     await choose(pick, 'google/gemma-4-12B-it-qat-w4a16-ct');

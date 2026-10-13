@@ -1,12 +1,13 @@
-// Mail settings → AI Assistant: the models behind Hedwig's own work (sorting, summaries, extraction,
+// Settings → AI Assistant: the models behind Hedwig's own work (sorting, summaries, extraction,
 // the agent), next to the assistant's model so the two are not confused. A compact copy of the
 // tier pickers in Models and routing (RoutingSettings.jsx), saved the same way (PUT /admin/runtime,
 // which checks the choice against the gateway catalog). Effort, fallback, routing and budgets stay
 // on that page, one click away. Styled with the settings dialog's own variables.
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useHedwig } from '../../store.js';
 import { useStore } from '../../../store/index.js';
 import { v2Api } from '../../v2/client.js';
+import { useStaleRefresh } from '../../useStaleRefresh.js';
 import { tierLabel } from '../../v2/tiers.js';
 import { tv } from '../../v2/i18n.js';
 import { chatModels, clampEffort, servingLine } from './RoutingSettings.jsx';
@@ -40,12 +41,16 @@ export default function HedwigModelsCard() {
 
   useEffect(() => {
     let alive = true;
-    Promise.all([v2Api.get('/admin/runtime'), v2Api.get('/admin/models/catalog')])
+    // refresh=1: the gateway's current list, not the server's cached copy.
+    Promise.all([v2Api.get('/admin/runtime'), v2Api.get('/admin/models/catalog?refresh=1')])
       .then(([rt, cat]) => { if (alive) { setRuntime(rt); setCatalog(cat); setState('ready'); } })
       // Not an admin, Hedwig off, or an older server: the card simply is not shown.
       .catch(() => { if (alive) setState('hidden'); });
     return () => { alive = false; };
   }, []);
+  const refreshModels = useStaleRefresh(useCallback(() => {
+    v2Api.get('/admin/models/catalog?refresh=1').then(setCatalog).catch(() => {});
+  }, []));
 
   if (state !== 'ready' || !runtime?.tiers) return null;
   const models = chatModels(catalog);
@@ -68,8 +73,11 @@ export default function HedwigModelsCard() {
     }
   };
 
-  // Models and routing is a page of this same dialog (settingsTabs.js).
-  const openFull = () => useStore.getState().setAdminTab?.('hedwig-routing');
+  // Models and routing is a page of the same settings panel.
+  const openFull = () => {
+    useStore.getState().setShowAdmin?.(false);
+    useHedwig.getState().openView('hedwig.settings.routing');
+  };
 
   return (
     <section data-hedwig-models="" style={{ marginTop: 28, paddingTop: 20, borderTop: '1px solid var(--border-subtle)' }}>
@@ -91,7 +99,7 @@ export default function HedwigModelsCard() {
         return (
           <div key={role} data-tier={role} style={{ marginBottom: 14 }}>
             <label htmlFor={`hedwig-model-${role}`} style={{ display: 'block', fontSize: 12, color: 'var(--text-secondary)', marginBottom: 5 }}>{tierLabel(role)}</label>
-            <select id={`hedwig-model-${role}`} value={value} disabled={saving === role} onChange={(e) => pick(tier, role, e.target.value)} style={{ ...selectStyle, opacity: saving === role ? 0.6 : 1 }}>
+            <select id={`hedwig-model-${role}`} value={value} disabled={saving === role} onChange={(e) => pick(tier, role, e.target.value)} onMouseEnter={refreshModels} onFocus={refreshModels} style={{ ...selectStyle, opacity: saving === role ? 0.6 : 1 }}>
               {!value && <option value="" disabled>{tv('hedwig.v2.routing.pick', 'Pick a model')}</option>}
               {value && !known && <option value={value}>{tv('hedwig.v2.routing.notInCatalog', '{{model}} (not in the catalog)', { model: value })}</option>}
               {options.map((m) => {

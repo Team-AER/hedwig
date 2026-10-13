@@ -54,6 +54,7 @@ const TIER_ROLE = { reflex: 'fast', reasoning: 'long' };
 export const roleTier = (role) => ROLE_TIER[role] || 'reflex';
 
 // ── Catalog ─────────────────────────────────────────────────────────────────
+const CATALOG_TTL_MS = 60_000;
 let catalogCache = { url: null, data: null, expiry: 0 };
 
 export async function getCatalog({ force = false, fetchFn = fetch } = {}) {
@@ -84,7 +85,8 @@ export async function getCatalog({ force = false, fetchFn = fetch } = {}) {
       data = null;
     }
   }
-  catalogCache = { url, data: data || { models: [] }, expiry: Date.now() + 5 * 60_000 };
+  // A minute: models added to or taken off the gateway show up quickly. Settings pages ask with force.
+  catalogCache = { url, data: data || { models: [] }, expiry: Date.now() + CATALOG_TTL_MS };
   return catalogCache.data;
 }
 
