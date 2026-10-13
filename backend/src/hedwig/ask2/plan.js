@@ -255,7 +255,8 @@ export async function planQuery(userId, question, { now = new Date(), cfg = null
     }, { userId, feature: 'ask', lane: 'interactive', signal: combined });
     const model = normaliseModelPlan(data, { folders, question });
     const merged = { ...rules, ...model, quoted: rules.quoted, rules: [...rules.rules, 'reflex'] };
-    if (!merged.text || merged.text.length < 2) merged.text = rules.text;
+    // No words from the model (null, or too short): the rules' words, which drop dates and request wording.
+    if (!(typeof data?.text === 'string' && data.text.trim().length >= 2) || !merged.text || merged.text.length < 2) merged.text = rules.text;
     return {
       ...merged, via: 'reflex', ms: Date.now() - started,
       provenance: { promptId: provenance.promptId, promptVersion: provenance.promptVersion, model: provenance.model, aiCallId: provenance.aiCallId },

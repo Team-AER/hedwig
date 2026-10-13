@@ -168,6 +168,14 @@ describe('carriedSources', () => {
 });
 
 describe('planQuery', () => {
+  it('keeps the rules\' words when the Reflex plan names none', async () => {
+    gw.on('ask.plan', { text: null, people: [], after: null, before: null, folders: [], hasAttachment: null, latest: false });
+    const p = await planQuery(USER, 'find out all the AI expenses my team has mailed to me', { now: NOW });
+    expect(p.via).toBe('reflex');
+    expect(p.text).toBe('AI expenses');
+    expect(gw.callsFor('ask.plan')).toHaveLength(1);
+  });
+
   it('uses the rules alone when they find structure (no model call)', async () => {
     const p = await planQuery(USER, 'invoices from Marta last month', { now: NOW });
     expect(p.via).toBe('rules');
