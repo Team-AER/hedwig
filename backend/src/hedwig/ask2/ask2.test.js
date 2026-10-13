@@ -34,7 +34,7 @@ vi.mock('../context/search.js', () => ({ indexComplete: vi.fn(async () => true),
 const { planRules, normaliseModelPlan, isStructured, planQuery } = await import('./plan.js');
 const { groupByThread, buildEvidence, stripContextLine } = await import('./evidence.js');
 const { checkCitations, citedNumbers, numberResults, runSources, sourcesFromMessages, _resetCitations } = await import('./citations.js');
-const { answerQuestion, NOTHING_RELEVANT, carriedSources, mergeRuns } = await import('./answer.js');
+const { answerQuestion, NOTHING_RELEVANT, carriedSources, mergeRuns, searchWords } = await import('./answer.js');
 const { _resetPrompts } = await import('../prompts/index.js');
 const { _resetLlmState } = await import('../llm.js');
 const { _resetShareCache } = await import('../indexer/truth.js');
@@ -135,13 +135,20 @@ describe('planRules', () => {
 });
 
 describe('mergeRuns', () => {
-  it('ranks what several searches found first, then each search\'s best', () => {
-    const a = { text: 'AI expenses', chunks: [chunk(1, 't1', 0.9), chunk(2, 't2', 0.8), chunk(3, 't3', 0.7)] };
-    const b = { text: 'AI subscription reimbursement', chunks: [chunk(4, 't4', 0.9), chunk(2, 't2', 0.5)] };
+  it('takes each search\'s best hits in turn; mail every search half-matches does not crowd them out', () => {
+    // 9 is a newsletter both searches find at rank 3; 1 and 4 are each search's first hit.
+    const a = { text: 'AI expenses', chunks: [chunk(1, 't1', 0.9), chunk(2, 't2', 0.8), chunk(9, 't9', 0.7)] };
+    const b = { text: 'AI subscription reimbursement', chunks: [chunk(4, 't4', 0.9), chunk(5, 't5', 0.8), chunk(9, 't9', 0.7)] };
     const merged = mergeRuns([a, b]);
-    expect(merged.map((c) => c.messageId)).toEqual([M(2), M(1), M(4), M(3)]);
-    expect(merged[0].score).toBeGreaterThan(merged[1].score);
+    expect(merged.slice(0, 2).map((c) => c.messageId).sort()).toEqual([M(1), M(4)]);
+    expect(merged.map((c) => c.messageId).indexOf(M(9))).toBe(4);
     expect(mergeRuns([a, b], { limit: 2 })).toHaveLength(2);
+  });
+
+  it('keeps the model\'s searches to what the mail is about, without months and years', () => {
+    expect(searchWords('AI expenditure November July June')).toBe('AI expenditure');
+    expect(searchWords('  Claude   subscription 2026 ')).toBe('Claude subscription');
+    expect(searchWords('May 2026')).toBe('');
   });
 
   it('gives one search back as it was', () => {

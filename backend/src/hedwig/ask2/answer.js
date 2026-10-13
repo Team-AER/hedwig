@@ -79,12 +79,19 @@ async function previousAnswer(userId, id) {
 }
 
 const messageCount = (chunks) => new Set((chunks || []).map((c) => c.messageId)).size;
+const MONTH_OR_YEAR = /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|(?:19|20)\d{2})\b/gi;
+/** A search the model named, without month names and years: the search does not filter by them. */
+export function searchWords(text) {
+  return String(text || '').replace(MONTH_OR_YEAR, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
+}
 const sameSearch = (a, b) => String(a).trim().toLowerCase().replace(/\s+/g, ' ') === String(b).trim().toLowerCase().replace(/\s+/g, ' ');
 
 /**
- * Reciprocal rank fusion of several searches' chunks (each list best first), best first, with the
- * fused score. A chunk several searches found rises; each search's best hits come next. One search
- * comes back as it was.
+ * Several searches' chunks (each list best first) as one list, best first. A chunk ranks by its best
+ * place in any one search, so each search's top hits come first in turn; being found by more
+ * searches only breaks ties. (Summing the ranks let mail that every search half-matches, such
+ * as newsletters that all mention "AI", crowd out the one mail a single search found first.)
+ * One search comes back as it was.
  */
 export function mergeRuns(runs, { k = 60, limit = Infinity } = {}) {
   const lists = (runs || []).filter((r) => Array.isArray(r?.chunks));
@@ -93,15 +100,17 @@ export function mergeRuns(runs, { k = 60, limit = Infinity } = {}) {
   for (const run of lists) {
     run.chunks.forEach((c, i) => {
       const id = c.chunkId != null ? `c${c.chunkId}` : `m${c.messageId}:${c.kind}:${c.ordinal}`;
-      const cur = byId.get(id) || { chunk: c, score: 0 };
-      cur.score += 1 / (k + i + 1);
+      const cur = byId.get(id) || { chunk: c, best: 0, sum: 0 };
+      const r = 1 / (k + i + 1);
+      cur.best = Math.max(cur.best, r);
+      cur.sum += r;
       byId.set(id, cur);
     });
   }
   return [...byId.values()]
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => b.best - a.best || b.sum - a.sum)
     .slice(0, limit)
-    .map(({ chunk, score }) => ({ ...chunk, score: Math.round(score * 1e5) / 1e5 }));
+    .map(({ chunk, best }) => ({ ...chunk, score: Math.round(best * 1e5) / 1e5 }));
 }
 
 /**
@@ -127,7 +136,8 @@ export async function searchAgain(userId, question, planned, first, { previous =
     let data;
     try {
       ({ data } = await runPrompt('ask.refine', {
-        question, previous: previous?.question || '', searches: runs.map((r) => r.text), found, count: lite.length,
+        question, previous: previous ? `${previous.question}${previous.answer ? ` (answered: ${String(previous.answer).replace(/\s+/g, ' ').slice(0, 300)})` : ''}` : '',
+        searches: runs.map((r) => r.text), found, count: lite.length,
       }, { userId, feature: 'ask', lane: 'interactive', signal: signal ? AbortSignal.any([signal, timeout]) : timeout }));
     } catch (err) {
       if (signal?.aborted) throw err;
@@ -135,7 +145,7 @@ export async function searchAgain(userId, question, planned, first, { previous =
     }
     const next = [];
     for (const raw of Array.isArray(data?.searches) ? data.searches : []) {
-      const text = String(raw || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+      const text = searchWords(raw);
       if (text.length >= 2 && ![...runs.map((r) => r.text), ...next].some((t) => sameSearch(t, text))) next.push(text);
     }
     if (data?.enough === true || !next.length) break;
