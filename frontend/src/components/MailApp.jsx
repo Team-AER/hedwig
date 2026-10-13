@@ -19,6 +19,7 @@ import { usePluginSlot, PluginRuntime } from '../plugins/PluginSlot.jsx';
 import { useHedwig } from '../hedwig/store.js';
 import { HedwigRuntime } from '../hedwig/index.js';
 import { openMessageInV2 } from '../hedwig/v2/index.js';
+import { MAIL_SETTINGS_VIEW } from '../hedwig/settingsTabs.js';
 import HedwigShell from '../hedwig/shell/HedwigShell.jsx';
 import HedwigMobile from '../hedwig/shell/MobileShell.jsx';
 import { useHedwigTabBar } from '../hedwig/shell/tabBar.js';
@@ -131,6 +132,13 @@ export default function MailApp() {
   // renders exactly the upstream layout below.
   const hedwigShell = useHedwig(s => s.shellMode) === 'hedwig';
   const hedwigTabBar = useHedwigTabBar(isMobile && hedwigShell);
+  // Hedwig: in its shell, settings open in the settings panel beside the reader (adminTab picks
+  // the page), never in the dialog. An effect, so a caller that sets the tab after showAdmin wins.
+  useEffect(() => {
+    if (!hedwigShell || !showAdmin) return;
+    setShowAdmin(false);
+    useHedwig.getState().openView(MAIL_SETTINGS_VIEW, { subTab: null });
+  }, [hedwigShell, showAdmin, setShowAdmin]);
   const sidebarDragRef = useRef(null);
   const sidebarResizeRef = useRef(null);
   const listResizeRef = useRef(null);
@@ -900,7 +908,7 @@ export default function MailApp() {
       )}
 
       <Suspense fallback={lazyFallback}>{composing && <ComposeModal />}</Suspense>
-      <Suspense fallback={lazyFallback}>{showAdmin && <AdminPanel />}</Suspense>
+      <Suspense fallback={lazyFallback}>{showAdmin && !hedwigShell && <AdminPanel />}</Suspense>
       {/* Detached message windows (#219) — desktop only. */}
       {!isMobile && <Suspense fallback={null}><WindowLayer /></Suspense>}
       <Suspense fallback={null}>{hasNativeBridge && <ElectronNotificationBridge />}</Suspense>

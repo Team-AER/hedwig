@@ -3,8 +3,6 @@
 // Upstream's store (store/index.js) still owns accounts, messages and the selected message.
 import { create } from 'zustand';
 import { hedwigApi } from './api.js';
-import { useStore } from '../store/index.js';
-import { settingsTabFor } from './settingsTabs.js';
 
 export const SHELL_KEY = 'hedwig_shell';
 // Set once the v2 shell choice has been made in this browser. A 'classic' stored before v2 (when
@@ -64,17 +62,7 @@ export const useHedwig = create((set, get) => ({
   // `openView('hedwig.ask', { question })` – focus an existing pane hosting the view, otherwise
   // open it in the overlay pane.
   viewRequest: null,            // { id, props, nonce }
-  // Settings pages open in the Settings dialog's sidebar (settingsTabs.js), not in a pane.
-  openView: (id, props = {}) => {
-    const tab = settingsTabFor(id);
-    if (tab) {
-      const st = useStore.getState();
-      st.setAdminTab?.(tab);
-      st.setShowAdmin?.(true);
-      return;
-    }
-    set({ viewRequest: { id, props, nonce: Date.now() + Math.random() } });
-  },
+  openView: (id, props = {}) => set({ viewRequest: { id, props, nonce: Date.now() + Math.random() } }),
 
   // Active layout (pane tree) per device, persisted through /api/hedwig/layouts.
   activeLayout: null,

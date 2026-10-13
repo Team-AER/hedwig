@@ -67,7 +67,8 @@ globalThis.fetch = async (url) => {
 
 const React = await import('react');
 const { createRoot } = await import('react-dom/client');
-const { AccountForm } = await import('./AdminPanel.jsx');
+const { AccountForm, TAB_GROUPS, TABS } = await import('./AdminPanel.jsx');
+const { SETTINGS_GROUPS } = await import('../hedwig/settingsTabs.js');
 
 let root;
 const container = () => document.getElementById('root');
@@ -141,5 +142,23 @@ describe('Add account presets', () => {
     assert.ok(text().includes('admin.accounts.exchangeNote'));
     assert.ok(container().querySelector('input[type="password"]'), 'password auth');
     assert.equal(buttonWithText('admin.accounts.signInMicrosoft'), undefined, 'no Microsoft sign-in for on-premises');
+  });
+});
+
+// Hedwig's settings panel lists the dialog's tabs from its own copy (hedwig/settingsTabs.js), so the
+// panel never has to load this file to draw its nav. The two must not drift.
+describe('Hedwig settings panel', () => {
+  test('lists every dialog tab, in the same groups and order, with the same flags', () => {
+    const flags = (t) => ({ adminOnly: Boolean(t.adminOnly), mobileHidden: Boolean(t.mobileHidden), beta: Boolean(t.beta) });
+    const byId = Object.fromEntries(TABS.map((t) => [t.id, t]));
+    const grouped = new Set(TAB_GROUPS.flatMap((g) => g.tabIds));
+    const tabOf = (p) => ({ id: p.tab, labelKey: p.labelKey, ...flags(p) });
+    const dialogGroups = TAB_GROUPS.map((g) => ({ id: g.id, labelKey: g.labelKey, tabs: g.tabIds.map((id) => ({ id, labelKey: byId[id].labelKey, ...flags(byId[id]) })) }));
+    const panelGroups = SETTINGS_GROUPS.filter((g) => g.id !== 'hedwig').map((g) => ({ id: g.id, labelKey: g.labelKey, tabs: g.pages.map(tabOf) }));
+    assert.deepEqual(panelGroups, dialogGroups);
+    // The dialog's ungrouped tabs (About) end the panel's Hedwig group.
+    const ungrouped = TABS.filter((t) => !grouped.has(t.id)).map((t) => ({ id: t.id, labelKey: t.labelKey, ...flags(t) }));
+    const hedwigTabs = SETTINGS_GROUPS.find((g) => g.id === 'hedwig').pages.filter((p) => p.tab).map(tabOf);
+    assert.deepEqual(hedwigTabs, ungrouped);
   });
 });

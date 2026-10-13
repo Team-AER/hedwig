@@ -42,8 +42,6 @@ import { tv } from '../hedwig/v2/i18n.js';
 import { modelOptions, modelIsUsable } from '../hedwig/aiModels.js';
 import { useStaleRefresh } from '../hedwig/useStaleRefresh.js';
 import HedwigModelsCard from '../hedwig/views/settings/HedwigModelsCard.jsx';
-import EmbeddedSettings from '../hedwig/views/settings/EmbeddedSettings.jsx';
-import { HEDWIG_SETTINGS_TABS, settingsViewFor } from '../hedwig/settingsTabs.js';
 
 // ─── Shared field component ───────────────────────────────────────────────────
 function Field({ label, required, children }) {
@@ -7248,16 +7246,16 @@ function MailboxCleanupTab() {
   );
 }
 
-const TAB_GROUPS = [
+// Hedwig's settings panel lists the same tabs (hedwig/settingsTabs.js); AccountForm.render.test.js
+// keeps the two in step.
+export const TAB_GROUPS = [
   { id: 'account-mail', labelKey: 'admin.tabs.groupAccountMail', tabIds: ['accounts', 'notifications', 'rules', 'categories', 'cleanup', 'antispam'] },
-  // Hedwig's own settings pages (hedwig/settingsTabs.js), shown in this dialog rather than a pane.
-  { id: 'hedwig', labelKey: 'hedwig.settingsTabs.group', tabIds: HEDWIG_SETTINGS_TABS.map((tab) => tab.id) },
   { id: 'display', labelKey: 'admin.tabs.groupDisplay', tabIds: ['appearance', 'shortcuts'] },
   { id: 'security-integrations', labelKey: 'admin.tabs.groupSecurityIntegrations', tabIds: ['security', 'integrations', 'ai', 'ai-actions', 'plugins'] },
   { id: 'admin', labelKey: 'admin.tabs.groupAdmin', tabIds: ['users', 'sso'] },
 ];
 
-const TABS = [
+export const TABS = [
   // Account & Mail
   {
     id: 'accounts', labelKey: 'admin.tabs.accounts',
@@ -7283,10 +7281,6 @@ const TABS = [
     id: 'antispam', labelKey: 'admin.tabs.antispam',
     icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3l1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5L12 3z"/><path d="M19 14l.8 2.2L22 17l-2.2.8L19 20l-.8-2.2L16 17l2.2-.8L19 14z"/><path d="M5 15l.6 1.8L7.5 17l-1.9.7L5 19.5l-.6-1.8L2.5 17l1.9-.7L5 15z"/></svg>,
   },
-  // Hedwig
-  ...HEDWIG_SETTINGS_TABS.map((tab) => ({
-    id: tab.id, labelKey: tab.labelKey, adminOnly: tab.adminOnly, icon: <Icon name={tab.icon} size={15} strokeWidth={1.75} />,
-  })),
   // Display
   {
     id: 'appearance', labelKey: 'admin.tabs.appearance',
@@ -8844,6 +8838,34 @@ function SearchResultsView({ results, query, onNavigate, t }) {
   );
 }
 
+/**
+ * One tab's page. The dialog below shows it; in the Hedwig shell, Hedwig's settings panel does
+ * (hedwig/views/settings/MailSettings.jsx). onNavigate(tab, subtab) opens another tab.
+ */
+export function AdminTabContent({ tab, subTab = null, onNavigate }) {
+  const isMobile = useMobile();
+  return (
+    <>
+      {tab === 'accounts' && <AccountsTab />}
+      {tab === 'antispam' && <SpamSettings />}
+      {tab === 'rules' && <RulesAndBlockListTab initialSubTab={subTab} />}
+      {tab === 'categories' && <CategoriesSection initialSubTab={subTab} />}
+      {tab === 'cleanup' && <MailboxCleanupTab />}
+      {tab === 'appearance' && <AppearanceTab initialSubTab={subTab} />}
+      {tab === 'integrations' && <IntegrationsTab />}
+      {tab === 'users' && <UsersTab />}
+      {tab === 'sso' && <SSOTab />}
+      {tab === 'security' && <SecurityPrivacyTab initialSubTab={subTab} />}
+      {tab === 'notifications' && <NotificationsTab />}
+      {tab === 'shortcuts' && !isMobile && <ShortcutsTab />}
+      {tab === 'ai' && <AISection />}
+      {tab === 'ai-actions' && <AiActionsTab />}
+      {tab === 'plugins' && <PluginsSection onNavigate={onNavigate} />}
+      {tab === 'about' && <AboutTab />}
+    </>
+  );
+}
+
 export default function AdminPanel() {
   const { t } = useTranslation();
   const { setShowAdmin, adminTab, setAdminTab, user } = useStore();
@@ -8921,27 +8943,7 @@ export default function AdminPanel() {
     </div>
   );
 
-  const tabContent = (
-    <>
-      {adminTab === 'accounts' && <AccountsTab />}
-      {adminTab === 'antispam' && <SpamSettings />}
-      {adminTab === 'rules' && <RulesAndBlockListTab initialSubTab={pendingSubTab} />}
-      {adminTab === 'categories' && <CategoriesSection initialSubTab={pendingSubTab} />}
-      {adminTab === 'cleanup' && <MailboxCleanupTab />}
-      {adminTab === 'appearance' && <AppearanceTab initialSubTab={pendingSubTab} />}
-      {adminTab === 'integrations' && <IntegrationsTab />}
-      {adminTab === 'users' && <UsersTab />}
-      {adminTab === 'sso' && <SSOTab />}
-      {adminTab === 'security' && <SecurityPrivacyTab initialSubTab={pendingSubTab} />}
-      {adminTab === 'notifications' && <NotificationsTab />}
-      {adminTab === 'shortcuts' && !isMobile && <ShortcutsTab />}
-      {adminTab === 'ai' && <AISection />}
-      {adminTab === 'ai-actions' && <AiActionsTab />}
-      {adminTab === 'plugins' && <PluginsSection onNavigate={navigateTo} />}
-      {adminTab === 'about' && <AboutTab />}
-      {settingsViewFor(adminTab) && <EmbeddedSettings tabId={adminTab} />}
-    </>
-  );
+  const tabContent = <AdminTabContent tab={adminTab} subTab={pendingSubTab} onNavigate={navigateTo} />;
 
   if (isMobile) {
     return (

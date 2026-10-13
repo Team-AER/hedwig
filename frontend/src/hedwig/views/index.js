@@ -20,6 +20,7 @@ import PluginSettings from './settings/PluginSettings.jsx';
 import ModelSettings from './settings/ModelSettings.jsx';
 import PersonalSettings from './settings/PersonalSettings.jsx';
 import RoutingSettings from './settings/RoutingSettings.jsx';
+import MailSettings from './settings/MailSettings.jsx';
 import { registerV2 } from '../v2/index.js';
 
 export const HEDWIG_VIEWS = [
@@ -47,6 +48,8 @@ export const HEDWIG_VIEWS = [
     description: 'Admin: model gateway, embeddings, budgets, pipeline health.' },
   { id: 'hedwig.settings.personal', title: 'Hedwig settings', icon: 'settings', group: 'settings', component: PersonalSettings,
     description: 'Your Hedwig features, preferences and today’s model usage.' },
+  { id: 'hedwig.settings.mail', title: 'Settings', icon: 'settings', group: 'settings', component: MailSettings,
+    description: 'Accounts, notifications, rules, appearance, security, integrations and the AI assistant.' },
 ];
 
 const open = (id, props = {}) => () => useHedwig.getState().openView(id, props);
