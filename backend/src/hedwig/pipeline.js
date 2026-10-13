@@ -16,6 +16,7 @@ import { getConfig } from './config.js';
 import { setState } from './state.js';
 import { runHedwigHook, HEDWIG_HOOKS } from './hooks.js';
 import { maybeRefreshCoverage, historyPending, resetCoverage, coverageSummary } from './indexer/coverage.js';
+import { notMailReason } from './notMail.js';
 
 /**
  * @typedef {object} PipelineStep
@@ -138,7 +139,8 @@ async function markSeen(rows, cutoff) {
   for (const r of rows) {
     const key = r.message_id ? `${r.account_id}|${r.message_id}` : null;
     let skip = null;
-    if (key && seenKeys.has(key)) skip = 'duplicate';
+    if (notMailReason(r)) skip = 'not mail'; // Exchange's stand-ins for calendar entries (notMail.js)
+    else if (key && seenKeys.has(key)) skip = 'duplicate';
     else if (r.coverage_spam) skip = 'spam'; // server spam folder: indexed only, never the other steps
     else if (cutoff && r.date && new Date(r.date) < cutoff) skip = null; // history: cheap steps only
     if (key && !skip) seenKeys.add(key);

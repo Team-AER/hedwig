@@ -110,6 +110,15 @@ describe('header layer', () => {
     expect(h.signals.map((s) => s.name)).toContain('list');
   });
 
+  it('holds nothing in the Screener under a key no decision can be made on', () => {
+    // Exchange's stand-in for an item it cannot serve over IMAP has no sender address at all.
+    const h = headers.headerLayer(msg({ from_name: 'Microsoft Exchange Server', from_email: '@.MISSING-HOST-NAME.' }), { userAddresses: ME });
+    expect(h.keys.address).toBe('@.missing-host-name.');
+    expect(headers.screenerKey(h.keys)).toBeNull();
+    expect(headers.screenerKey({ address: 'ana@example.com', domain: 'example.com', list: null })).toEqual({ key: 'ana@example.com', scope: 'address' });
+    expect(headers.screenerKey({ address: 'ana@example.com', domain: 'example.com', list: 'has space' })).toEqual({ key: 'ana@example.com', scope: 'address' });
+  });
+
   it('files calendar MIME, Auto-Submitted and Precedence: bulk', () => {
     const cal = headers.headerLayer(msg({ attachments: [{ filename: 'invite.ics', contentType: 'text/calendar' }] }), { userAddresses: ME });
     expect(cal.calendar).toBe(true);
@@ -990,6 +999,29 @@ describe('guard: the threat model on mail from unfamiliar senders', () => {
     const off = withPeople(auditDb({ rows: [lure()], sorts: {} }));
     await engine.resortMessages(USER, [STRANGER], { allowReflex: false });
     expect(off.enqueued.filter((j) => j.kind === 'sort.guard')).toHaveLength(0);
+  });
+});
+
+describe('mail without a sender address (Exchange\'s IMAP stand-ins)', () => {
+  const STAND_IN = '00000000-0000-4000-8000-00000000e001';
+  const standIn = (over = {}) => msg({
+    id: STAND_IN, from_name: 'Microsoft Exchange Server', from_email: '@.MISSING-HOST-NAME.',
+    subject: 'Retrieval using the IMAP4 protocol failed for the following message: 10602',
+    body_text: 'The server couldn\'t retrieve the following message: Subject: "Great meeting you" ... view it using Outlook.', ...over,
+  });
+
+  it('never sorts one outside the Inbox (a calendar entry), so it never reaches the Screener', async () => {
+    const fake = auditDb({ rows: [standIn({ folder: 'Calendar', special_use: null })], sorts: {} });
+    await engine.resortMessages(USER, [STAND_IN], { allowReflex: false });
+    expect(fake.upserts).toHaveLength(0);
+    expect(fake.sort.has(STAND_IN)).toBe(false);
+  });
+
+  it('puts one in the Inbox (an email Exchange could not convert) in People with a pointer to Outlook', async () => {
+    const fake = auditDb({ rows: [standIn({ folder: 'INBOX', special_use: '\\Inbox' })], sorts: {} });
+    await engine.resortMessages(USER, [STAND_IN], { allowReflex: false });
+    expect(fake.sort.get(STAND_IN)).toMatchObject({ stream: 'people', layer: 'rule', needs_you: false, spam: 'clean' });
+    expect(fake.sort.get(STAND_IN).reason).toMatch(/open it in Outlook/);
   });
 });
 

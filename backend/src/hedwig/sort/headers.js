@@ -10,6 +10,7 @@
 import { addressesOf, domainOf } from '../text.js';
 import { senderKind } from '../triage/signals.js';
 import { RECEIPT_RE } from './spam.js';
+import { validKey } from './senders.js';
 
 const round = (n, p = 3) => Math.round(n * 10 ** p) / 10 ** p;
 
@@ -40,10 +41,14 @@ export function senderKeys(row, headers = headerMap(row)) {
   return { address, domain, list: listId ? listId.toLowerCase().slice(0, 200) : null };
 }
 
-/** The key a held message is grouped under in the Screener: the list when there is one. */
+/**
+ * The key a held message is grouped under in the Screener: the list when there is one. Only a key a
+ * sender decision can be made on: mail without a usable address (Exchange's "@.MISSING-HOST-NAME."
+ * stand-in, see notMail.js) is never held, or the Screener would offer choices that all fail.
+ */
 export function screenerKey(keys) {
-  if (keys.list) return { key: keys.list, scope: 'list' };
-  if (keys.address) return { key: keys.address, scope: 'address' };
+  if (keys.list && validKey('list', keys.list)) return { key: keys.list, scope: 'list' };
+  if (keys.address && validKey('address', keys.address)) return { key: keys.address, scope: 'address' };
   return null;
 }
 

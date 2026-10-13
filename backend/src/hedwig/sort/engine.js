@@ -29,6 +29,7 @@ import { engineStamp } from './version.js';
 import { reflexItem, runReflex, cleanReason } from './reflex.js';
 import { messagePartsFor, recentCorrections, runSortPrompt, sortEscalationUseful } from './deps.js';
 import { writeLog } from './log.js';
+import { noSender, notMailReason } from '../notMail.js';
 
 const DAY = 86400_000;
 const round = (n, p = 3) => Math.round(n * 10 ** p) / 10 ** p;
@@ -244,6 +245,13 @@ export function decideCheap(row, ctx) {
   // 1a. own mail
   if (header.own) {
     decideWith('people', { layer: 'rule', confidence: 1, reason: 'You sent this' });
+    d.needsYou = false; d.needsYouReason = null; d.spam = 'clean'; d.spamReason = null;
+    return d;
+  }
+
+  // 1a'. no sender address: in the Inbox, an email Exchange could not convert for IMAP (notMail.js)
+  if (noSender(row)) {
+    decideWith('people', { layer: 'rule', confidence: 1, reason: 'Exchange could not hand this message over; open it in Outlook' });
     d.needsYou = false; d.needsYouReason = null; d.spam = 'clean'; d.spamReason = null;
     return d;
   }
@@ -471,6 +479,7 @@ function toSortInfo(d) {
 }
 
 async function upsertSort(userId, row, d, { pending = null } = {}) {
+  if (notMailReason(row)) return null; // Exchange's stand-ins for calendar entries are not mail
   const p = d.prompt || {};
   const { rows } = await query(
     `INSERT INTO hedwig_sort (message_id, user_id, account_id, stream, proposed_stream, bundle, held, needs_you, needs_you_reason,
@@ -681,6 +690,7 @@ export async function sortRows(rows, { historical = false, allowReflex = true, o
     const toReflex = [];
     const toGuard = [];
     for (const row of mail) {
+      if (notMailReason(row)) continue;
       const prev = ctx.existing.get(row.id);
       if (prev?.layer === 'user') continue;
       if (onlyLayers && prev && !onlyLayers.includes(prev.layer)) continue;
