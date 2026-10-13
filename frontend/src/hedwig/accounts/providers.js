@@ -110,7 +110,7 @@ export function manualFormStart(id, { email = '', accounts = [] } = {}) {
     imap_host: preset.imap_host || '', imap_port: preset.imap_port || 993, imap_skip_tls_verify: false,
     smtp_host: preset.smtp_host || '', smtp_port: preset.smtp_port || 587, smtp_tls: preset.smtp_tls || 'STARTTLS',
     smtp_auth_user: '', smtp_auth_pass: '',
-    auth_user: address, auth_pass: '', categorization_enabled: false, antispam_enabled: false,
+    auth_user: address, auth_pass: '', categorization_enabled: false, antispam_enabled: true,
     trusted_authserv_id: '',
   };
 }
