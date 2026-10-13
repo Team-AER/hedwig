@@ -17,7 +17,7 @@
 //                                             //   request on a server that does not hold headers)
 //   gw.on('x', gw.delay(300, data));          // answers after 300 ms; a stream sends its first
 //                                             //   chunk after 300 ms ({ firstChunkMs, totalMs })
-//   gw.health(model, 'hang' | 'ok' | 503)     // how the model answers the runtime probe
+//   gw.health(model, 'hang' | 'ok' | 503 | { status, body })  // how the model answers the runtime probe
 //                                             //   (X-Workflow runtime.probe; default: 'ok')
 //   gw.otherwise(handler);                    // for workflows with no route (default: 404, loud)
 //
@@ -203,6 +203,7 @@ export function mockGateway({ baseUrl = 'http://llm-proxy.cls/v1', catalog = DEF
       const how = probeHealth.get(req.model) ?? 'ok';
       if (how === 'hang') return gw.hang();
       if (typeof how === 'number') return gw.error(how, 'probe refused');
+      if (how && typeof how === 'object') return gw.error(how.status, how.body || 'probe refused');
       return gw.reply('ok');
     }
     const route = routes.get(req.workflow);

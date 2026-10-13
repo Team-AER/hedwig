@@ -435,10 +435,12 @@ async function probeOne(model, cfg, catalog, fetchFn) {
         reader.cancel().catch(() => {});
         ok = true;
       } else {
-        await res.text().catch(() => '');
-        // A 4xx other than not-found/overloaded means the model answered and disliked the probe.
-        ok = res.ok || (res.status >= 400 && res.status < 500 && ![404, 408, 429].includes(res.status));
-        if (!ok) error = `answered ${res.status}`;
+        const text = await res.text().catch(() => '');
+        // A 4xx other than not-found/overloaded means the model answered and disliked the probe,
+        // unless the gateway says it does not serve the model at all.
+        const gone = modelUnavailable(res.status, text);
+        ok = res.ok || (res.status >= 400 && res.status < 500 && ![404, 408, 429].includes(res.status) && !gone);
+        if (!ok) error = gone ? `answered ${res.status}: the gateway does not serve this model` : `answered ${res.status}`;
       }
     } catch (err) {
       error = controller.signal.aborted ? `no answer within ${timeoutMs} ms` : errorText(err);
@@ -800,11 +802,25 @@ class FirstByteTimeout extends Error {
   constructor(ms) { super(`no response within ${ms} ms`); this.name = 'FirstByteTimeout'; }
 }
 
+// The gateway does not serve this model at all (LiteLLM "Invalid model name passed in model=…",
+// "No deployments available for selected model"; OpenAI-style model_not_found). Not the request's
+// fault, so the fallback should answer it and the probe should call the model down. On 2026-10-13
+// Qwen left llm-proxy: the probe read this 400 as "answered", and 13,000 jobs failed on it.
+const MODEL_GONE = /invalid model name|model[_ ]not[_ ]found|unknown model|no such model|model .{0,80}does not exist|no (healthy )?deployments? available/i;
+export function modelUnavailable(status, text) {
+  return status >= 400 && status < 500 && MODEL_GONE.test(String(text || ''));
+}
+
+const gatewayError = (status, text) => new LlmError(`gateway ${status}: ${String(text).slice(0, 300)}`, {
+  status: status >= 500 ? 502 : status,
+  code: modelUnavailable(status, text) ? 'model_unavailable' : 'llm_error',
+});
+
 /** Worth trying the fallback model after this error? (Not for 4xx: the request itself is wrong.) */
 function retryable(err) {
   if (err instanceof FirstByteTimeout) return true;
   if (err?.name === 'TimeoutError') return true;
-  if (err instanceof LlmError) return err.status >= 500;
+  if (err instanceof LlmError) return err.status >= 500 || err.code === 'model_unavailable';
   return true; // connection-level failures
 }
 
@@ -898,7 +914,7 @@ export async function chat(opts) {
       try {
         const { res } = await openAttempt({ cfg, attempt, body, signal, fetchFn, workflow });
         const text = await res.text();
-        if (!res.ok) throw new LlmError(`gateway ${res.status}: ${text.slice(0, 300)}`, { status: res.status >= 500 ? 502 : res.status });
+        if (!res.ok) throw gatewayError(res.status, text);
         let parsed;
         try { parsed = JSON.parse(text); } catch { throw new LlmError('gateway returned invalid JSON'); }
         const choice = parsed.choices?.[0];
@@ -985,7 +1001,7 @@ async function* runStream(opts, ctx, signal) {
         ({ res, firstChunk, timedOut } = await openAttempt({ cfg, attempt, body, signal, fetchFn, workflow, untilFirstChunk: true }));
         if (!res.ok) {
           const text = await res.text();
-          throw new LlmError(`gateway ${res.status}: ${text.slice(0, 300)}`, { status: res.status >= 500 ? 502 : res.status });
+          throw gatewayError(res.status, text);
         }
       } catch (err) {
         const error = errorText(err);

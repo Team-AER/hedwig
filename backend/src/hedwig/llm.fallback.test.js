@@ -30,6 +30,7 @@ function makeFetch({ primary = 'hang' } = {}) {
       if (primary === 'ok') return new Response(okBody(body.model), { status: 200 });
       if (primary === '500') return new Response('boom', { status: 500 });
       if (primary === '400') return new Response('bad request', { status: 400 });
+      if (primary === 'gone') return new Response(JSON.stringify({ error: { message: '/chat/completions: Invalid model name passed in model=primary-model. Call `/v1/models` to view available models for your key.', code: '400' } }), { status: 400 });
       return new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(init.signal.reason)));
     }
     if (body.stream) {
@@ -71,6 +72,15 @@ describe('llm fallback', () => {
     const four = makeFetch({ primary: '400' });
     await expect(chat({ userId: USER, feature: 'triage', messages: [], fetchFn: four.fn })).rejects.toThrow(/400/);
     expect(four.calls).toEqual(['primary-model']);
+  });
+
+  it('falls back when the gateway no longer serves the primary (a 400 "Invalid model name"), then skips it', async () => {
+    const { fn, calls } = makeFetch({ primary: 'gone' });
+    const first = await chat({ userId: USER, feature: 'triage', messages: [], fetchFn: fn });
+    expect(first.model).toBe('fallback-model');
+    const second = await chat({ userId: USER, feature: 'triage', messages: [], fetchFn: fn });
+    expect(second.model).toBe('fallback-model');
+    expect(calls).toEqual(['primary-model', 'fallback-model', 'fallback-model']);
   });
 
   it('streams from the fallback when the primary never sends headers', async () => {

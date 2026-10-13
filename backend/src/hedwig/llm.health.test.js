@@ -106,6 +106,14 @@ describe('model probe', () => {
     expect(insert.params.slice(19)).toEqual([true, false]); // fell_back, escalated
   });
 
+  it('calls a model down when the gateway answers the probe with "Invalid model name", but not for any other 4xx', async () => {
+    gw.health(QWEN, { status: 400, body: JSON.stringify({ error: { message: '/chat/completions: Invalid model name passed in model=Qwen/Qwen3.8-Flash-Next. Call `/v1/models` to view available models for your key.' } }) });
+    gw.health(GEMMA, 400);
+    const out = await probeModels();
+    expect(out.models.find((m) => m.model === QWEN)).toMatchObject({ ok: false, degraded: true, error: 'answered 400: the gateway does not serve this model' });
+    expect(out.models.find((m) => m.model === GEMMA)).toMatchObject({ ok: true, degraded: false });
+  });
+
   it('returns traffic to the primary after llm.probe.recoverAfter answered probes in a row', async () => {
     gw.health(QWEN, 'hang');
     await probeModels();
