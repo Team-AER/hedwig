@@ -1874,6 +1874,7 @@
         "rescueBare": "Dans vos spams, mais cela semble authentique."
       },
       "searchOrAsk": "Chercher ou demander",
+      "askInstead": "Demander plutôt à Hedwig",
       "settings": {
         "accent": "Couleur d’accent",
         "all": "Tous les réglages et l’utilisation",

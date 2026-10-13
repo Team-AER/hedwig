@@ -22,6 +22,7 @@ import { performAction } from './actions.js';
 import { Avatar, Hair, IconButton, Num, Reason, SectionLabel, V } from './primitives.jsx';
 import { fullTime, senderName, tldrOf, tldrLighter } from './format.js';
 import { tv } from './i18n.js';
+import { searchOrAsk } from './searchOrAsk.js';
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
 
@@ -260,7 +261,8 @@ export function RowList({ items: given, stream, list, phone, onWhy, onOpen }) {
 
 /**
  * The list header's search field (spec §b): 30px, --field, a magnifier, "Search or ask" and the
- * ⌘K hint. A question goes to Ask, anything else to search; empty, it opens the palette.
+ * ⌘K hint. A question, a request or a sentence goes to Ask, keywords to search (searchOrAsk.js);
+ * empty, it opens the palette.
  */
 export function ListSearch({ phone = false, style }) {
   const openPalette = useShell((s) => s.openPalette);
@@ -269,8 +271,7 @@ export function ListSearch({ phone = false, style }) {
     e.preventDefault();
     const q = query.trim();
     if (!q) { openPalette?.(); return; }
-    const question = /\?$/.test(q) || /^(what|when|who|where|why|how|did|does|do|is|are|was|were|can|should|which)\b/i.test(q);
-    if (question && getView('hedwig.ask')) {
+    if (searchOrAsk(q) === 'ask' && getView('hedwig.ask')) {
       useHedwig.getState().setAskPrompt(q);
       useHedwig.getState().openView('hedwig.ask', { question: q });
     } else {

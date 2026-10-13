@@ -1893,6 +1893,7 @@
         "rescueBare": "W folderze spamu, ale wygląda na prawdziwe."
       },
       "searchOrAsk": "Szukaj lub zapytaj",
+      "askInstead": "Zapytaj Hedwig",
       "settings": {
         "accent": "Kolor akcentu",
         "all": "Wszystkie ustawienia i użycie",

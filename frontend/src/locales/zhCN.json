@@ -1874,6 +1874,7 @@
         "rescueBare": "在垃圾邮件文件夹中，但看起来是真实邮件。"
       },
       "searchOrAsk": "搜索或提问",
+      "askInstead": "改为询问 Hedwig",
       "settings": {
         "accent": "强调色",
         "all": "全部设置和用量",

@@ -1874,6 +1874,7 @@
         "rescueBare": "En tu carpeta de spam, pero parece real."
       },
       "searchOrAsk": "Buscar o preguntar",
+      "askInstead": "Preguntar a Hedwig",
       "settings": {
         "accent": "Color de acento",
         "all": "Todos los ajustes y el uso",

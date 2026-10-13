@@ -1874,6 +1874,7 @@
         "rescueBare": "Nella cartella spam, ma sembra autentico."
       },
       "searchOrAsk": "Cerca o chiedi",
+      "askInstead": "Chiedi invece a Hedwig",
       "settings": {
         "accent": "Colore d'accento",
         "all": "Tutte le impostazioni e l'utilizzo",

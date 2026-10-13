@@ -40,6 +40,7 @@ import {
   unreadCountsByAccount,
 } from '../utils/threadedArchive.js';
 import { createUndoableCommit, UNDO_COMMIT_DELAY_MS, UNDO_WINDOW_MS } from '../utils/undoableAction.js';
+import AskInstead from '../hedwig/v2/AskInstead.jsx';
 
 // Folder icon for move picker
 function FolderIcon({ specialUse, size = 13 }) {
@@ -4050,6 +4051,11 @@ function EmptyState({ folderSyncing, searchQuery, searchError, unreadOnly, selec
             background: 'var(--accent)', color: 'var(--accent-text)', cursor: 'pointer', fontSize: 13,
           }}>{t('common.retry')}</button>
         )}
+        {/* Hedwig: no match for the words; Ask reads the mail instead. */}
+        {!searchError && <AskInstead query={searchQuery} style={{
+          padding: '7px 18px', borderRadius: 8, border: 'none', marginRight: 8,
+          background: 'var(--accent)', color: 'var(--accent-text)', cursor: 'pointer', fontSize: 13,
+        }} />}
         <button onClick={onClearSearch} style={{
           padding: '7px 18px', borderRadius: 8, border: '1px solid var(--border)',
           background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13,

@@ -1893,6 +1893,7 @@
         "rescueBare": "Ve složce se spamem, ale vypadá pravě."
       },
       "searchOrAsk": "Hledat nebo se zeptat",
+      "askInstead": "Raději se zeptat Hedwig",
       "settings": {
         "accent": "Barva zvýraznění",
         "all": "Všechna nastavení a využití",

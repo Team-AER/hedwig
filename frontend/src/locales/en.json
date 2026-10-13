@@ -1874,6 +1874,7 @@
         "rescueBare": "In your spam folder, but it looks real."
       },
       "searchOrAsk": "Search or ask",
+      "askInstead": "Ask Hedwig instead",
       "settings": {
         "accent": "Accent",
         "all": "All settings and usage",

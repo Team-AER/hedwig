@@ -69,6 +69,7 @@ const { cardParts, todayLine } = await import('./Brief.jsx');
 const { hasListKey, whySignals } = await import('./WhyDoor.jsx');
 const { routingLine, historyLabel } = await import('./HedwigSettings.jsx');
 const { firstRowFor } = await import('./rows.jsx');
+const { registerView } = await import('../registry.js');
 const { normaliseStory, normaliseDeadline } = await import('./threadData.js');
 const format = await import('./format.js');
 const tokens = await import('../theme/tokens.js');
@@ -1385,6 +1386,22 @@ describe('list and rail (redesign)', () => {
     await React.act(async () => { input.closest('form').dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true })); });
     assert.equal(searched, 'deposit');
     assert.equal(useHedwig.getState().viewRequest.id, 'core.list');
+
+    // A request with no question word or question mark is still for Ask, not a word search.
+    const unregister = registerView({ id: 'hedwig.ask', title: 'Ask', component: () => null });
+    try {
+      searched = null;
+      await React.act(async () => {
+        Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value').set.call(input, 'find out all the AI expenses my team has mailed to me');
+        input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+      });
+      await React.act(async () => { input.closest('form').dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true })); });
+      assert.equal(searched, null, 'not searched');
+      assert.equal(useHedwig.getState().viewRequest.id, 'hedwig.ask');
+      assert.deepEqual(useHedwig.getState().viewRequest.props, { question: 'find out all the AI expenses my team has mailed to me' });
+    } finally {
+      unregister();
+    }
   });
 
   test('the filter menu narrows the list to unread', async () => {
