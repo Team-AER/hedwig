@@ -133,6 +133,7 @@ export async function searchAgain(userId, question, planned, first, { previous =
     const lite = await loadMessagesLite(userId, ids, { dedupe: false });
     const found = lite.map((m) => `${m.date ? new Date(m.date).toISOString().slice(0, 10) : '?'} · ${m.from_name || m.from_email || '?'} · ${String(m.subject || '(no subject)').slice(0, 120)}`).join('\n');
     const timeout = AbortSignal.timeout(cfg['ask.refineTimeoutMs'] || 8000);
+    onEvent({ type: 'review', round, status: 'running' });
     let data;
     try {
       ({ data } = await runPrompt('ask.refine', {
@@ -141,6 +142,7 @@ export async function searchAgain(userId, question, planned, first, { previous =
       }, { userId, feature: 'ask', lane: 'interactive', signal: signal ? AbortSignal.any([signal, timeout]) : timeout }));
     } catch (err) {
       if (signal?.aborted) throw err;
+      onEvent({ type: 'review', round, status: 'done', enough: true, searches: [] });
       break;
     }
     const next = [];
@@ -148,7 +150,10 @@ export async function searchAgain(userId, question, planned, first, { previous =
       const text = searchWords(raw);
       if (text.length >= 2 && ![...runs.map((r) => r.text), ...next].some((t) => sameSearch(t, text))) next.push(text);
     }
-    if (data?.enough === true || !next.length) break;
+    const enough = data?.enough === true || !next.length;
+    onEvent({ type: 'review', round, status: 'done', enough, searches: enough ? [] : next.slice(0, 3) });
+    if (enough) break;
+    for (const text of next.slice(0, 3)) onEvent({ type: 'search', text, round, status: 'running' });
     const results = await Promise.all(next.slice(0, 3).map((text) => gather(userId, { ...planned, text }, { entityId, topicId, cfg, queryText: text })));
     let fresh = 0;
     next.slice(0, 3).forEach((text, i) => {
@@ -158,7 +163,7 @@ export async function searchAgain(userId, question, planned, first, { previous =
       fresh += added.size;
       runs.push({ text, chunks });
       searches.push({ text, found: added.size });
-      onEvent({ type: 'search', text, found: added.size, round });
+      onEvent({ type: 'search', text, found: added.size, round, status: 'done' });
     });
     if (!fresh) break;
   }
@@ -223,6 +228,9 @@ export async function answerQuestion(userId, question, { entityId = null, topicI
   ).catch((err) => console.warn('[hedwig] ask: could not record the answer:', err.message));
 
   try {
+    // Progress for the Ask pane: each step as it starts and ends (plan, search, review, then
+    // sources, the answer's deltas and done).
+    onEvent({ type: 'plan', status: 'running' });
     const [planned, coverage] = await Promise.all([
       planQuery(userId, q, { now, cfg, signal }),
       coverageShare(userId).catch(() => null),
@@ -231,8 +239,10 @@ export async function answerQuestion(userId, question, { entityId = null, topicI
     // A short follow-up ("and the fee?") searches with the earlier question for context.
     const shortFollowUp = previous && q.split(/\s+/).length < 7;
     const queryText = shortFollowUp ? `${previous.question} ${planned.text}` : planned.text;
+    onEvent({ type: 'plan', status: 'done', text: planned.text });
+    onEvent({ type: 'search', text: queryText, round: 0, status: 'running' });
     const first = await gather(userId, planned, { entityId, topicId, cfg, queryText });
-    onEvent({ type: 'search', text: queryText, found: messageCount(first.chunks), round: 0 });
+    onEvent({ type: 'search', text: queryText, found: messageCount(first.chunks), round: 0, status: 'done' });
     const searched = await searchAgain(userId, q, planned, { text: queryText, chunks: first.chunks }, { previous, entityId, topicId, cfg, signal, onEvent });
     const got = { ...first, chunks: searched.chunks };
     plan = { ...compactPlan(planned), queryText, retrieval: { via: first.via, chunks: got.chunks.length, floor: first.floor }, searches: searched.searches };

@@ -546,6 +546,10 @@ function seedAsks() {
   ];
 }
 let askSeq = 0;
+// Ask's steps arrive this far apart: in the browser, so the progress plays out as it does against
+// a real server; in tests, at once.
+let askPace = typeof process === 'undefined' ? 450 : 0;
+export function mockSetAskPace(ms) { askPace = Math.max(0, Number(ms) || 0); }
 
 /**
  * Answer a streaming POST like hedwigStream would: the events through onEvent, then resolve.
@@ -584,9 +588,28 @@ export async function mockStream(path, body, { onEvent, signal } = {}) {
     answer = body.followUpOf ? 'Yes. Renewing keeps the same deposit, so there is nothing to pay again [1].' : DEPOSIT_ANSWER;
     if (/cite/i.test(q)) { answer += ' The scheme also sent a certificate [4].'; flags.invalidCitations = [4]; }
   }
+  // The steps a real answer streams (ask2/answer.js): plan, search, review, search again.
+  const pause = async (n = 1) => { if (askPace) await new Promise((r) => setTimeout(r, askPace * n)); await tick(); };
+  const words = q.replace(/^(?:what|when|who|how|did|does|is|are)\b\s*/i, '').replace(/\?$/, '') || q;
+  const searches = flags.notFound ? [[words, 0]] : [[words, 3], ['tenancy deposit scheme', 2], ['deposit return', 0]];
+  emit({ type: 'plan', status: 'running' }); await pause(2);
+  emit({ type: 'plan', status: 'done', text: words });
+  emit({ type: 'search', text: words, round: 0, status: 'running' }); await pause(2);
+  emit({ type: 'search', text: words, round: 0, status: 'done', found: searches[0][1] });
+  emit({ type: 'review', round: 1, status: 'running' }); await pause(3);
+  const again = searches.slice(1);
+  emit({ type: 'review', round: 1, status: 'done', enough: !again.length, searches: again.map(([t]) => t) });
+  if (again.length) {
+    for (const [t] of again) emit({ type: 'search', text: t, round: 1, status: 'running' });
+    await pause(2);
+    for (const [t, found] of again) emit({ type: 'search', text: t, round: 1, status: 'done', found });
+    emit({ type: 'review', round: 2, status: 'running' }); await pause(2);
+    emit({ type: 'review', round: 2, status: 'done', enough: true, searches: [] });
+  }
+  entry.plan = { text: words, searches: searches.map(([text, found]) => ({ text, found })) };
   emit({ type: 'sources', sources, askLogId: id, plan: { text: q }, coverage: clone(db.coverage) });
-  await tick();
-  for (const word of answer.split(/(?<= )/)) { emit({ type: 'delta', text: word }); await tick(); }
+  await pause(3);
+  for (const word of answer.split(/(?<= )/)) { emit({ type: 'delta', text: word }); if (askPace) await new Promise((r) => setTimeout(r, 40)); await tick(); }
   const checked = flags.invalidCitations.length ? answer.replace(/\s?\[4\]/, '') : answer;
   const citations = [...new Set([...checked.matchAll(/\[(\d+)\]/g)].map((m) => Number(m[1])))];
   // While Tier 2 is degraded (mockSetDegraded) the answer comes from the lighter model, as llm.js reports it.

@@ -177,6 +177,20 @@ const CSS = `
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
+/* Ask's progress (v2/AskProgress.jsx): a timeline of steps on a rail; the running step's mark spins
+   and its words shimmer; a folded summary line once the answer is there. */
+.hw-steps{position:relative;margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px}
+.hw-steps::before{content:'';position:absolute;left:8px;top:10px;bottom:10px;width:1px;background:var(--hw-line, rgba(0,0,0,0.08))}
+.hw-step{position:relative;display:grid;grid-template-columns:17px minmax(0,1fr) auto;column-gap:10px;align-items:start;animation:hw-pop-in 220ms var(--ease-standard, ease) both}
+.hw-step-mark{width:17px;height:17px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:var(--hw-content, #fff);box-sizing:border-box}
+.hw-step-ring{width:13px;height:13px;border-radius:50%;border:1.5px solid var(--hw-line2, rgba(0,0,0,0.14));border-top-color:var(--hw-accent, #007AFF);box-sizing:border-box;animation:hw-spin .8s linear infinite}
+.hw-step-live .hw-step-text{background:linear-gradient(90deg,var(--hw-muted, #5E5E63) 0%,var(--hw-ink, #1D1D1F) 45%,var(--hw-muted, #5E5E63) 90%);background-size:220% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:hw-shimmer 1.8s linear infinite}
+@keyframes hw-shimmer{from{background-position:100% 0}to{background-position:-120% 0}}
+.hw-step-chip{display:inline-block;max-width:100%;padding:0 6px;border-radius:6px;background:var(--hw-field, rgba(0,0,0,0.045));color:var(--hw-ink, #1D1D1F);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
+.hw-steps-sum{display:inline-flex;align-items:center;gap:6px;border:0;background:none;padding:2px 0;font:inherit;font-size:12px;color:var(--hw-muted, #5E5E63);cursor:pointer;border-radius:6px}
+.hw-steps-sum:hover{color:var(--hw-ink, #1D1D1F)}
+@media (prefers-reduced-motion: reduce){.hw-step{animation:none}.hw-step-ring{animation:none;border-color:var(--hw-accent, #007AFF)}.hw-step-live .hw-step-text{animation:none;background:none;color:var(--hw-ink, #1D1D1F)}}
+
 @media (prefers-reduced-motion: reduce) {
   .hw-pane[data-flash="true"] { animation: none; box-shadow: inset 0 0 0 2px var(--hw-accent); }
   .hw-spin { animation: none; opacity: 0.5; }

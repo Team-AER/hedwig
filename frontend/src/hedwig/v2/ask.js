@@ -10,7 +10,7 @@ import { citedNumbers } from '../views/helpers.js';
 export const ASK2_INITIAL = Object.freeze({
   status: 'idle', id: null, question: '', sources: [], answer: '', citations: [], unsupported: false, notFound: false,
   invalidCitations: [], error: null, followUpOf: null, feedback: null, saved: false, createdAt: null, provenance: null, coverage: null,
-  searches: [],
+  searches: [], steps: [], startedAt: null, finishedAt: null,
 });
 
 /**
@@ -43,26 +43,72 @@ export function coverageGap(coverage) {
 }
 
 /** A new question being asked (a follow-up names the answer it follows). */
-export function askStarted(question, { followUpOf = null } = {}) {
-  return { ...ASK2_INITIAL, status: 'streaming', question, followUpOf };
+export function askStarted(question, { followUpOf = null, now = Date.now() } = {}) {
+  return { ...ASK2_INITIAL, status: 'streaming', question, followUpOf, startedAt: now };
 }
+
+// ── Progress ─────────────────────────────────────────────────────────────────
+// Ask's work as steps for the pane (AskProgress.jsx), in the order they happen:
+//   { id, kind: 'plan'|'search'|'review'|'read'|'write', status: 'running'|'done'|'stopped',
+//     text?, round?, found?, enough?, searches?, count? }
+function upsertStep(steps, step) {
+  const list = steps || [];
+  const i = list.findIndex((x) => x.id === step.id);
+  if (i < 0) return [...list, step];
+  const next = list.slice();
+  next[i] = { ...list[i], ...step };
+  return next;
+}
+
+function settleSteps(steps, status = 'done') {
+  return (steps || []).map((x) => (x.status === 'running' ? { ...x, status } : x));
+}
+
+const stepStatus = (s) => (s === 'running' ? 'running' : 'done');
 
 export function reduceAsk2(state, event) {
   if (!event || typeof event !== 'object') return state;
   switch (event.type) {
-    case 'search':
-      // Ask searching, and searching again with its own words: { text, found, round }.
-      return typeof event.text === 'string' && event.text
-        ? { ...state, status: 'streaming', searches: [...(state.searches || []), { text: event.text, found: Number(event.found) || 0, round: Number(event.round) || 0 }] }
-        : state;
-    case 'sources':
-      return { ...state, status: 'streaming', id: event.askLogId || state.id, sources: Array.isArray(event.sources) ? event.sources : [], coverage: coverageOf(event) || state.coverage };
-    case 'delta':
-      return { ...state, status: 'streaming', answer: state.answer + (event.text || '') };
+    case 'plan':
+      return { ...state, status: 'streaming', steps: upsertStep(state.steps, { id: 'plan', kind: 'plan', status: stepStatus(event.status), ...(event.text ? { text: event.text } : {}) }) };
+    case 'search': {
+      // Ask searching, and searching again with its own words: { text, round, status, found }.
+      if (typeof event.text !== 'string' || !event.text) return state;
+      const round = Number(event.round) || 0;
+      const status = stepStatus(event.status);
+      const step = { id: `search:${round}:${event.text}`, kind: 'search', status, text: event.text, round, ...(status === 'done' ? { found: Number(event.found) || 0 } : {}) };
+      return {
+        ...state,
+        status: 'streaming',
+        steps: upsertStep(state.steps, step),
+        searches: status === 'done' ? [...(state.searches || []), { text: event.text, found: Number(event.found) || 0, round }] : (state.searches || []),
+      };
+    }
+    case 'review': {
+      const round = Number(event.round) || 0;
+      const step = { id: `review:${round}`, kind: 'review', status: stepStatus(event.status), round };
+      if (event.status === 'done') Object.assign(step, { enough: event.enough !== false, searches: Array.isArray(event.searches) ? event.searches : [] });
+      return { ...state, status: 'streaming', steps: upsertStep(state.steps, step) };
+    }
+    case 'sources': {
+      const sources = Array.isArray(event.sources) ? event.sources : [];
+      return {
+        ...state, status: 'streaming', id: event.askLogId || state.id, sources, coverage: coverageOf(event) || state.coverage,
+        steps: sources.length ? upsertStep(settleSteps(state.steps), { id: 'read', kind: 'read', status: 'running', count: sources.length }) : settleSteps(state.steps),
+      };
+    }
+    case 'delta': {
+      const steps = (state.steps || []).some((x) => x.id === 'write')
+        ? state.steps
+        : upsertStep(settleSteps(state.steps), { id: 'write', kind: 'write', status: 'running' });
+      return { ...state, status: 'streaming', answer: state.answer + (event.text || ''), steps };
+    }
     case 'done':
       return {
         ...state,
         status: 'done',
+        steps: settleSteps(state.steps),
+        finishedAt: Number.isFinite(event.at) ? event.at : Date.now(),
         id: event.askLogId || state.id,
         answer: typeof event.answer === 'string' && event.answer ? event.answer : state.answer,
         citations: Array.isArray(event.citations) ? event.citations : citedNumbers(state.answer),
@@ -73,7 +119,7 @@ export function reduceAsk2(state, event) {
         coverage: coverageOf(event) || state.coverage,
       };
     case 'error':
-      return { ...state, status: 'error', error: event.error || 'The answer failed' };
+      return { ...state, status: 'error', error: event.error || 'The answer failed', steps: settleSteps(state.steps, 'stopped'), finishedAt: Date.now() };
     default:
       return state;
   }
@@ -84,6 +130,22 @@ function savedSearches(plan) {
   const list = Array.isArray(plan?.searches) ? plan.searches : [];
   return list.filter((x) => x && typeof x.text === 'string' && x.text).map((x, i) => ({ text: x.text, found: Number(x.found) || 0, round: i ? 1 : 0 }));
 }
+
+/** A saved answer's steps, from what was kept: the plan's words, its searches, the messages read. */
+function savedSteps(entry, searches, sourceCount) {
+  if (!searches.length) return [];
+  const steps = [];
+  if (entry.plan?.text) steps.push({ id: 'plan', kind: 'plan', status: 'done', text: entry.plan.text });
+  searches.forEach((x, i) => {
+    if (i === 1) steps.push({ id: 'review:1', kind: 'review', status: 'done', round: 1, enough: false, searches: searches.slice(1).map((y) => y.text) });
+    steps.push({ id: `search:${x.round}:${x.text}`, kind: 'search', status: 'done', text: x.text, round: x.round, found: x.found });
+  });
+  if (sourceCount) steps.push({ id: 'read', kind: 'read', status: 'done', count: sourceCount });
+  if (entry.answer) steps.push({ id: 'write', kind: 'write', status: 'done' });
+  return steps;
+}
+
+const timeOf = (v) => { const t = v ? new Date(v).getTime() : NaN; return Number.isFinite(t) ? t : null; };
 
 /** A saved answer (a history entry or GET /context/ask/:id) as answer state. */
 export function fromSaved(entry) {
@@ -103,6 +165,9 @@ export function fromSaved(entry) {
     followUpOf: entry.followUpOf || null,
     feedback: entry.feedback || null,
     searches: savedSearches(entry.plan),
+    steps: savedSteps(entry, savedSearches(entry.plan), Array.isArray(entry.sources) ? entry.sources.length : 0),
+    startedAt: timeOf(entry.created_at || entry.createdAt),
+    finishedAt: timeOf(entry.completed_at || entry.completedAt),
     saved: true,
     createdAt: entry.created_at || entry.createdAt || null,
     unfinished: !done,

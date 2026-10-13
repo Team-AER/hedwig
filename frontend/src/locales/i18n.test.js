@@ -146,6 +146,8 @@ const SAME_VALUE_ALLOWED = {
   'hedwig.v2.brand':                       'any', // Hedwig — product name, same everywhere
   'hedwig.settingsTabs.group':             'any', // Hedwig — product name, same everywhere
   'hedwig.settingsTabs.personal':          [['en', 'es']], // "Personal"
+  'hedwig.v2.ask.progress.messagesOne':    [['en', 'fr']], // "1 message"
+  'hedwig.v2.ask.progress.messagesMany':   [['en', 'fr']], // "{{n}} messages"
 
   // ── Specific language groups ───────────────────────────────────────────────
   // Hedwig v2: French shares these words with English ("Message", "Conversation"); Spanish and

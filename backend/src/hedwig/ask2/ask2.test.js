@@ -311,7 +311,7 @@ describe('answerQuestion', () => {
     const { events, onEvent } = collect();
     const out = await answerQuestion(USER, 'What colour is the office carpet in Oslo?', { onEvent, now: NOW });
     expect(out).toMatchObject({ answer: NOTHING_RELEVANT, notFound: true, unsupported: false });
-    expect(events.map((e) => e.type)).toEqual(['search', 'sources', 'delta', 'done']);
+    expect(events.map((e) => `${e.type}${e.status ? `:${e.status}` : ''}`)).toEqual(['plan:running', 'plan:done', 'search:running', 'search:done', 'sources', 'delta', 'done']);
     expect(gw.calls.filter((c) => c.workflow === 'ask.answer')).toHaveLength(0);
     const log = [...db.log.values()][0];
     expect(JSON.parse(log.finish[6])).toMatchObject({ retrieval: { floor: true, chunks: 0 } });
@@ -335,8 +335,8 @@ describe('answerQuestion', () => {
     const done = events.find((e) => e.type === 'done');
     expect(done).toMatchObject({ citations: [1, 2], invalidCitations: [5], unsupported: false, askLogId: out.askLogId });
     expect(done.answer).not.toContain('[5]');
-    expect(events[0]).toMatchObject({ type: 'search', text: 'What is the solicitor fee Thomas?', found: 2, round: 0 });
-    expect(events[1]).toMatchObject({ type: 'sources', sources: [{ n: 1, message: { id: M(1) } }, { n: 2, message: { id: M(2) } }] });
+    expect(events.find((e) => e.type === 'search' && e.status === 'done')).toMatchObject({ text: 'What is the solicitor fee Thomas?', found: 2, round: 0 });
+    expect(events.find((e) => e.type === 'sources')).toMatchObject({ sources: [{ n: 1, message: { id: M(1) } }, { n: 2, message: { id: M(2) } }] });
     const log = [...db.log.values()][0];
     expect(JSON.parse(log.finish[4])).toEqual([M(1), M(2)]);
     expect(log.finish[7]).toBe(false); // unsupported
@@ -390,11 +390,20 @@ describe('answerQuestion', () => {
     const out = await answerQuestion(USER, 'find out all the AI expenses my team has mailed to me', { onEvent, now: NOW });
 
     // The first search, then the two new ones ("AI expenses" was already run), in order.
-    expect(events.filter((e) => e.type === 'search').map((e) => [e.text, e.found, e.round])).toEqual([
+    expect(events.filter((e) => e.type === 'search' && e.status === 'done').map((e) => [e.text, e.found, e.round])).toEqual([
       ['AI expenses', 1, 0],
       ['AI subscription reimbursement', 2, 1],
       ['Claude ChatGPT subscription', 0, 1],
     ]);
+    // The steps as they happen, for the pane's progress.
+    const steps = events.filter((e) => ['plan', 'search', 'review'].includes(e.type)).map((e) => `${e.type}:${e.status}${e.round ? `:${e.round}` : ''}`);
+    expect(steps).toEqual([
+      'plan:running', 'plan:done', 'search:running', 'search:done',
+      'review:running:1', 'review:done:1', 'search:running:1', 'search:running:1', 'search:done:1', 'search:done:1',
+      'review:running:2', 'review:done:2',
+    ]);
+    expect(events.find((e) => e.type === 'review' && e.status === 'done')).toMatchObject({ enough: false, searches: ['AI subscription reimbursement', 'Claude ChatGPT subscription'] });
+    expect(events.filter((e) => e.type === 'review' && e.status === 'done').at(-1)).toMatchObject({ enough: true, searches: [] });
     const refine = gw.callsFor('ask.refine');
     expect(refine).toHaveLength(2);
     expect(refine[0].text).toContain('Searches run: "AI expenses"');

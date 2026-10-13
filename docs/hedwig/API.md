@@ -59,9 +59,11 @@ MessageContext = { sender: EntityCard|null, topic: { id, label }|null, commitmen
                    facts: Fact[], related: MessageLite[] }
 ```
 
-Ask events: `{ type: 'search', text, found, round }` for each search Ask runs (round 0 is the
-question's own; later rounds are searches Ask chose itself after reading what it had found, see
-`ask.searchRounds`), then `{ type: 'sources', sources: [{ n, message: MessageLite }] }`,
+Ask events, in order: `{ type: 'plan', status: 'running'|'done', text }` (the words it will look
+for); `{ type: 'search', text, round, status: 'running'|'done', found }` for each search (round 0 is
+the question's own; later rounds are searches Ask chose itself, see `ask.searchRounds`);
+`{ type: 'review', round, status: 'running'|'done', enough, searches }` as it decides whether to
+search again; then `{ type: 'sources', sources: [{ n, message: MessageLite }] }`,
 `{ type: 'delta', text }`, `{ type: 'done', answer, citations: [n] }`. Answers cite sources as
 `[n]`. A saved answer's `plan.searches` lists the searches as `[{ text, found }]`.
 

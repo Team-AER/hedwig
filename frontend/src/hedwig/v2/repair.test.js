@@ -796,6 +796,14 @@ describe('Tier 2 status and the lighter model', () => {
     await render(h(Ask, { props: { question: 'What did the landlord say about the deposit?' } }));
     await settle(120);
     assert.match(text(), /deposit scheme/);
+    // Once answered, the progress folds into one line that opens the steps again.
+    const folded = document.querySelector('[data-ask-progress="folded"]');
+    assert.ok(folded, 'the steps fold away once the answer is there');
+    assert.match(folded.textContent, /^Searched 3 ways · Read \d+ messages? · /);
+    await click(folded.querySelector('button'));
+    const steps = [...document.querySelectorAll('[data-ask-progress="open"] [data-step]')].map((li) => `${li.dataset.step}:${li.dataset.status}`);
+    assert.deepEqual(steps, ['plan:done', 'search:done', 'review:done', 'search:done', 'search:done', 'review:done', 'read:done', 'write:done']);
+    assert.match(document.querySelector('[data-ask-progress="open"]').textContent, /Searching again with other words.*Searched.*tenancy deposit scheme.*2 new.*That covers it/);
     assert.equal(document.querySelector('[data-lighter]'), null);
     assert.match(document.querySelector('[data-coverage]').textContent, /Hedwig has read 62% of your mail so far/);
     await cleanup();

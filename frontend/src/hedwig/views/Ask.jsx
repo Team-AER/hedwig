@@ -18,6 +18,7 @@ import { tv, tvn } from '../v2/i18n.js';
 import { Markdown } from './ui.jsx';
 import { TierNote, LighterLabel } from '../v2/TierNote.jsx';
 import { CoverageNote } from '../v2/CoverageNote.jsx';
+import AskProgress from '../v2/AskProgress.jsx';
 import { isLighter } from '../v2/tiers.js';
 
 // Answers in 14px body text; the [n] markers are 10px accent superscripts (views/ui.jsx CITE_CSS).
@@ -299,16 +300,7 @@ function AnswerBlock({ state, phone, onFeedback, onAgain, onAgent }) {
           <LinkBtn hit={phone} onClick={onAgain}>{tv('hedwig.v2.ask.again', 'Ask again')}</LinkBtn>
         </div>
       )}
-      {(state.searches || []).length > 0 && (
-        <div data-ask-searches="" style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 6px', fontSize: 12, lineHeight: '18px', color: V.muted }}>
-          <span>{tv('hedwig.v2.ask.searchedFor', 'Searched for')}</span>
-          {state.searches.map((s, i) => (
-            <span key={`${i}:${s.text}`} style={{ color: s.round > 0 && s.found > 0 ? V.ink : V.muted }}>
-              “{s.text}”{i < state.searches.length - 1 ? ' ·' : ''}
-            </span>
-          ))}
-        </div>
-      )}
+      <AskProgress state={state} />
       {nothing && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <p style={{ margin: 0, fontSize: 14, fontWeight: 500 }}>{tv('hedwig.v2.ask.notFound', 'Nothing in your mail answers this.')}</p>
@@ -317,7 +309,8 @@ function AnswerBlock({ state, phone, onFeedback, onAgain, onAgent }) {
       )}
       {!nothing && (state.answer
         ? <Markdown text={tidyCites(ro.text)} onCite={(d) => openSource(ro.toSource(d))} />
-        : streaming && <Quiet style={{ padding: 0 }}>{sources.length ? tvn(sources.length, ['hedwig.v2.ask.readingOne', 'Reading 1 message…'], ['hedwig.v2.ask.readingMany', 'Reading {{n}} messages…']) : tv('hedwig.v2.ask.searching', 'Searching your mail…')}</Quiet>)}
+        // The progress above says what is happening; this line is for a server that sends no steps.
+        : streaming && !(state.steps || []).length && <Quiet style={{ padding: 0 }}>{sources.length ? tvn(sources.length, ['hedwig.v2.ask.readingOne', 'Reading 1 message…'], ['hedwig.v2.ask.readingMany', 'Reading {{n}} messages…']) : tv('hedwig.v2.ask.searching', 'Searching your mail…')}</Quiet>)}
       {(lighter || (done && coverageGap(state.coverage) && !nothing)) && (
         <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center' }}>
           {lighter && (
