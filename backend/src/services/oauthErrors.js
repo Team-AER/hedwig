@@ -19,14 +19,15 @@ function clean(text) {
 
 /**
  * The message for an OAuth `error` / `error_description` pair, from the callback query or a
- * token response. Microsoft appends Trace ID / Correlation ID / Timestamp lines to every
- * description; only the first line says what went wrong.
+ * token response. Microsoft appends Trace ID / Correlation ID / Timestamp to every description,
+ * on new lines in the callback and on the same line in token responses; only the part before
+ * them says what went wrong.
  */
 export function providerErrorMessage(error, description) {
   if (error === 'access_denied' && !/AADSTS(?!65004)/.test(description || '')) {
     return 'Sign-in was cancelled.';
   }
-  const firstLine = String(description || '').split(/\r?\n/)[0];
+  const firstLine = String(description || '').split(/\r?\n/)[0].split(/\s+Trace ID:/i)[0];
   return clean(firstLine) || clean(error) || 'Sign-in failed.';
 }
 

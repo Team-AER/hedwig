@@ -18,6 +18,12 @@ describe('providerErrorMessage', () => {
       .toBe("AADSTS50011: The redirect URI 'https://h.example/oauth/microsoft/callback' does not match.");
   });
 
+  it('drops the Trace ID / Correlation ID tail a token response puts on the same line', () => {
+    const description = "AADSTS7000215: Invalid client secret provided. Ensure the secret being sent in the request is the client secret value, not the client secret ID, for a secret added to app '00000000-1111-2222-3333-444444444444'. Trace ID: aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee Correlation ID: ffffffff-0000-1111-2222-333333333333 Timestamp: 2026-10-13 10:00:00Z";
+    expect(providerErrorMessage('invalid_client', description))
+      .toBe("AADSTS7000215: Invalid client secret provided. Ensure the secret being sent in the request is the client secret value, not the client secret ID, for a secret added to app '00000000-1111-2222-3333-444444444444'.");
+  });
+
   it('falls back to the error code, strips control characters and caps the length', () => {
     expect(providerErrorMessage('invalid_client')).toBe('invalid_client');
     expect(providerErrorMessage('x', 'bad\u0000thing\u0007here')).toBe('bad thing here');
