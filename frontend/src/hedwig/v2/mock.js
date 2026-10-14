@@ -198,7 +198,9 @@ function seedAdmin() {
     routing: {
       sort: { override: 'auto', defaultTier: 'reflex', escalateBelow: 0.6, budget: 2000000, cadence: 'Each new message; history 200 messages a minute' },
       work: { override: 'auto', defaultTier: 'reflex', escalateBelow: null, budget: 1000000, cadence: 'When you open a thread or ask for a draft' },
-      ask: { override: 'auto', defaultTier: 'mixed', escalateBelow: null, budget: 1000000, cadence: 'When you ask' },
+      ask: { override: 'auto', defaultTier: 'mixed', escalateBelow: null, budget: 1000000, calls: 200, cadence: 'When you ask' },
+      extraction: { override: 'auto', defaultTier: 'reflex', escalateBelow: null, budget: 1500000, calls: 600, cadence: null },
+      summary: { override: 'auto', defaultTier: 'mixed', escalateBelow: null, budget: 600000, calls: 300, cadence: null },
     },
     enabled: [],
     degraded: false,
@@ -210,7 +212,8 @@ function routingTable(a) {
   const features = Object.entries(a.routing).map(([feature, r]) => ({
     feature, tier: tierOf(r), override: r.override, defaultTier: r.defaultTier, tierKey: `routing.${feature}.tier`,
     escalateBelow: r.escalateBelow, escalateKey: feature === 'sort' ? 'sort.escalateBelow' : null, escalate: [],
-    cadence: r.cadence, budget: r.budget, budgetKey: `llm.tokenBudget.${feature}`, prompts: [],
+    cadence: r.cadence, budget: r.budget, budgetKey: `llm.tokenBudget.${feature}`,
+    calls: r.calls ?? null, callsKey: r.calls === undefined ? null : `llm.dailyBudget.${feature}`, prompts: [],
   }));
   const val = (k) => a.config.find((f) => f.key === k)?.value;
   return { models: { reflex: val('llm.models.fast'), reasoning: val('llm.models.long') }, features };
@@ -1253,6 +1256,10 @@ function route(method, path, body) {
         if (change.tier !== undefined) r.override = change.tier || 'auto';
         if (change.escalateBelow !== undefined) r.escalateBelow = change.escalateBelow;
         if (change.budget !== undefined) r.budget = change.budget;
+        if (change.calls !== undefined) {
+          if (r.calls === undefined) throw bad(`${feature} has no call budget`);
+          r.calls = change.calls;
+        }
       }
       return { ...routingTable(a), changed: Object.keys(body || {}) };
     }

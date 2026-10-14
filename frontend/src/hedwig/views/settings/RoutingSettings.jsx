@@ -1,7 +1,7 @@
 // hedwig.settings.routing (admin) — Models and routing: the model behind each tier, picked from
 // the gateway catalog, with its reasoning effort limited to what the catalog says the model
 // supports; what is serving each tier right now and a live check; the per-feature routing table
-// (tier, escalation, token budget); usage per feature; and the models people may pick.
+// (tier, escalation, token and call budgets); usage per feature; and the models people may pick.
 //
 // Routes (backend/src/hedwig/ledger/admin.js, onboarding/routing.js): GET/PUT /admin/runtime
 // (tiers, fallback, enabledModels, status; PUT answers with `notes` on what each model will
@@ -279,7 +279,7 @@ function RoutingTableSection() {
   };
   if (isMissing(res.error)) return null;
   return (
-    <Section title={tv('hedwig.v2.routing.table', 'Routing by feature')} sub={tv('hedwig.v2.routing.tableSub', 'Which tier handles each feature, when sorting escalates to Tier 2, and each person’s daily token budget.')}>
+    <Section title={tv('hedwig.v2.routing.table', 'Routing by feature')} sub={tv('hedwig.v2.routing.tableSub', 'Which tier handles each feature, when sorting escalates to Tier 2, and each person’s daily budgets. A feature stops for the day at whichever budget runs out first.')}>
       {res.error && <ErrorLine error={res.error} onRetry={() => res.reload()} retryLabel={tv('hedwig.v2.action.retry', 'Try again')} />}
       {res.loading && !res.data && <Quiet>{tv('hedwig.v2.loading', 'Loading…')}</Quiet>}
       {features.map((f) => {
@@ -318,6 +318,17 @@ function RoutingTableSection() {
                     type="number" min={0} step={1000} defaultValue={f.budget ?? ''} key={`b-${f.budget}`}
                     aria-label={tv('hedwig.v2.routing.budgetFor', 'Daily token budget per person for {{feature}}', { feature: f.feature })}
                     onBlur={(e) => { const v = e.target.value === '' ? null : Number(e.target.value); if (v !== f.budget) put(f.feature, { budget: v }); }}
+                    style={{ ...selectStyle, width: 110, fontVariantNumeric: 'tabular-nums' }}
+                  />
+                </label>
+              )}
+              {f.callsKey && (
+                <label style={{ display: 'flex', alignItems: 'baseline', gap: 6, fontSize: 12, color: V.muted }}>
+                  <span style={{ whiteSpace: 'nowrap', minWidth: 96 }}>{tv('hedwig.v2.routing.callsBudget', 'Calls a day')}</span>
+                  <input
+                    type="number" min={0} step={10} defaultValue={f.calls ?? ''} key={`c-${f.calls}`}
+                    aria-label={tv('hedwig.v2.routing.callsFor', 'Daily model call budget per person for {{feature}}', { feature: f.feature })}
+                    onBlur={(e) => { const v = e.target.value === '' ? null : Number(e.target.value); if (v !== f.calls) put(f.feature, { calls: v }); }}
                     style={{ ...selectStyle, width: 110, fontVariantNumeric: 'tabular-nums' }}
                   />
                 </label>

@@ -1,4 +1,4 @@
-// Admin: the per-feature routing table (tier, escalation, cadence, budget), the models users may
+// Admin: the per-feature routing table (tier, escalation, cadence, budgets), the models users may
 // pick from, and a household summary (counts only, never mail). The table is assembled from the
 // registered prompts (listPrompts) and config; edits write existing config keys.
 import { query } from '../../services/db.js';
@@ -12,6 +12,15 @@ const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Frid
 
 // Prompts whose calls are charged to another feature (sort/deps.js runs spam.reflex as 'sort').
 const FEATURE_OF_PROMPT = { spam: 'sort' };
+
+// llm.js charges plugin calls to the 'plugins' budgets; every other feature's budgets carry its name.
+const BUDGET_NAME = { plugin: 'plugins' };
+const budgetName = (feature) => BUDGET_NAME[feature] || feature;
+const FEATURE_OF_BUDGET = Object.fromEntries(Object.entries(BUDGET_NAME).map(([f, b]) => [b, f]));
+// Every feature with a daily budget gets a row, prompts or not: a limit the table leaves out
+// can stop a feature with nowhere on this page to raise it.
+const BUDGETED = [...new Set(SCHEMA.map((f) => /^llm\.(?:dailyBudget|tokenBudget)\.(.+)$/.exec(f.key)?.[1]).filter(Boolean))]
+  .map((b) => FEATURE_OF_BUDGET[b] || b);
 
 // The escalation rule a feature has, if any: the first key is what PUT escalateBelow writes.
 const ESCALATE = {
@@ -43,14 +52,15 @@ export function buildRoutingTable(prompts, cfg) {
     if (!byFeature.has(f)) byFeature.set(f, []);
     byFeature.get(f).push(p);
   }
-  for (const f of Object.keys(CADENCE)) if (!byFeature.has(f)) byFeature.set(f, []);
+  for (const f of [...Object.keys(CADENCE), ...BUDGETED]) if (!byFeature.has(f)) byFeature.set(f, []);
   const features = [...byFeature.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([feature, list]) => {
     const tierKey = `routing.${feature}.tier`;
     const override = KEYS.has(tierKey) ? cfg[tierKey] : 'auto';
     const routed = Object.hasOwn(TIERS, String(override)) ? override : null;
     const tiers = [...new Set(list.map((p) => p.tier))];
     const defaultTier = tiers.length === 1 ? tiers[0] : tiers.length ? 'mixed' : null;
-    const budgetKey = `llm.tokenBudget.${feature}`;
+    const budgetKey = `llm.tokenBudget.${budgetName(feature)}`;
+    const callsKey = `llm.dailyBudget.${budgetName(feature)}`;
     const escalate = (ESCALATE[feature] || []).map((e) => ({ ...e, value: cfg[e.key] }));
     return {
       feature,
@@ -64,6 +74,8 @@ export function buildRoutingTable(prompts, cfg) {
       cadence: CADENCE[feature] ? CADENCE[feature](cfg) : null,
       budget: KEYS.has(budgetKey) ? cfg[budgetKey] : null,
       budgetKey: KEYS.has(budgetKey) ? budgetKey : null,
+      calls: KEYS.has(callsKey) ? cfg[callsKey] : null,
+      callsKey: KEYS.has(callsKey) ? callsKey : null,
       prompts: list.map((p) => ({ id: p.id, version: p.version, tier: p.tier, effectiveTier: routed || p.tier, maxTokens: p.maxTokens })),
     };
   });
@@ -95,17 +107,18 @@ const bad = (message) => Object.assign(new Error(message), { status: 400 });
 
 /**
  * Map a PUT /admin/routing body to config keys. Pure (validates against the table).
- * body: { <feature>: { tier?: 'auto'|'reflex'|'reasoning'|null, escalateBelow?: number|null, budget?: number|null } }
+ * body: { <feature>: { tier?: 'auto'|'reflex'|'reasoning'|null, escalateBelow?: number|null, budget?: number|null, calls?: number|null } }
+ * `budget` is the daily token budget, `calls` the daily call budget; null clears the override.
  */
 export function routingPatch(body, table) {
-  if (!body || typeof body !== 'object' || Array.isArray(body)) throw bad('body must be { feature: { tier, escalateBelow, budget } }');
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw bad('body must be { feature: { tier, escalateBelow, budget, calls } }');
   const byName = new Map(table.features.map((f) => [f.feature, f]));
   const patch = {};
   for (const [feature, change] of Object.entries(body)) {
     const f = byName.get(feature);
     if (!f) throw bad(`unknown feature ${feature}`);
-    if (!change || typeof change !== 'object') throw bad(`${feature}: expected { tier, escalateBelow, budget }`);
-    for (const k of Object.keys(change)) if (!['tier', 'escalateBelow', 'budget'].includes(k)) throw bad(`${feature}: unknown field ${k}`);
+    if (!change || typeof change !== 'object') throw bad(`${feature}: expected { tier, escalateBelow, budget, calls }`);
+    for (const k of Object.keys(change)) if (!['tier', 'escalateBelow', 'budget', 'calls'].includes(k)) throw bad(`${feature}: unknown field ${k}`);
     if (change.tier !== undefined) {
       if (!f.tierKey) throw bad(`${feature} has no tier setting`);
       if (change.tier !== null && !TIER_VALUES.includes(change.tier)) throw bad(`${feature}: tier must be auto, reflex or reasoning`);
@@ -122,6 +135,12 @@ export function routingPatch(body, table) {
       const n = change.budget === null ? null : Number(change.budget);
       if (n !== null && !(Number.isFinite(n) && n >= 0)) throw bad(`${feature}: budget must be a number of tokens`);
       patch[f.budgetKey] = n === null ? null : Math.round(n);
+    }
+    if (change.calls !== undefined) {
+      if (!f.callsKey) throw bad(`${feature} has no call budget`);
+      const n = change.calls === null ? null : Number(change.calls);
+      if (n !== null && !(Number.isFinite(n) && n >= 0)) throw bad(`${feature}: calls must be a number of model calls`);
+      patch[f.callsKey] = n === null ? null : Math.round(n);
     }
   }
   return patch;

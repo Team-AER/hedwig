@@ -152,6 +152,19 @@ describe('routing table', () => {
     expect(table.models).toEqual({ reflex: GEMMA, reasoning: QWEN });
   });
 
+  it('shows every daily budget, calls as well as tokens, where llm.js charges it', async () => {
+    const table = routing.buildRoutingTable(await listPrompts(), await cfg());
+    const f = Object.fromEntries(table.features.map((x) => [x.feature, x]));
+    expect(f.extraction).toMatchObject({ budget: 1500000, budgetKey: 'llm.tokenBudget.extraction', calls: 600, callsKey: 'llm.dailyBudget.extraction' });
+    expect(f.summary).toMatchObject({ budget: 600000, calls: 300, callsKey: 'llm.dailyBudget.summary' });
+    expect(f.work).toMatchObject({ budgetKey: 'llm.tokenBudget.work', calls: null, callsKey: null });
+    // Plugin calls are charged to the 'plugins' budgets (llm.js checkBudget).
+    expect(f.plugin).toMatchObject({ budgetKey: 'llm.tokenBudget.plugins', callsKey: 'llm.dailyBudget.plugins' });
+    const keys = new Set(table.features.flatMap((x) => [x.budgetKey, x.callsKey]).filter(Boolean));
+    const budgetKeys = config.SCHEMA.map((x) => x.key).filter((k) => /^llm\.(dailyBudget|tokenBudget)\./.test(k));
+    expect(budgetKeys.filter((k) => !keys.has(k))).toEqual([]);
+  });
+
   it('maps PUT bodies onto config keys and rejects what it cannot map', async () => {
     const table = routing.buildRoutingTable(await listPrompts(), await cfg());
     expect(routing.routingPatch({ sort: { tier: 'reasoning', escalateBelow: 0.5, budget: 1234.4 }, profile: { tier: null, budget: null } }, table)).toEqual({
@@ -162,6 +175,9 @@ describe('routing table', () => {
     expect(() => routing.routingPatch({ sort: { tier: 'fast' } }, table)).toThrow(/tier must be auto, reflex or reasoning/);
     expect(() => routing.routingPatch({ sort: { escalateBelow: 2 } }, table)).toThrow(/between 0 and 1/);
     expect(() => routing.routingPatch({ sort: { model: 'x' } }, table)).toThrow(/unknown field model/);
+    expect(routing.routingPatch({ summary: { calls: 3000.2 }, extraction: { calls: null } }, table)).toEqual({ 'llm.dailyBudget.summary': 3000, 'llm.dailyBudget.extraction': null });
+    expect(() => routing.routingPatch({ work: { calls: 10 } }, table)).toThrow(/work has no call budget/);
+    expect(() => routing.routingPatch({ summary: { calls: -1 } }, table)).toThrow(/calls must be a number/);
 
     const out = await routing.updateRouting({ labels: { tier: 'reflex', budget: 5000 } });
     expect(db.system).toEqual({ 'routing.labels.tier': 'reflex', 'llm.tokenBudget.labels': 5000 });
