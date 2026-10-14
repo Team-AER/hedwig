@@ -27,11 +27,12 @@ import { loadThread, loadFullBody, regenerateStory, regenerateTldr, isRewriting 
 import { putTldr } from './tldrs.js';
 import { isDraftMessage, openDraft, getReplyDraft, setReplyDraft, clearReplyDraft } from './drafts.js';
 import {
-  snooze, snoozeTimes, prepareReply, guardReply, sendPrepared, watchForReply, settingValue, markRead,
+  snooze, prepareReply, guardReply, sendPrepared, watchForReply, settingValue, markRead,
   openReplyComposer, openReplyAllComposer, openForwardComposer, folderList, unsubscribe, blockSender,
 } from './mail.js';
 import { performAction } from './actions.js';
 import { MessageCards } from './Cards.jsx';
+import { snoozeMenuItems } from './snoozeMenu.jsx';
 import { Question } from './Question.jsx';
 import { useWhyDoor } from './WhyDoor.jsx';
 import { Avatar, Btn, IconButton, LinkBtn, Quiet, Reason, Sheet, Slip, V, Why, ErrorLine, usePhone } from './primitives.jsx';
@@ -942,7 +943,8 @@ export default function Thread({ props }) {
     { id: 'delegated', label: tv('hedwig.v2.thread.delegate', 'Delegated'), icon: 'user', onSelect: delegate },
     { id: 'reference', label: tv('hedwig.v2.thread.reference', 'Keep for reference'), icon: 'archive', onSelect: keepForReference },
   ] : []);
-  const snoozeItems = () => snoozeTimes().map((s) => ({ id: s.id, label: s.label, icon: 'alarm-clock', onSelect: () => act('snooze', { until: s.until }) }));
+  const snoozeUntil = (until) => act('snooze', { until });
+  const snoozeItems = () => snoozeMenuItems(snoozeUntil);
   const showOriginal = async () => {
     const row = await openMessage(latestId);
     if (row && !phone) useHedwig.getState().openView('core.thread');
@@ -1142,7 +1144,7 @@ export default function Thread({ props }) {
   const junkLabel = tv('hedwig.v2.thread.junk', 'Junk');
   const moreItems = ({ withGroup2 = false, withMove = false, withReply = false } = {}) => [
     ...(withGroup2 && work ? [{ id: 'later', label: tv('hedwig.v2.rail.replyLater', 'Reply Later'), icon: 'clock', hint: 'L', onSelect: later }] : []),
-    ...(withGroup2 ? snoozeItems().map((s) => ({ ...s, label: `${tv('hedwig.v2.thread.snooze', 'Snooze')}: ${s.label}` })) : []),
+    ...(withGroup2 ? snoozeMenuItems(snoozeUntil, { prefix: tv('hedwig.v2.thread.snooze', 'Snooze') }) : []),
     ...(withGroup2 && work ? [{ id: 'aside', label: tv('hedwig.v2.thread.setAside', 'Set Aside'), icon: 'bookmark', hint: 'S', onSelect: aside }] : []),
     ...keepItems(),
     ...(withReply ? [
@@ -1471,7 +1473,7 @@ export default function Thread({ props }) {
         <Sheet as="footer" phone material="bar" radius={0} role="toolbar" aria-label={tv('hedwig.v2.thread.toolbar', 'Message actions')} style={{ position: 'relative', zIndex: 3, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-around', padding: '2px 8px calc(2px + env(safe-area-inset-bottom, 0px))', borderTop: `0.5px solid ${V.line2}` }}>
           <IconButton icon="circle-check" size={44} label={tv('hedwig.v2.thread.done', 'Done')} onClick={done} style={{ color: V.accent }} />
           <IconButton icon="trash" size={44} label={deleteLabel} onClick={del} />
-          <MenuButton label={tv('hedwig.v2.thread.snooze', 'Snooze')} items={snoozeItems} align="left" width={220} buttonClassName="hw-icon-btn" buttonStyle={barBtn}>
+          <MenuButton label={tv('hedwig.v2.thread.snooze', 'Snooze')} items={snoozeItems} sheet align="left" width={220} buttonClassName="hw-icon-btn" buttonStyle={barBtn}>
             <Icon name="alarm-clock" size={22} />
           </MenuButton>
           <IconButton icon="reply" size={44} label={tv('hedwig.v2.thread.reply', 'Reply')} onClick={focusReply} />
@@ -1484,7 +1486,7 @@ export default function Thread({ props }) {
             { id: 'junk', label: junkLabel, icon: 'alert-octagon', onSelect: junk },
             ...moreItems({ withReply: true }),
             { id: 'stream', label: tv('hedwig.v2.thread.changeStream', 'Change stream…'), icon: 'folder-input', onSelect: () => openDoor(null) },
-          ]} align="right" width={240} buttonClassName="hw-icon-btn" buttonStyle={barBtn}>
+          ]} sheet align="right" width={240} buttonClassName="hw-icon-btn" buttonStyle={barBtn}>
             <Icon name="ellipsis" size={22} />
           </MenuButton>
         </Sheet>

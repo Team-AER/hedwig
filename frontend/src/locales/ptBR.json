@@ -1906,7 +1906,12 @@
         "done": "Adiado até {{when}}.",
         "later": "Mais tarde hoje",
         "tomorrow": "Amanhã de manhã",
-        "week": "Na próxima semana"
+        "week": "Na próxima semana",
+        "custom": "Escolher data e hora…",
+        "pickTitle": "Adiar até",
+        "date": "Data",
+        "time": "Hora",
+        "past": "Esse horário já passou."
       },
       "stream": {
         "empty": "Nada aqui no momento.",

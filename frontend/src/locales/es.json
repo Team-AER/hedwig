@@ -1906,7 +1906,12 @@
         "done": "Pospuesto hasta {{when}}.",
         "later": "Más tarde hoy",
         "tomorrow": "Mañana por la mañana",
-        "week": "La semana que viene"
+        "week": "La semana que viene",
+        "custom": "Elegir fecha y hora…",
+        "pickTitle": "Posponer hasta",
+        "date": "Fecha",
+        "time": "Hora",
+        "past": "Esa hora ya ha pasado."
       },
       "stream": {
         "empty": "Ahora mismo no hay nada aquí.",

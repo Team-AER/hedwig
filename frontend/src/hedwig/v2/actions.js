@@ -25,6 +25,7 @@ import { archiveThread, markThreadDone, reopenThread, snooze as snoozeRoute, add
 import { isDraftMessage } from './drafts.js';
 import { isMissing } from './hooks.js';
 import { tv, tvn } from './i18n.js';
+import { untilTime } from './format.js';
 
 export const UNDO_MS = 6000;
 export const MAX_TOASTS = 3;
@@ -183,10 +184,6 @@ async function eachItem(e, pick) {
 }
 
 // ── What each action is ────────────────────────────────────────────────────────
-function whenLabel(until) {
-  const d = until instanceof Date ? until : new Date(until);
-  return d.toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
-}
 
 function planFor(spec, items) {
   const n = items.length;
@@ -284,7 +281,7 @@ function planFor(spec, items) {
         removes: true,
         deferred: true,
         snooze: true,
-        title: tv('hedwig.v2.act.snoozed', 'Snoozed until {{when}}', { when: spec.untilLabel || whenLabel(until) }),
+        title: tv('hedwig.v2.act.snoozed', 'Snoozed until {{when}}', { when: spec.untilLabel || untilTime(until) }),
         failTitle: tv('hedwig.v2.act.snoozeFailed', 'Could not snooze it.'),
         async commit(e) { for (const item of e.items) await ops.snooze(item, until); },
         inverse: null, // no route ends a snooze; Undo cancels it before it is sent

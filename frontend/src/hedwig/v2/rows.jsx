@@ -17,7 +17,7 @@ import { useShell } from '../shell/state.js';
 import { MenuButton } from '../shell/Menu.jsx';
 import { Icon } from '../icons.jsx';
 import { useV2, liveRows } from './state.js';
-import { snoozeTimes } from './mail.js';
+import { snoozeMenuItems } from './snoozeMenu.jsx';
 import { performAction } from './actions.js';
 import { Avatar, Hair, IconButton, Num, Reason, SectionLabel, V } from './primitives.jsx';
 import { fullTime, senderName, tldrOf, tldrLighter } from './format.js';
@@ -80,7 +80,7 @@ export function rowPreview(item) {
 const UNLISTABLE = { delegated: ['hedwig.v2.row.unlistDelegated', 'Not delegated any more'], reference: ['hedwig.v2.row.unlistReference', 'Remove from Reference'] };
 function RowActions({ item, visible, work, list, stream }) {
   const act = (kind, extra = {}) => () => performAction({ kind, items: [item], stream: item.stream || stream, ...extra });
-  const snoozeItems = () => snoozeTimes().map((s) => ({ id: s.id, label: s.label, icon: 'alarm-clock', onSelect: act('snooze', { until: s.until }) }));
+  const snoozeItems = () => snoozeMenuItems((until) => act('snooze', { until })());
   return (
     <div
       data-row-actions=""

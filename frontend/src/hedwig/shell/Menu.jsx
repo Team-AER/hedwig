@@ -7,6 +7,9 @@
 //   { id, label, description?, icon?, hint?, checked?, radio?, disabled?, onSelect }
 //       `checked` makes it a menuitemcheckbox, or a menuitemradio with `radio: true`;
 //       `description` is a 12px muted line under the label.
+//   { id, label, icon?, panel: ({ close, back, sheet }) => node, panelLabel? }
+//       picking it swaps the rows for the panel (a small form, like snooze's date and time) in
+//       the same popover, which becomes a dialog; `back` returns to the rows.
 //   { type: 'radio', id, label?, ariaLabel?, options: [{ id, label, checked, onSelect }] }
 //       a segmented radio group (role="group" of menuitemradio); picking one keeps the menu open.
 //   { type: 'header', label } · { type: 'separator' }
@@ -85,6 +88,7 @@ function ItemRow({ item, sheet, onPick }) {
       aria-checked={checkable ? Boolean(item.checked) : undefined}
       aria-disabled={item.disabled ? 'true' : undefined}
       aria-description={item.description || undefined}
+      aria-haspopup={item.panel ? 'dialog' : undefined}
       data-menu-item={item.id}
       className="hw-menu-item"
       tabIndex={-1}
@@ -163,14 +167,17 @@ export function MenuButton({
 }) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState(null);
+  const [panel, setPanel] = useState(null); // the picked item whose panel shows in place of the rows
   const [, bump] = useState(0);
   const btnRef = useRef(null);
   const menuRef = useRef(null);
+  const panelFrom = useRef(null);
   const asSheet = sheet === true || (sheet === 'auto' && typeof window !== 'undefined' && window.innerWidth < PHONE_MAX);
   const list = tidyItems(typeof items === 'function' ? (open ? items() : []) : items);
 
   const close = useCallback((refocus = true) => {
     setOpen(false);
+    setPanel(null);
     if (refocus) btnRef.current?.focus();
   }, []);
 
@@ -195,7 +202,24 @@ export function MenuButton({
     return () => document.removeEventListener('pointerdown', onDown, true);
   }, [open, pos, close]);
 
+  // Into a panel: focus its first field. Back out: focus the row that opened it.
+  useEffect(() => {
+    if (!open) { panelFrom.current = null; setPanel(null); return; }
+    if (panel) {
+      panelFrom.current = panel.id;
+      (menuRef.current?.querySelector('[data-autofocus]') || menuRef.current?.querySelector('input, select, textarea, button'))?.focus();
+    } else if (panelFrom.current) {
+      [...(menuRef.current?.querySelectorAll('[data-menu-item]') || [])].find((n) => n.dataset.menuItem === panelFrom.current)?.focus();
+      panelFrom.current = null;
+    }
+  }, [open, panel]);
+
   const onMenuKey = (e) => {
+    // A panel's fields keep their own keys (arrows step a date or time, Tab moves between them).
+    if (panel) {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); }
+      return;
+    }
     const nodes = [...(menuRef.current?.querySelectorAll(ITEM_SELECTOR) || [])];
     const i = nodes.indexOf(document.activeElement);
     if (e.key === 'ArrowDown') { e.preventDefault(); nodes[(i + 1) % nodes.length]?.focus(); }
@@ -208,6 +232,7 @@ export function MenuButton({
 
   // A pick closes the menu, except in a radio group (the appearance switch shows its effect at once).
   const onPick = (item, { keepOpen = false } = {}) => {
+    if (item.panel) { setPanel(item); return; }
     if (keepOpen) { item.onSelect?.(); bump((n) => n + 1); return; }
     close();
     item.onSelect?.();
@@ -216,8 +241,8 @@ export function MenuButton({
   const menu = (
     <div
       ref={menuRef}
-      role="menu"
-      aria-label={heading || label}
+      role={panel ? 'dialog' : 'menu'}
+      aria-label={panel ? (panel.panelLabel || panel.label) : (heading || label)}
       onKeyDown={onMenuKey}
       className="hw-sheet"
       data-material="content"
@@ -246,7 +271,9 @@ export function MenuButton({
         </div>
       )}
       {!asSheet && heading && <div role="presentation" style={{ padding: '6px 8px 2px', fontSize: 13, fontWeight: 600 }}>{heading}</div>}
-      <MenuRows list={list} sheet={asSheet} onPick={onPick} />
+      {panel
+        ? panel.panel({ close: () => close(), back: () => setPanel(null), sheet: asSheet })
+        : <MenuRows list={list} sheet={asSheet} onPick={onPick} />}
     </div>
   );
 

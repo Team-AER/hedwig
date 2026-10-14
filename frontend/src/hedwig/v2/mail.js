@@ -7,6 +7,7 @@ import { openReplyFromMessage, openForwardFromMessage } from '../../utils/compos
 import { v2Api, isMockMode, announceSortChange } from './client.js';
 import { useV2 } from './state.js';
 import { tv, tvn } from './i18n.js';
+import { untilTime } from './format.js';
 
 function notify(type, title, body) {
   useStore.getState().addNotification?.({ type, title, ...(body ? { body } : {}) });
@@ -42,6 +43,28 @@ export function snoozeTimes(now = new Date()) {
   ];
 }
 
+const pad2 = (n) => String(n).padStart(2, '0');
+
+/** A local day as a date input's value (YYYY-MM-DD). */
+export function dateValue(d) {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+/** The custom snooze picker opens on tomorrow at 08:00 (Tomorrow morning), as date and time input values. */
+export function customSnoozeStart(now = new Date()) {
+  const d = new Date(now); d.setDate(now.getDate() + 1);
+  return { date: dateValue(d), time: '08:00' };
+}
+
+/** A date input's YYYY-MM-DD and a time input's HH:MM as a local instant; null until both are whole. */
+export function snoozeAt(date, time) {
+  const dm = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(date || ''));
+  const tm = /^(\d{2}):(\d{2})/.exec(String(time || ''));
+  if (!dm || !tm) return null;
+  const at = new Date(Number(dm[1]), Number(dm[2]) - 1, Number(dm[3]), Number(tm[1]), Number(tm[2]), 0, 0);
+  return Number.isNaN(at.getTime()) || at.getDate() !== Number(dm[3]) ? null : at;
+}
+
 /**
  * Snooze through POST /work/snooze when the work routes are there (it snoozes upstream and keeps
  * the thread out of People until then), otherwise upstream's own snooze route.
@@ -52,7 +75,7 @@ export async function snooze(messageId, until, threadId, { quiet = false } = {})
   } else if (!isMockMode()) {
     await api.snoozeMessage(messageId, until.toISOString());
   }
-  if (!quiet) notify('success', tv('hedwig.v2.snooze.done', 'Snoozed until {{when}}.', { when: until.toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' }) }));
+  if (!quiet) notify('success', tv('hedwig.v2.snooze.done', 'Snoozed until {{when}}.', { when: untilTime(until) }));
   announceSortChange({ snoozed: messageId });
 }
 

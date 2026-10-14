@@ -1906,7 +1906,12 @@
         "done": "Posticipato fino a {{when}}.",
         "later": "Più tardi oggi",
         "tomorrow": "Domani mattina",
-        "week": "La settimana prossima"
+        "week": "La settimana prossima",
+        "custom": "Scegli data e ora…",
+        "pickTitle": "Posticipa fino a",
+        "date": "Data",
+        "time": "Ora",
+        "past": "Quel momento è già passato."
       },
       "stream": {
         "empty": "Niente qui al momento.",

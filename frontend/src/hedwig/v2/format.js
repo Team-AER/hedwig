@@ -106,6 +106,14 @@ export function fullTime(value, now = new Date()) {
   return d.toLocaleString(locale(), { weekday: 'short', day: 'numeric', month: 'short', ...year, hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
+/** When a snooze ends: "Thu 08:00" within the coming week, otherwise fullTime's "Wed 5 Nov, 08:00". */
+export function untilTime(value, now = new Date()) {
+  const d = toDate(value);
+  if (!d) return '';
+  if (dayDiff(d, now) < 7) return d.toLocaleString(locale(), { weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
+  return fullTime(d, now);
+}
+
 export function senderName(from) {
   if (!from) return '';
   if (typeof from === 'string') return from;
