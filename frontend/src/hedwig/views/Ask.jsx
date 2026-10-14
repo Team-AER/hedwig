@@ -20,6 +20,8 @@ import { TierNote, LighterLabel } from '../v2/TierNote.jsx';
 import { CoverageNote } from '../v2/CoverageNote.jsx';
 import AskProgress from '../v2/AskProgress.jsx';
 import { isLighter } from '../v2/tiers.js';
+import { useShell } from '../shell/state.js';
+import * as M from '../shell/model.js';
 
 // Answers in 14px body text; the [n] markers are 10px accent superscripts (views/ui.jsx CITE_CSS).
 const ASK_CSS = `.hw-ask2 .hw-md{font-size:14px;line-height:1.55}
@@ -40,9 +42,12 @@ function markLabel(mark) {
   return null;
 }
 
-export default function Ask({ props = {} }) {
+export default function Ask({ paneId = null, props = {} }) {
   const inputId = useId();
   const phone = Boolean(usePhone()?.phone);
+  // Docked in the layout, a pane has no header outside Arrange, so Ask brings its own close.
+  // The overlay drawer and phone screens already have one.
+  const docked = useShell((s) => Boolean(paneId) && M.listPanes(s.tree).some((p) => p.node.key === paneId));
   const askPrompt = useHedwig((s) => s.askPrompt);
   const setAskPrompt = useHedwig((s) => s.setAskPrompt);
   const openView = useHedwig((s) => s.openView);
@@ -270,6 +275,7 @@ export default function Ask({ props = {} }) {
         <span style={{ display: 'inline-flex', gap: 2, alignSelf: 'center' }}>
           <IconButton icon="history" label={tv('hedwig.v2.ask.history', 'Earlier questions')} active={showHistory} size={phone ? 44 : 28} onClick={() => setShowHistory((v) => !v)} style={{ color: showHistory ? V.accentInk : V.muted }} />
           {turns.length > 0 && <IconButton icon="compose" label={tv('hedwig.v2.ask.newQuestion', 'New question')} size={phone ? 44 : 28} onClick={startOver} style={{ color: V.muted }} />}
+          {docked && !phone && <IconButton icon="close" label={tv('hedwig.v2.ask.close', 'Close Ask')} size={28} onClick={() => useShell.getState().closePane(paneId)} style={{ color: V.muted }} />}
         </span>
       )}
     />

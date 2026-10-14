@@ -924,6 +924,22 @@ describe('admin: Models and routing', () => {
     assert.match(ask.textContent, /43%/, 'lighter-model share: 3 of 7');
   });
 
+  test('call budgets sit beside token budgets, only on features that have one', async () => {
+    await render(h(RoutingSettings, {}));
+    await settle(80);
+    assert.equal(byLabel('Daily model call budget per person for work'), null, 'work is limited by tokens only');
+    const calls = byLabel('Daily model call budget per person for summary');
+    assert.equal(calls.value, '300');
+    mock.mockRequests({ clear: true });
+    await React.act(async () => {
+      Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value').set.call(calls, '3000');
+      calls.dispatchEvent(new dom.window.FocusEvent('focusout', { bubbles: true }));
+    });
+    await settle(40);
+    assert.ok(requests().includes('PUT /admin/routing'));
+    assert.equal((await mock.mockRequest('GET', '/admin/routing')).features.find((f) => f.feature === 'summary').calls, 3000);
+  });
+
   test('without /admin/usage the last 24 hours from /admin/health stand in', async () => {
     mock.mockNoUsage();
     await render(h(RoutingSettings, {}));
@@ -1011,6 +1027,24 @@ describe('Brief: where the prose came from, undo any of it, coverage', () => {
     await render(h(Ledger, { props: { kind: 'purchases' } }));
     await settle(60);
     assert.match(document.querySelector('[data-coverage]').textContent, /62% of your mail so far; these figures come from that part/);
+  });
+});
+
+describe('Ask in the layout', () => {
+  test('docked, Ask has its own close; in the overlay drawer it leaves closing to the drawer', async () => {
+    const { buildTemplate } = await import('../shell/templates.js');
+    const M = await import('../shell/model.js');
+    const tree = buildTemplate('research');
+    const [key] = M.panesHosting(tree, 'hedwig.ask');
+    useShell.setState({ tree, name: 'Research', overlay: null });
+    await render(h(Ask, { paneId: key, props: {} }));
+    await click(byLabel('Close Ask'));
+    assert.deepEqual(M.panesHosting(useShell.getState().tree, 'hedwig.ask'), [], 'the pane is gone from the layout');
+    await cleanup();
+    useShell.setState({ overlay: { key: 'drawer-ask', id: 'hedwig.ask', props: {} } });
+    await render(h(Ask, { paneId: 'drawer-ask', props: {} }));
+    assert.equal(byLabel('Close Ask'), null);
+    useShell.setState({ overlay: null });
   });
 });
 
