@@ -22,10 +22,29 @@ function escapeHtml(str) {
 }
 
 // Map SMTP/connection errors to user-friendly messages that don't expose server internals.
-function sanitizeSmtpError(err) {
+export function sanitizeSmtpError(err) {
   const msg = err.message || '';
   if (/ECONNREFUSED|ENOTFOUND|ETIMEDOUT|ECONNRESET|EHOSTUNREACH/i.test(msg)) {
     return 'Could not connect to the mail server. Check your SMTP settings.';
+  }
+  // Microsoft: the tenant turned SMTP AUTH off and the account has not allowed Graph sending yet,
+  // or Graph refused (services/microsoftGraph.js).
+  if (/GraphConsentRequired|5\.7\.139|SmtpClientAuthentication/i.test(msg)) {
+    return 'Your organisation does not let apps send over SMTP. Sign in to this account again (Settings → Accounts → Add account → Microsoft) and allow Hedwig to send mail.';
+  }
+  if (/AADSTS\d+|invalid_grant/i.test(msg)) {
+    return 'The Microsoft sign-in for this account has expired. Sign in to it again (Settings → Accounts → Add account → Microsoft).';
+  }
+  if (/Microsoft Graph 40[13]\b|ErrorAccessDenied|ErrorSendAsDenied/i.test(msg)) {
+    return /ErrorSendAsDenied/i.test(msg)
+      ? 'Microsoft does not let this account send as that address.'
+      : 'Microsoft refused to send from this account. Sign in to it again and allow Hedwig to send mail.';
+  }
+  if (/Microsoft Graph 413|ErrorMessageSizeExceeded/i.test(msg)) {
+    return 'The message is larger than Microsoft accepts.';
+  }
+  if (/Microsoft Graph (429|503)/i.test(msg)) {
+    return 'The mail server is rate limiting sends. Please try again shortly.';
   }
   if (/535|534|530|invalid.?login|authentication.?fail|bad.*credentials|username.*password|password.*username/i.test(msg)) {
     return 'Authentication failed. Check your email account credentials.';

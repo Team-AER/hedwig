@@ -16,7 +16,12 @@ export const MICROSOFT_LOGIN_BASE = 'https://login.microsoftonline.com';
 // IMAP.AccessAsUser.All / SMTP.Send are the Exchange Online (outlook.office.com) delegated
 // permissions. offline_access yields a refresh token; openid/email/profile give the
 // id_token the callback reads the mailbox address and display name from.
-export const MICROSOFT_SCOPE = 'https://outlook.office.com/IMAP.AccessAsUser.All https://outlook.office.com/SMTP.Send offline_access openid email profile';
+export const MICROSOFT_MAIL_SCOPE = 'https://outlook.office.com/IMAP.AccessAsUser.All https://outlook.office.com/SMTP.Send offline_access openid email profile';
+// Graph's Mail.Send, for tenants that turned SMTP AUTH off (services/microsoftGraph.js). Asked for
+// at sign-in so it is consented together; a token request may name one resource only, so the code
+// is redeemed for the Exchange scopes and the Graph token comes from the refresh token later.
+export const MICROSOFT_GRAPH_SEND_SCOPE = 'https://graph.microsoft.com/Mail.Send offline_access';
+export const MICROSOFT_SCOPE = `${MICROSOFT_MAIL_SCOPE} https://graph.microsoft.com/Mail.Send`;
 // A refresh may only ask for resource scopes of one resource; the OIDC scopes are dropped.
 export const MICROSOFT_REFRESH_SCOPE = 'https://outlook.office.com/IMAP.AccessAsUser.All https://outlook.office.com/SMTP.Send offline_access';
 
@@ -81,6 +86,7 @@ export const OAUTH_PROVIDERS = Object.freeze({
     tokenUrl: (cfg) => microsoftTenantUrl(cfg, 'token'),
     deviceCodeUrl: (cfg) => microsoftTenantUrl(cfg, 'devicecode'),
     scope: MICROSOFT_SCOPE,
+    exchangeScope: MICROSOFT_MAIL_SCOPE,
     refreshScope: MICROSOFT_REFRESH_SCOPE,
     authorizeParams: Object.freeze({ response_mode: 'query', prompt: 'select_account' }),
     // Exchange Online / Outlook.com endpoints; XOAUTH2 works on both.
@@ -164,6 +170,7 @@ export function buildCodeExchangeBody(id, { code, config } = {}) {
     redirect_uri: cfg.redirectUri,
     grant_type: 'authorization_code',
   });
+  if (p.exchangeScope) params.set('scope', p.exchangeScope);
   if (cfg.clientSecret) params.set('client_secret', cfg.clientSecret);
   return params;
 }

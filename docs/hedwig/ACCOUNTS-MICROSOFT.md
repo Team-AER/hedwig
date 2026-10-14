@@ -71,7 +71,9 @@ forms.
      `IMAP.AccessAsUser.All` and `SMTP.Send`. (The portal also lists these two under
      Microsoft Graph; either entry works, because Hedwig asks for the
      `https://outlook.office.com/...` scopes.)
-   - **Microsoft Graph → Delegated permissions**: `offline_access`, `openid`, `email`, `profile`.
+   - **Microsoft Graph → Delegated permissions**: `offline_access`, `openid`, `email`, `profile`,
+     and `Mail.Send` (Hedwig sends through Graph, which works where the tenant turned SMTP AUTH
+     off; see below).
    - For a work tenant, **Grant admin consent for <tenant>**, or each user consents on first
      sign-in if the tenant allows user consent.
 4. Optional, for the device-code button in Settings → Integrations: **Authentication → Advanced
@@ -125,7 +127,16 @@ Manage email apps (IMAP, Authenticated SMTP).
 
 ### How the connection works
 
-- Hedwig asks for `offline_access openid email profile https://outlook.office.com/IMAP.AccessAsUser.All https://outlook.office.com/SMTP.Send`.
+- Hedwig asks for `offline_access openid email profile https://outlook.office.com/IMAP.AccessAsUser.All https://outlook.office.com/SMTP.Send https://graph.microsoft.com/Mail.Send`,
+  and redeems the code for the Exchange scopes (a token names one resource).
+- Sending goes through Graph's `sendMail` (`backend/src/services/microsoftGraph.js`): the refresh
+  token is redeemed for a `Mail.Send` token and the message goes as MIME, so Message-ID and the
+  reply headers are kept; a message over Graph's 4 MB request limit goes as a draft plus
+  attachment uploads, then send. Exchange files the copy in Sent Items. Tenants often turn SMTP
+  AUTH off (`535 5.7.139 ... SmtpClientAuthentication is disabled for the Tenant`), and new
+  tenants start with it off; Graph is not affected. An account connected before Hedwig asked for
+  `Mail.Send` keeps sending over SMTP until it is signed in again (Add account → Microsoft with the
+  same address), which asks for the new permission.
 - It stores the access and refresh tokens encrypted on the account (`oauth_provider = 'microsoft'`)
   and refreshes the access token when it has under five minutes left, before every IMAP connect
   and SMTP send. Refreshes of one account are serialised because Microsoft rotates the refresh

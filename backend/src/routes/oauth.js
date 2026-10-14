@@ -6,7 +6,7 @@ import { imapManager } from '../index.js';
 import { encrypt, decrypt } from '../services/encryption.js';
 import { redactEmail } from '../utils/redact.js';
 import {
-  OAUTH_PROVIDERS, MICROSOFT_SCOPE, MICROSOFT_LOGIN_BASE,
+  OAUTH_PROVIDERS, MICROSOFT_MAIL_SCOPE, MICROSOFT_LOGIN_BASE,
   getMicrosoftConfig, getGoogleConfig,
   buildAuthorizeUrl, buildCodeExchangeBody, buildRefreshBody, microsoftLoginName,
 } from '../services/oauthProviders.js';
@@ -257,7 +257,9 @@ router.post('/microsoft/device', async (req, res) => {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
         client_id: clientId,
-        scope: MICROSOFT_SCOPE,
+        // Device-code (public) clients keep the Exchange scopes only: their token poll names no
+        // scope, and these accounts send over SMTP (services/smtpTransport.js).
+        scope: MICROSOFT_MAIL_SCOPE,
       }),
       signal: AbortSignal.timeout(10000),
     });

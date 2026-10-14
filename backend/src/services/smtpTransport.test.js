@@ -5,6 +5,7 @@ vi.mock('../routes/oauth.js', () => ({ refreshMicrosoftToken: vi.fn(), refreshGo
 vi.mock('./encryption.js', () => ({ decrypt: vi.fn(v => v) }));
 vi.mock('./connectionPolicy.js', () => ({ getConnectionPolicy: vi.fn() }));
 vi.mock('./hostValidation.js', () => ({ resolveForConnection: vi.fn() }));
+vi.mock('./microsoftGraph.js', () => ({ graphFirstTransport: vi.fn((account, smtp) => ({ graphFirst: true, smtp })) }));
 
 const nodemailer = (await import('nodemailer')).default;
 const { refreshMicrosoftToken, refreshGoogleToken } = await import('../routes/oauth.js');
@@ -173,6 +174,17 @@ describe('createAccountSmtpTransport', () => {
         auth: { user: 'relay-user', pass: 'imap-password' },
       })
     );
+  });
+
+  it('sends a Microsoft sign-in account through Graph first (web flow only)', async () => {
+    const ms = {
+      id: 'account-ms', oauth_provider: 'microsoft', oauth_access_token: 'token', oauth_token_expiry: new Date(Date.now() + 3600_000),
+      auth_user: 'sender@example.com', email_address: 'sender@example.com', smtp_host: 'smtp.office365.com', smtp_port: 587, smtp_tls: 'STARTTLS',
+    };
+    expect((await createAccountSmtpTransport(ms)).transport.graphFirst).toBe(true);
+    // device-code (public) clients consented to the Exchange scopes only
+    expect((await createAccountSmtpTransport({ ...ms, oauth_public_client: true })).transport.graphFirst).toBeUndefined();
+    expect((await createAccountSmtpTransport({ ...ms, oauth_provider: 'google' })).transport.graphFirst).toBeUndefined();
   });
 
   it('refreshes an expired Microsoft token before creating the transport', async () => {

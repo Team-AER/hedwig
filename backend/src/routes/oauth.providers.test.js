@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
-  OAUTH_PROVIDERS, MICROSOFT_SCOPE, getMicrosoftConfig, getGoogleConfig, isOAuthConfigured,
+  OAUTH_PROVIDERS, MICROSOFT_SCOPE, MICROSOFT_MAIL_SCOPE, getMicrosoftConfig, getGoogleConfig, isOAuthConfigured,
   buildAuthorizeUrl, buildCodeExchangeBody, buildRefreshBody, microsoftLoginName, oauthProvider,
   normalizeLoginHint,
 } from '../services/oauthProviders.js';
@@ -201,8 +201,16 @@ describe('token endpoint and request bodies per provider', () => {
     expect(code.get('redirect_uri')).toBe('https://h/cb');
   });
 
-  it('device-code and authorize flows request the same Microsoft scope set', () => {
+  it('asks Microsoft for Graph Mail.Send at sign-in but redeems the code for the Exchange scopes only', () => {
     expect(OAUTH_PROVIDERS.microsoft.scope).toBe(MICROSOFT_SCOPE);
+    expect(MICROSOFT_SCOPE.split(' ')).toEqual([...MICROSOFT_MAIL_SCOPE.split(' '), 'https://graph.microsoft.com/Mail.Send']);
+    const url = new URL(buildAuthorizeUrl('microsoft', { state: 's', config: { clientId: 'ms-id', redirectUri: 'https://h/cb', tenantId: 'common' } }));
+    expect(url.searchParams.get('scope')).toContain('https://graph.microsoft.com/Mail.Send');
+    // A token request may name one resource: Exchange's, plus the OIDC scopes for the id_token.
+    const code = buildCodeExchangeBody('microsoft', { code: 'c', config: { clientId: 'ms-id', redirectUri: 'https://h/cb' } });
+    expect(code.get('scope')).toBe(MICROSOFT_MAIL_SCOPE);
+    expect(code.get('scope')).not.toMatch(/graph\.microsoft\.com/);
+    expect(buildCodeExchangeBody('google', { code: 'c', config: { clientId: 'g', redirectUri: 'https://h/cb' } }).has('scope')).toBe(false);
   });
 });
 
