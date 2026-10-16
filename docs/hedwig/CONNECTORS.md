@@ -29,7 +29,7 @@ Read (always):
 | Tool | |
 | --- | --- |
 | `search`, `fetch` | Find messages and read one in full (the shapes ChatGPT's deep research uses) |
-| `ask` | Hedwig's Ask: searches several ways and answers with cited sources |
+| `ask` | Hedwig's Ask: searches several ways and answers with cited sources, about all mail or one conversation, optionally with the web (below) |
 | `list_mail` | Needs you, People, Reading, Records, the Screener or Spam, with one-line summaries |
 | `list_categories`, `explain_category`, `sorting_log`, `list_screener` | How Hedwig sorts, why a message landed where it did, today's changes |
 | `summarize_thread`, `get_thread` | The story of a conversation, its timeline, deadline and quick replies |
@@ -47,6 +47,27 @@ Organise (only when allowed on /connect):
 | `create_commitment`, `complete_commitment`, `update_commitment` | Commitments Hedwig tracks |
 
 Nothing sends or deletes mail. Plugin tools appear too, for plugins you enabled and granted.
+
+### Ask
+
+`ask` takes the same options as the Ask pane:
+
+| Argument | |
+| --- | --- |
+| `question` | The question, in plain words (required) |
+| `follow_up_of` | The `answer_id` of an earlier answer. A follow-up stays on that answer's conversation |
+| `thread_id` | Ask about one conversation: a `thread_id`, or the id of any message in it. The conversation is read whole first, and the rest of the mail is searched for what it leaves out |
+| `use_web` | `true` searches the web and reads a few pages for this question, `false` answers from the mail alone. Left out, it follows the "Let Ask search the web" setting |
+| `dig_deeper` | More rounds of looking on the web, following links on the pages read (Dig deeper). Turns the web on unless `use_web` is `false` |
+
+The answer cites `[n]`. `sources` lists the messages (`n`, `id`, `subject`, `from`, `date`, `url`),
+and `web_sources` the pages, numbered after the messages (`n`, `url`, `title`, `host`,
+`snippet_only`: true when only the search result's snippet was read, not the page). `thread_id` in
+the answer names the conversation it was about. The web needs a search service (`ask.web.searchUrl`);
+without one, `use_web: true` answers from the mail and says so in `note`. Web research only reads: it
+never opens sign-in, confirm, unsubscribe or payment links, and its searches never carry addresses,
+names or long numbers. Because it can read the web, `ask` is marked open-world (`openWorldHint`) and
+stays read-only.
 
 ## How it works
 
