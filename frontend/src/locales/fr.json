@@ -1906,7 +1906,12 @@
         "done": "En pause jusqu’à {{when}}.",
         "later": "Plus tard aujourd’hui",
         "tomorrow": "Demain matin",
-        "week": "La semaine prochaine"
+        "week": "La semaine prochaine",
+        "custom": "Choisir la date et l’heure…",
+        "pickTitle": "Mettre en pause jusqu’à",
+        "date": "Date",
+        "time": "Heure",
+        "past": "Ce moment est déjà passé."
       },
       "stream": {
         "empty": "Rien ici pour le moment.",

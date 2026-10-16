@@ -1906,7 +1906,12 @@
         "done": "Snoozed until {{when}}.",
         "later": "Later today",
         "tomorrow": "Tomorrow morning",
-        "week": "Next week"
+        "week": "Next week",
+        "custom": "Pick date & time…",
+        "pickTitle": "Snooze until",
+        "date": "Date",
+        "time": "Time",
+        "past": "That time has already passed."
       },
       "stream": {
         "empty": "Nothing here right now.",

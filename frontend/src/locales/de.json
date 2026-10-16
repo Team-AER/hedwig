@@ -1906,7 +1906,12 @@
         "done": "Zurückgestellt bis {{when}}.",
         "later": "Später heute",
         "tomorrow": "Morgen früh",
-        "week": "Nächste Woche"
+        "week": "Nächste Woche",
+        "custom": "Datum und Uhrzeit wählen…",
+        "pickTitle": "Zurückstellen bis",
+        "date": "Datum",
+        "time": "Uhrzeit",
+        "past": "Dieser Zeitpunkt ist schon vorbei."
       },
       "stream": {
         "empty": "Gerade nichts hier.",

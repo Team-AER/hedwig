@@ -178,6 +178,12 @@ describe('format helpers', () => {
   test('slip dates read like the mockup ("Fri 25")', () => {
     assert.equal(format.slipDate('2026-09-25T17:00:00'), 'Fri 25');
   });
+
+  test('snooze end times: weekday and time this week, the date after', () => {
+    assert.equal(format.untilTime(new Date('2026-09-25T08:00:00'), now), 'Fri 08:00');
+    assert.match(format.untilTime(new Date('2026-10-15T14:30:00'), now), /Oct.*15.*14:30/);
+    assert.equal(format.untilTime('not a date', now), '');
+  });
 });
 
 describe('theme tokens', () => {

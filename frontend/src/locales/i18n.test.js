@@ -168,6 +168,8 @@ const SAME_VALUE_ALLOWED = {
   // Hedwig v2 cards, ledgers, Ask and Waiting on: words spelled the same in these languages.
   // "Datum" (cs, de), "Date" (en, fr), "Data" (it, pl, pt)
   'hedwig.v2.card.field.date':        [['cs', 'de'], ['en', 'fr'], ['it', 'pl', 'ptBR']],
+  'hedwig.v2.snooze.date':            [['cs', 'de'], ['en', 'fr'], ['it', 'pl', 'ptBR']],
+  'hedwig.v2.snooze.time':            [['es', 'ptBR']],
   // "Status" (de, en)
   'hedwig.v2.card.field.status':      [['de', 'en']],
   // "Code" (de, en, fr), "Código" (es, pt)

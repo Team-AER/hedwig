@@ -1906,7 +1906,12 @@
         "done": "已延后到 {{when}}。",
         "later": "今天晚些时候",
         "tomorrow": "明天早上",
-        "week": "下周"
+        "week": "下周",
+        "custom": "选择日期和时间…",
+        "pickTitle": "延后到",
+        "date": "日期",
+        "time": "时间",
+        "past": "这个时间已经过去了。"
       },
       "stream": {
         "empty": "这里暂时没有内容。",

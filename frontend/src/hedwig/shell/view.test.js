@@ -69,6 +69,8 @@ const { useShell } = await import('./state.js');
 const { buildTemplate } = await import('./templates.js');
 const { layoutMenuItems, ViewMenuButton } = await import('./TopBar.jsx');
 const { MenuButton, tidyItems } = await import('./Menu.jsx');
+const { snoozeMenuItems } = await import('../v2/snoozeMenu.jsx');
+const { snoozeAt, customSnoozeStart, dateValue } = await import('../v2/mail.js');
 const { ViewHost } = await import('./ViewHost.jsx');
 const M = await import('./model.js');
 
@@ -100,6 +102,11 @@ async function cleanup() {
   document.body.innerHTML = '';
 }
 const all = (sel, scope = document) => [...scope.querySelectorAll(sel)];
+async function typeInto(input, value) {
+  const set = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value').set;
+  await React.act(async () => { set.call(input, value); input.dispatchEvent(new dom.window.Event('input', { bubbles: true })); });
+  await settle();
+}
 
 function onStreams() {
   useShell.setState({ device: 'desktop', tree: buildTemplate('streams'), name: 'Streams', templateId: 'streams', rows: [], overlay: null, transient: {} });
@@ -239,6 +246,74 @@ describe('the View menu', () => {
     assert.ok([...menu.querySelectorAll('button')].some((b) => b.textContent === 'Done'));
     assert.equal(menu.querySelector('[data-menu-item="classic"]').style.minHeight, '44px');
     await cleanup();
+  });
+});
+
+describe('menu panels: snooze at a picked date and time', () => {
+  const openSnooze = async (onPick = () => {}) => {
+    await render(h(MenuButton, { label: 'Snooze', items: () => snoozeMenuItems(onPick) }, 'open'));
+    await click(document.querySelector('[aria-haspopup="menu"]'));
+  };
+
+  test('a panel item swaps the rows for its panel; Back returns to the rows, Escape closes', async () => {
+    await openSnooze();
+    const custom = document.querySelector('[data-menu-item="snooze-custom"]');
+    assert.equal(custom.getAttribute('aria-haspopup'), 'dialog');
+    await click(custom);
+    const dialog = document.querySelector('[data-popover]');
+    assert.equal(dialog.getAttribute('role'), 'dialog');
+    assert.equal(dialog.getAttribute('aria-label'), 'Snooze until');
+    assert.equal(all('[data-menu-item]', dialog).length, 0);
+    assert.equal(document.activeElement?.getAttribute('aria-label'), 'Date');
+    await click(dialog.querySelector('button[aria-label="Back"]'));
+    assert.equal(document.querySelector('[data-popover]').getAttribute('role'), 'menu');
+    assert.equal(document.activeElement?.dataset.menuItem, 'snooze-custom');
+    await click(document.querySelector('[data-menu-item="snooze-custom"]'));
+    await React.act(async () => { document.activeElement.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+    await settle();
+    assert.equal(Boolean(document.querySelector('[data-popover]')), false);
+    await cleanup();
+  });
+
+  test('snoozes at the chosen moment, and refuses one already past', async () => {
+    const picked = [];
+    await openSnooze((until) => picked.push(until));
+    await click(document.querySelector('[data-menu-item="snooze-custom"]'));
+    const [date, time] = all('[data-snooze-picker] input');
+    assert.equal(date.value, customSnoozeStart().date);
+    assert.equal(time.value, '08:00');
+    const submit = document.querySelector('[data-snooze-picker] button[type="submit"]');
+    const yesterday = new Date(); yesterday.setDate(yesterday.getDate() - 1);
+    await typeInto(date, dateValue(yesterday));
+    assert.equal(submit.disabled, true);
+    assert.match(document.querySelector('[data-snooze-when]').textContent, /already passed/);
+    await click(submit);
+    assert.equal(picked.length, 0);
+    const later = new Date(); later.setDate(later.getDate() + 20);
+    await typeInto(date, dateValue(later));
+    await typeInto(time, '14:30');
+    assert.equal(submit.disabled, false);
+    await click(submit);
+    assert.equal(picked.length, 1);
+    assert.equal(picked[0].getTime(), new Date(later.getFullYear(), later.getMonth(), later.getDate(), 14, 30).getTime());
+    assert.equal(Boolean(document.querySelector('[data-popover]')), false, 'the menu closes');
+    await cleanup();
+  });
+
+  test('inside a shared menu the items say Snooze and keep clear of its ids', () => {
+    const items = snoozeMenuItems(() => {}, { prefix: 'Snooze' });
+    assert.deepEqual(items.map((i) => i.id), ['snooze-later', 'snooze-tomorrow', 'snooze-week', 'snooze-custom']);
+    assert.ok(items.every((i) => i.label.startsWith('Snooze: ')));
+    // The reader's More menu has Reply Later as 'later': Later today must survive tidyItems.
+    assert.equal(tidyItems([{ id: 'later', label: 'Reply Later' }, ...items]).length, 5);
+  });
+
+  test('snoozeAt reads the inputs as a local moment, null until both are whole', () => {
+    assert.equal(snoozeAt('2026-11-05', '14:30').getTime(), new Date(2026, 10, 5, 14, 30).getTime());
+    assert.equal(snoozeAt('2026-11-05', ''), null);
+    assert.equal(snoozeAt('', '08:00'), null);
+    assert.equal(snoozeAt('2026-02-30', '08:00'), null);
+    assert.deepEqual(customSnoozeStart(new Date(2026, 11, 31, 22, 0)), { date: '2027-01-01', time: '08:00' });
   });
 });
 
