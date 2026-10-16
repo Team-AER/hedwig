@@ -39,9 +39,9 @@ export default function SettingsFrame({ active, title, sub, right, children, lab
     fontWeight: small ? (on ? 600 : 400) : 500,
   });
   return (
-    <section aria-label={ariaLabel || title} style={{
+    <section className="hw-settings" aria-label={ariaLabel || title} style={{
       // On a phone the floating tab bar covers the bottom: the last setting scrolls clear of it.
-      height: '100%', minHeight: 0, overflowY: 'auto', boxSizing: 'border-box', padding: phone ? '16px 16px calc(24px + var(--hw-tabbar-space, 0px))' : '20px 28px calc(28px + var(--hw-tabbar-space, 0px))', display: 'flex', flexDirection: 'column', gap: 18,
+      height: '100%', minHeight: 0, minWidth: 0, overflowY: 'auto', boxSizing: 'border-box', padding: phone ? '16px 16px calc(24px + var(--hw-tabbar-space, 0px))' : '20px 28px calc(28px + var(--hw-tabbar-space, 0px))', display: 'flex', flexDirection: 'column', gap: 18,
       background: 'transparent', color: T.ink, fontFamily: T.body, fontSize: 13, lineHeight: 1.45,
     }}>
       <nav aria-label={tv('admin.title', 'Settings')} data-settings-nav="" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>

@@ -68,7 +68,7 @@ function ModelTests() {
   return (
     <Card style={{ gap: 10 }}>
       <SectionLabel>{tr('modelSettings.testTheGateway', 'Test the gateway')}</SectionLabel>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 10 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 220px), 1fr))', gap: 10 }}>
         {rows.map(([kind, label]) => {
           const r = results[kind];
           return (
@@ -147,8 +147,8 @@ function Health() {
         <StatTile label="Pipeline errors" value={formatCount(p.errors)} tone={p.errors ? 'red' : undefined} />
       </TileGrid>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 12 }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))', gap: 12 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
           <SectionLabel>{tr('modelSettings.jobQueue24H', 'Job queue · 24 h')}</SectionLabel>
           <Table label="Job queue" rows={jobs} rowKey={(r) => r.kind} empty="No jobs in the last week."
             columns={[
@@ -162,7 +162,7 @@ function Health() {
             <div key={j.kind} style={{ fontSize: 12, color: T.red, overflowWrap: 'anywhere' }}><span style={{ fontFamily: T.mono }}>{j.kind}</span>: {j.last_error}</div>
           ))}
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
           <SectionLabel>{tr('modelSettings.modelCalls24H', 'Model calls · 24 h')}</SectionLabel>
           <Table label="Model calls in the last 24 hours" rows={h.aiCalls24h || []} rowKey={(r) => r.feature} empty="No model calls in the last day."
             columns={[

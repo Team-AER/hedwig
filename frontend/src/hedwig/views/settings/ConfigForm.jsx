@@ -96,8 +96,8 @@ function FieldRow({ field: f, value, onChange, error, resettable, showEnv, datal
     input = <TextInput id={id} value={current ?? ''} list={datalist} onChange={(e) => onChange(e.target.value)} disabled={cleared} style={{ maxWidth: 420, fontFamily: datalist ? T.mono : undefined }} />;
   }
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 1fr) minmax(200px, 1.4fr)', gap: '4px 16px', alignItems: 'start', padding: '6px 0', borderTop: `1px solid ${T.line}` }}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 16px', alignItems: 'start', padding: '6px 0', borderTop: `1px solid ${T.line}`, overflowWrap: 'anywhere' }}>
+      <div style={{ display: 'flex', flex: '1 1 180px', flexDirection: 'column', gap: 2, minWidth: 0 }}>
         <label htmlFor={id} style={{ fontSize: 13, fontWeight: 500 }}>{f.label || f.key}</label>
         {f.help && <span style={{ fontSize: 12, color: T.muted }}>{f.help}</span>}
         <span style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', fontSize: 11, color: T.muted }}>
@@ -106,7 +106,7 @@ function FieldRow({ field: f, value, onChange, error, resettable, showEnv, datal
           {showEnv && f.env && <span style={{ fontFamily: T.mono }} title={tr('configForm.environmentVariable', 'Environment variable')}>{f.env}</span>}
         </span>
       </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+      <div style={{ display: 'flex', flex: '1.4 1 200px', flexDirection: 'column', gap: 4, minWidth: 0 }}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           {input}
           {canReset && <Button size="sm" variant="ghost" onClick={() => onChange(null)} title={tr('configForm.removeThisOverride', 'Remove this override')}>{tr('configForm.reset', 'Reset')}</Button>}
