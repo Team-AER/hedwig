@@ -115,7 +115,7 @@ export function Title({ children, sub, right, level = 1, style }) {
 
 export function SectionLabel({ children, right, style }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, ...style }}>
+    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, ...style }}>
       <div style={{ fontFamily: T.body, fontStyle: 'normal', fontSize: 11, fontWeight: 600, lineHeight: '14px', color: T.muted }}>{children}</div>
       {right && <><span style={{ flexGrow: 1 }} />{right}</>}
     </div>
@@ -384,7 +384,7 @@ export function StatTile({ label, value, sub, tone, children }) {
 }
 
 export function TileGrid({ children, min = 170 }) {
-  return <div style={{ display: 'grid', gridTemplateColumns: `repeat(auto-fill, minmax(${min}px, 1fr))`, gap: 12 }}>{children}</div>;
+  return <div style={{ display: 'grid', gridTemplateColumns: `repeat(auto-fill, minmax(min(100%, ${min}px), 1fr))`, gap: 12 }}>{children}</div>;
 }
 
 /** Single-series trend line (2px, round caps) with an end dot. */
@@ -512,29 +512,31 @@ export function Table({ columns, rows, rowKey = (r, i) => r.id ?? i, onRowClick,
     color: c.muted ? T.muted : undefined,
   });
   return (
-    <div role="table" aria-label={label} style={{ borderRadius: 10, background: T.surface, border: `1px solid ${T.border}`, overflow: 'hidden' }}>
-      <div role="row" style={{ display: 'grid', gridTemplateColumns: template, gap: 10, padding: '8px 14px', borderBottom: `1px solid ${T.border}` }}>
-        {columns.map((c) => (
-          <span role="columnheader" key={c.key} style={{ fontSize: 11, fontWeight: 600, color: T.muted, textAlign: c.align || 'left' }}>{c.label}</span>
-        ))}
+    <div role="table" aria-label={label} tabIndex={0} style={{ borderRadius: 10, background: T.surface, border: `1px solid ${T.border}`, overflowX: 'auto', minWidth: 0 }}>
+      <div role="rowgroup" style={{ minWidth: columns.length * 80 + 28 }}>
+        <div role="row" style={{ display: 'grid', gridTemplateColumns: template, gap: 10, padding: '8px 14px', borderBottom: `1px solid ${T.border}` }}>
+          {columns.map((c) => (
+            <span role="columnheader" key={c.key} style={{ fontSize: 11, fontWeight: 600, color: T.muted, textAlign: c.align || 'left' }}>{c.label}</span>
+          ))}
+        </div>
+        {!rows?.length && <div style={{ padding: '14px', fontSize: 13, color: T.muted }}>{empty}</div>}
+        {rows?.map((r, i) => {
+          const k = rowKey(r, i);
+          const selected = selectedKey != null && k === selectedKey;
+          return (
+            <div role="row" key={k} tabIndex={onRowClick ? 0 : undefined} aria-selected={onRowClick ? selected : undefined}
+              onClick={onRowClick ? () => onRowClick(r) : undefined}
+              onKeyDown={onRowClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onRowClick(r); } } : undefined}
+              style={{
+                display: 'grid', gridTemplateColumns: template, gap: 10, alignItems: 'center', padding: '9px 14px',
+                borderBottom: i === rows.length - 1 ? 'none' : `1px solid ${T.raised}`, cursor: onRowClick ? 'pointer' : undefined,
+                background: selected ? T.raised : undefined, outlineOffset: -2,
+              }}>
+              {columns.map((c) => <span role="cell" key={c.key} style={cell(c)}>{c.render ? c.render(r) : r[c.key]}</span>)}
+            </div>
+          );
+        })}
       </div>
-      {!rows?.length && <div style={{ padding: '14px', fontSize: 13, color: T.muted }}>{empty}</div>}
-      {rows?.map((r, i) => {
-        const k = rowKey(r, i);
-        const selected = selectedKey != null && k === selectedKey;
-        return (
-          <div role="row" key={k} tabIndex={onRowClick ? 0 : undefined} aria-selected={onRowClick ? selected : undefined}
-            onClick={onRowClick ? () => onRowClick(r) : undefined}
-            onKeyDown={onRowClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onRowClick(r); } } : undefined}
-            style={{
-              display: 'grid', gridTemplateColumns: template, gap: 10, alignItems: 'center', padding: '9px 14px',
-              borderBottom: i === rows.length - 1 ? 'none' : `1px solid ${T.raised}`, cursor: onRowClick ? 'pointer' : undefined,
-              background: selected ? T.raised : undefined, outlineOffset: -2,
-            }}>
-            {columns.map((c) => <span role="cell" key={c.key} style={cell(c)}>{c.render ? c.render(r) : r[c.key]}</span>)}
-          </div>
-        );
-      })}
     </div>
   );
 }

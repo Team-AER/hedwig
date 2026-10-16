@@ -351,7 +351,9 @@ export default function Brief() {
   if (phone) {
     return (
       <ViewBody phone label={title} padded={false}>
-        <ViewHead phone title={title} sub={briefDateLine(dayOf, compiledAt)} />
+        <ViewHead phone title={title}>
+          <span style={{ fontSize: 12, color: V.muted }}>{briefDateLine(dayOf, compiledAt)}</span>
+        </ViewHead>
         <div style={{ padding: '12px 16px 0', display: 'flex', flexDirection: 'column', gap: 20 }}>
           {state}
           {res.data && <>{headline}<TierNote />{askField}{left}{right}{footer}</>}

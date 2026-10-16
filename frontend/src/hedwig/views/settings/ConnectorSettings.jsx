@@ -87,7 +87,7 @@ export default function ConnectorSettings() {
       <section style={{ display: 'flex', flexDirection: 'column', gap: 10 }} aria-labelledby="connectors-add">
         <SectionLabel><span id="connectors-add">{tv('hedwig.connectors.addTitle', 'Add Hedwig to an app')}</span></SectionLabel>
         <CopyField value={url} />
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 8 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap: 8 }}>
           <Step app={APPS.claude}>{tv('hedwig.connectors.stepsClaude', 'Settings → Connectors → Add custom connector. Paste the URL, then choose Connect and allow it here.')}</Step>
           <Step app={APPS.chatgpt}>{tv('hedwig.connectors.stepsChatgpt', 'Settings → Apps & Connectors → Advanced settings: turn on Developer mode. Then Create, paste the URL, choose OAuth and allow it here.')}</Step>
           <Step app={APPS.claudeCode}>
