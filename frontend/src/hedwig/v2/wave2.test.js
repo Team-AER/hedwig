@@ -685,6 +685,77 @@ describe('Ask', () => {
     assert.doesNotMatch(text(), /couldn't find anything relevant/, 'our line, not the canned sentence');
     assert.equal(byText('button', 'Wrong answer'), undefined);
   });
+
+  test('thread, web and dig events become steps; a saved answer keeps its web sources', () => {
+    let s = askStarted('What is Pizza Bot?');
+    s = reduceAsk2(s, { type: 'thread', status: 'running' });
+    s = reduceAsk2(s, { type: 'thread', status: 'done', messages: 2, subject: 'Round-Up' });
+    s = reduceAsk2(s, { type: 'plan', status: 'done', text: 'pizza bot', web: { on: true, allowed: true, available: true } });
+    s = reduceAsk2(s, { type: 'web', query: 'pizza bot', round: 0, status: 'running' });
+    s = reduceAsk2(s, { type: 'web', query: 'pizza bot', round: 0, status: 'done', found: 6 });
+    s = reduceAsk2(s, { type: 'links', opened: 1, skipped: [{ host: 'x', reason: 'unsubscribe' }] });
+    s = reduceAsk2(s, { type: 'read', round: 0, status: 'running', count: 2 });
+    s = reduceAsk2(s, { type: 'read', round: 0, status: 'done', pages: [{ host: 'a.example', ok: true }, { host: 'b.example', ok: false }] });
+    s = reduceAsk2(s, { type: 'dig', round: 1, status: 'done', enough: true });
+    s = reduceAsk2(s, { type: 'sources', sources: [], web: [{ n: 1, url: 'https://a.example/p', title: 'A', host: 'a.example' }, { n: 2, url: 'javascript:alert(1)', host: 'evil' }], askLogId: 'a-1' });
+    assert.deepEqual(s.steps.map((x) => `${x.kind}:${x.status}`), ['thread:done', 'plan:done', 'web:done', 'links:done', 'webread:done', 'dig:done']);
+    assert.equal(s.steps.find((x) => x.kind === 'webread').count, 1);
+    assert.deepEqual(s.web.map((w) => w.url), ['https://a.example/p'], 'only http(s) pages can be cited');
+    assert.deepEqual(s.webInfo, { on: true, allowed: true, available: true });
+    const saved = fromSaved({ id: 'a-1', question: 'Q', status: 'done', answer: 'A [1]', sources: [], web: [{ n: 1, url: 'https://a.example/p', title: 'A', host: 'a.example' }],
+      plan: { thread: { messages: 2 }, research: { searches: [{ text: 'pizza bot', found: 6 }], read: 1 } } });
+    assert.equal(saved.web.length, 1);
+    assert.deepEqual(saved.steps.map((x) => x.kind), ['thread', 'web', 'webread', 'write']);
+  });
+
+  test('model text cannot load anything, and only cited pages stay links', async () => {
+    const { markdownHtml } = await import('../views/ui.jsx');
+    const html = markdownHtml('See ![x](https://evil.example/p.png?q=secret) and [this](https://evil.example/x) and [that](https://a.example/p) [1]. <button data-cite="9">9</button>', { links: ['https://a.example/p'] });
+    assert.doesNotMatch(html, /<img|evil\.example\/p\.png/);
+    assert.doesNotMatch(html, /href="https:\/\/evil\.example\/x"/);
+    assert.match(html, /this/);
+    assert.match(html, /href="https:\/\/a\.example\/p"/);
+    assert.equal((html.match(/data-cite=/g) || []).length, 1, 'only the real [1] becomes a citation button');
+    // Without a list (insights, the agent), links stay links; images never load anywhere.
+    assert.match(markdownHtml('[a](https://a.example/)'), /href="https:\/\/a\.example\/"/);
+    assert.doesNotMatch(markdownHtml('![x](https://evil.example/i.png)'), /<img/);
+  });
+
+  test('a question for all mail leaves the thread the pane was on', () => {
+    useHedwig.getState().openView('hedwig.ask', { question: 'what is due?' });
+    assert.deepEqual(useHedwig.getState().viewRequest.props, { threadKey: null, subject: null, stream: null, question: 'what is due?' });
+    useHedwig.getState().openView('hedwig.ask', { threadKey: 't-1', subject: 'S' });
+    assert.equal(useHedwig.getState().viewRequest.props.threadKey, 't-1');
+  });
+
+  test('Ask about this: the thread chip and starters, web sources that open the page, and the globe', async () => {
+    await render(h(Ask, { props: { threadKey: 't-news', subject: 'AI, ML and Data Engineering Round-Up', stream: 'reading' } }));
+    await settle(60);
+    assert.match(document.querySelector('[data-ask-scope="thread"]').textContent, /About: AI, ML and Data Engineering Round-Up/);
+    assert.match(text(), /about this thread/);
+    const globe = document.querySelector('[data-web]');
+    assert.equal(globe.getAttribute('aria-pressed'), 'true', 'the web is on by default when a search service is set up');
+    await click(byText('button', 'Summarise the main articles'));
+    await settle(200);
+    const log = await mock.mockRequest('GET', '/context/ask/history');
+    assert.equal(log[0].threadKey, 't-news');
+    const pages = all('a[data-web-source]');
+    assert.deepEqual(pages.map((a) => a.getAttribute('href')), ['https://www.infoq.example/news/2026/10/pizza-bot/', 'https://github.example/pizza-bot/pizza-bot']);
+    assert.ok(pages.every((a) => a.getAttribute('rel') === 'noopener noreferrer' && a.getAttribute('target') === '_blank'));
+    assert.ok(byText('button', 'Dig deeper'), 'Dig deeper under the newest answer');
+    // Citations renumber across mail and web; a web citation opens the page.
+    await click(all('.hw-cite')[0]);
+    assert.equal(opened, 'https://www.infoq.example/news/2026/10/pizza-bot/');
+    // The globe off: the next question reads mail only.
+    await click(document.querySelector('[data-web]'));
+    assert.equal(document.querySelector('[data-web]').getAttribute('aria-pressed'), 'false');
+    await type(byLabel('Ask a follow-up'), 'and the news?');
+    await submit(byLabel('Ask a follow-up').closest('form'));
+    await settle(200);
+    const after = await mock.mockRequest('GET', '/context/ask/history');
+    assert.deepEqual(after[0].web, []);
+    assert.equal(after[0].threadKey, 't-news', 'a follow-up stays on the thread');
+  });
 });
 
 // ── Agent citations ─────────────────────────────────────────────────────────

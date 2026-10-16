@@ -9,6 +9,9 @@ import { askHistory } from './ask.js';
 import { ownsEntity, ownsTopic } from './cards.js';
 import { summarizeEntity } from './summaries.js';
 import { clampInt, isUuid } from './util.js';
+import { findThreadKey } from '../work/util.js';
+import { webSettings } from '../ask2/web.js';
+import { getConfig } from '../config.js';
 
 function sendError(res, err) {
   if (err instanceof LlmError) return res.status(err.status || 502).json({ error: err.message });
@@ -94,19 +97,35 @@ export function contextRoutes(r) {
     });
   }));
 
-  r.get('/context/ask/history', handle((req) => askHistory(req.session.userId, { limit: req.query.limit })));
+  // What the Ask pane offers this user: the web toggle shows only when a search service is set up.
+  r.get('/context/ask/options', handle(async (req) => {
+    const ws = webSettings(await getConfig(req.session.userId));
+    return { web: { allowed: ws.allowed, available: ws.available } };
+  }));
+
+  r.get('/context/ask/history', handle(async (req) => {
+    const userId = req.session.userId;
+    // A thread id from the reader may be a message id; history is kept by thread_key.
+    const asked = typeof req.query.threadKey === 'string' && req.query.threadKey.trim() && req.query.threadKey.length <= 1000 ? req.query.threadKey : null;
+    const threadKey = asked ? await findThreadKey(userId, asked) : null;
+    if (asked && !threadKey) return [];
+    return askHistory(userId, { limit: req.query.limit, threadKey });
+  }));
 
   r.post('/context/ask', async (req, res) => {
     const userId = req.session.userId;
-    const { question, entityId = null, topicId = null } = req.body || {};
+    const { question, entityId = null, topicId = null, threadKey = null, web = null, deep = false } = req.body || {};
     if (typeof question !== 'string' || !question.trim()) return res.status(400).json({ error: 'question is required' });
     if (question.length > 2000) return res.status(400).json({ error: 'question too long' });
     for (const [name, v] of [['entityId', entityId], ['topicId', topicId]]) {
       if (v != null && !isUuid(v)) return res.status(400).json({ error: `invalid ${name}` });
     }
+    if (threadKey != null && (typeof threadKey !== 'string' || !threadKey.trim() || threadKey.length > 1000)) return res.status(400).json({ error: 'invalid threadKey' });
+    if (web != null && typeof web !== 'boolean') return res.status(400).json({ error: 'web must be true or false' });
     try {
       if (entityId && !(await ownsEntity(userId, entityId))) return res.status(404).json({ error: 'Entity not found' });
       if (topicId && !(await ownsTopic(userId, topicId))) return res.status(404).json({ error: 'Topic not found' });
+      if (threadKey && !(await findThreadKey(userId, threadKey))) return res.status(404).json({ error: 'Thread not found' });
     } catch (err) {
       return sendError(res, err);
     }
@@ -128,7 +147,10 @@ export function contextRoutes(r) {
     // SSE comment every 15 s so proxies keep the connection open while the model is queued.
     const keepalive = setInterval(() => { if (!res.writableEnded && !res.destroyed) res.write(': keepalive\n\n'); }, 15_000);
     try {
-      await answerQuestion(userId, question, { entityId, topicId, followUpOf: isUuid(req.body?.followUpOf) ? req.body.followUpOf : null, onEvent: send, signal: controller.signal });
+      await answerQuestion(userId, question, {
+        entityId, topicId, threadKey, web, deep: deep === true,
+        followUpOf: isUuid(req.body?.followUpOf) ? req.body.followUpOf : null, onEvent: send, signal: controller.signal,
+      });
     } catch (err) {
       if (!controller.signal.aborted) {
         if (!(err instanceof LlmError) && !err?.expose) console.warn('[hedwig] context ask failed:', err?.message || err);

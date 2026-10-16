@@ -49,6 +49,8 @@ x-backend-env: &backend-env
   # Attachment text for the index (Apache Tika, LXC 165). Off in tests and dev by default.
   HEDWIG_INDEX_TIKA_ENABLED: ${HEDWIG_INDEX_TIKA_ENABLED:-true}
   HEDWIG_INDEX_TIKA_URL: ${HEDWIG_INDEX_TIKA_URL:-http://10.0.1.69:9998}
+  # Web search for Ask (the bundled SearXNG service `search` below). Empty turns web search off.
+  HEDWIG_ASK_WEB_SEARCH_URL: ${HEDWIG_ASK_WEB_SEARCH_URL-http://search:8080}
   HEDWIG_PLUGINS_DIR: /plugins
   HEDWIG_INSIGHTS_TIMEZONE: ${HEDWIG_INSIGHTS_TIMEZONE:-UTC}
   # Sorting: the decision model (System One via llm-proxy) and how far the classifier may decide alone.
@@ -122,6 +124,22 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+    networks: [hedwig]
+
+  # Web search for Ask (SearXNG's JSON API). Internal only: no published port; the backend reaches
+  # it as http://search:8080. Engines and the reasons for them: deploy/searxng/settings.yml.
+  search:
+    image: searxng/searxng:2026.9.30-a9d990033
+    restart: unless-stopped
+    environment:
+      SEARXNG_SECRET: ${HEDWIG_SEARXNG_SECRET:-hedwig-internal-searxng}
+    volumes:
+      - ./deploy/searxng/settings.yml:/etc/searxng/settings.yml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8080/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     networks: [hedwig]
 
   postgres:

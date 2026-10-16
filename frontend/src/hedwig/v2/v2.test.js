@@ -678,6 +678,26 @@ describe('Thread', () => {
     assert.deepEqual(toastTitles(), ['Set aside']);
   });
 
+  test('Ask about this (I): opens Ask on this conversation, also from the keyboard', async () => {
+    await cleanup();
+    const item = await annaItem();
+    await render(h(Thread, { props: { item } }));
+    await settle(60);
+    const btn = document.querySelector('[role="toolbar"] [data-action="ask"]');
+    assert.ok(btn, 'the button is on the toolbar');
+    assert.equal(btn.getAttribute('title'), 'Ask about this (I)');
+    await click(btn);
+    const req = useHedwig.getState().viewRequest;
+    assert.equal(req.id, 'hedwig.ask');
+    assert.equal(req.props.threadKey, item.threadId);
+    assert.equal(req.props.subject, 'Q3 report: can you send the final numbers?');
+    assert.ok('question' in req.props && req.props.question === undefined, 'a question asked in the pane before is not asked again');
+    const before = req.nonce;
+    await React.act(async () => { document.body.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'i', bubbles: true, cancelable: true })); });
+    await settle();
+    assert.notEqual(useHedwig.getState().viewRequest.nonce, before, 'I opens it too');
+  });
+
   test('help me write off hides quick replies and drafting', async () => {
     await cleanup();
     useV2.setState({ prefs: { ...UI_DEFAULTS, helpMeWrite: false } });
@@ -1404,7 +1424,8 @@ describe('list and rail (redesign)', () => {
       await React.act(async () => { input.closest('form').dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true })); });
       assert.equal(searched, null, 'not searched');
       assert.equal(useHedwig.getState().viewRequest.id, 'hedwig.ask');
-      assert.deepEqual(useHedwig.getState().viewRequest.props, { question: 'find out all the AI expenses my team has mailed to me' });
+      // About all mail: a pane left on a thread by "Ask about this" lets the thread go.
+      assert.deepEqual(useHedwig.getState().viewRequest.props, { threadKey: null, subject: null, stream: null, question: 'find out all the AI expenses my team has mailed to me' });
     } finally {
       unregister();
     }

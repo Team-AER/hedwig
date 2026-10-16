@@ -19,7 +19,10 @@ import { planQuery } from './plan.js';
 import { runPrompt } from '../prompts/index.js';
 import { groupByThread, buildEvidence } from './evidence.js';
 import { checkCitations } from './citations.js';
-import { ANSWER_PROMPT, answerMessages, ownerLine } from './prompt.js';
+import { ANSWER_PROMPT, answerMessages, ownerIdentity, ownerLine } from './prompt.js';
+import { webSettings, planResearch, researchWeb, linkCandidates, webEvidence, publicWebSource } from './web.js';
+import { findThreadKey, loadThreadMessages } from '../work/util.js';
+import { requestBody } from '../core/bodies.js';
 import { coverageShare } from '../indexer/truth.js';
 import { ranOnLighterModel } from '../labels/tier.js';
 
@@ -71,7 +74,7 @@ export function carriedSources(previous, max) {
 
 async function previousAnswer(userId, id) {
   const { rows } = await query(
-    'SELECT id, question, answer, sources, citations, status FROM hedwig_ask_log WHERE id = $1 AND user_id = $2',
+    'SELECT id, question, answer, sources, citations, status, thread_key, web FROM hedwig_ask_log WHERE id = $1 AND user_id = $2',
     [id, userId],
   );
   if (!rows[0]) throw httpError(404, 'Earlier answer not found');
@@ -198,92 +201,172 @@ const compactPlan = (p) => ({
   ...(p.reflexError ? { reflexError: p.reflexError } : {}), ...(p.provenance ? { provenance: p.provenance } : {}), ms: p.ms,
 });
 
+/** A thread's subject without reply and forward prefixes. Pure. */
+export const bareSubject = (s) => String(s || '').replace(/^((re|fw|fwd|aw|wg|sv|tr)\s*:\s*)+/i, '').trim();
+
+/** The newest message in the thread from someone other than the user (whose site tracked links belong to). */
+function latestSender(threadRows) {
+  const theirs = threadRows.filter((r) => !r.mine);
+  const r = theirs[theirs.length - 1] || threadRows[threadRows.length - 1];
+  return String(r?.from_email || '').split('@')[1] || '';
+}
+
 /**
  * Answer a question from the user's mail, streaming events through onEvent.
- * @returns {Promise<{ answer, citations, sources: {n, message}[], unsupported, notFound, askLogId, plan }>}
+ *
+ * threadKey: Ask about this (the reader). The thread is read whole and comes first; the rest of the
+ * mailbox is searched for what it leaves out. A follow-up stays on its conversation's thread.
+ * web: true/false for this question (null: the user's ask.web.enabled). With the web on and a search
+ * service set up, ask.research decides what to look up, and the web stage (ask2/web.js) runs beside
+ * the mail search; its pages are numbered after the mail. deep: Dig deeper (more rounds of looking).
+ * Extra events: { type: 'thread', status, messages, subject }, and the web stage's 'web', 'read',
+ * 'links' and 'dig' events. 'sources' carries `web: [{ n, url, title, host, … }]`.
+ * @returns {Promise<{ answer, citations, sources: {n, message}[], web: object[], unsupported, notFound, askLogId, plan }>}
  */
-export async function answerQuestion(userId, question, { entityId = null, topicId = null, followUpOf = null, onEvent = () => {}, signal, now = new Date() } = {}) {
+export async function answerQuestion(userId, question, {
+  entityId = null, topicId = null, threadKey = null, web = null, deep = false, followUpOf = null,
+  onEvent = () => {}, signal, now = new Date(), fetchers = {},
+} = {}) {
   const q = typeof question === 'string' ? question.trim() : '';
   if (!q) throw httpError(400, 'question is required');
   if (q.length > 2000) throw httpError(400, 'question too long');
   if (entityId != null && !(await ownsEntity(userId, entityId))) throw httpError(404, 'Entity not found');
   if (topicId != null && !(await ownsTopic(userId, topicId))) throw httpError(404, 'Topic not found');
   if (followUpOf != null && !isUuid(followUpOf)) throw httpError(400, 'invalid followUpOf');
+  if (threadKey != null && (typeof threadKey !== 'string' || !threadKey.trim() || threadKey.length > 1000)) throw httpError(400, 'invalid threadKey');
+  if (web != null && typeof web !== 'boolean') throw httpError(400, 'web must be true or false');
   const cfg = await getConfig(userId);
   const previous = followUpOf ? await previousAnswer(userId, followUpOf) : null;
+  const askedKey = threadKey ?? previous?.thread_key ?? null;
+  const focus = askedKey ? await findThreadKey(userId, askedKey) : null;
+  if (askedKey && !focus) throw httpError(404, 'Thread not found');
+  const ws = webSettings(cfg, web);
 
   const { rows: [log] } = await query(
-    'INSERT INTO hedwig_ask_log (user_id, question, entity_id, topic_id, follow_up_of) VALUES ($1, $2, $3, $4, $5) RETURNING id',
-    [userId, q, isUuid(entityId) ? entityId : null, isUuid(topicId) ? topicId : null, previous?.id || null],
+    `INSERT INTO hedwig_ask_log (user_id, question, entity_id, topic_id, follow_up_of, thread_key, web)
+     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+    [userId, q, isUuid(entityId) ? entityId : null, isUuid(topicId) ? topicId : null, previous?.id || null, focus, ws.on],
   );
   const askLogId = log.id;
   let plan = null;
   const finish = (f) => query(
     `UPDATE hedwig_ask_log SET status = $2, answer = $3, citations = $4, sources = $5, error = $6, plan = $7, unsupported = $8,
-            not_found = $9, model = $10, ai_call_id = $11, prompt_id = $12, prompt_version = $13, completed_at = NOW()
+            not_found = $9, model = $10, ai_call_id = $11, prompt_id = $12, prompt_version = $13, completed_at = NOW(),
+            web_sources = $14
       WHERE id = $1`,
     [askLogId, f.status, f.answer ?? null, JSON.stringify(f.citations || []), JSON.stringify(f.sources || []), f.error ?? null,
       plan ? JSON.stringify(plan) : null, f.unsupported ?? null, f.notFound ?? null, f.model ?? null, f.aiCallId ?? null,
-      f.model ? ANSWER_PROMPT.id : null, f.model ? ANSWER_PROMPT.version : null],
+      f.model ? ANSWER_PROMPT.id : null, f.model ? ANSWER_PROMPT.version : null, f.web?.length ? JSON.stringify(f.web) : null],
   ).catch((err) => console.warn('[hedwig] ask: could not record the answer:', err.message));
 
   try {
-    // Progress for the Ask pane: each step as it starts and ends (plan, search, review, then
-    // sources, the answer's deltas and done).
+    // The open thread first: everything else is planned around it.
+    let threadRows = [];
+    if (focus) {
+      onEvent({ type: 'thread', status: 'running' });
+      threadRows = await loadThreadMessages(userId, focus);
+      // Older messages of a thread may have no body yet; the reader's own fetch path fills them in
+      // for next time, and the snippet stands in now.
+      for (const r of threadRows) if (!r.body_text && !r.body_html) requestBody(r.id, { priority: 2 }).catch(() => {});
+      onEvent({ type: 'thread', status: 'done', messages: threadRows.length, subject: bareSubject(threadRows.at(-1)?.subject) });
+    }
+    const identity = await ownerIdentity(userId);
+    const owner = { names: identity.name ? [identity.name] : [], emails: identity.emails };
+    const links = ws.on && threadRows.length ? linkCandidates(threadRows) : [];
+    const today = isoDay(new Date(now), cfg['insights.timezone']);
+
+    // Progress for the Ask pane: each step as it starts and ends (thread, plan, search, review,
+    // web, read, links, dig, then sources, the answer's deltas and done).
     onEvent({ type: 'plan', status: 'running' });
-    const [planned, coverage] = await Promise.all([
+    const [planned, coverage, research] = await Promise.all([
       planQuery(userId, q, { now, cfg, signal }),
       coverageShare(userId).catch(() => null),
+      ws.on
+        ? planResearch(userId, { question: q, previous, threadRows, links, owner, settings: ws, today, signal })
+        : Promise.resolve({ searchMail: true, web: [], links: [], deep: false, via: ws.allowed ? 'unavailable' : 'off' }),
     ]);
     const nothing = nothingRelevant(coverage);
-    // A short follow-up ("and the fee?") searches with the earlier question for context.
+    // A short follow-up ("and the fee?") searches with the earlier question for context; a question
+    // about the open thread searches with its subject, so related mail (the last issue, the earlier
+    // order) turns up.
     const shortFollowUp = previous && q.split(/\s+/).length < 7;
-    const queryText = shortFollowUp ? `${previous.question} ${planned.text}` : planned.text;
-    onEvent({ type: 'plan', status: 'done', text: planned.text });
-    onEvent({ type: 'search', text: queryText, round: 0, status: 'running' });
-    const first = await gather(userId, planned, { entityId, topicId, cfg, queryText });
-    onEvent({ type: 'search', text: queryText, found: messageCount(first.chunks), round: 0, status: 'done' });
-    const searched = await searchAgain(userId, q, planned, { text: queryText, chunks: first.chunks }, { previous, entityId, topicId, cfg, signal, onEvent });
-    const got = { ...first, chunks: searched.chunks };
-    plan = { ...compactPlan(planned), queryText, retrieval: { via: first.via, chunks: got.chunks.length, floor: first.floor }, searches: searched.searches };
+    const subject = focus ? bareSubject(threadRows.at(-1)?.subject || threadRows[0]?.subject) : '';
+    const queryText = shortFollowUp ? `${previous.question} ${planned.text}` : subject ? `${subject} ${planned.text}` : planned.text;
+    onEvent({ type: 'plan', status: 'done', text: planned.text, web: { on: ws.on, allowed: ws.allowed, available: ws.available } });
 
-    const pinned = previous ? carriedSources(previous, cfg['ask.followUpSources']) : [];
-    if (!got.chunks.length && !pinned.length) {
+    const searchMail = !focus || research.searchMail !== false;
+    const mailTask = (async () => {
+      if (!searchMail) return { first: { chunks: [], floor: false, via: 'skipped' }, searched: { chunks: [], searches: [] } };
+      onEvent({ type: 'search', text: queryText, round: 0, status: 'running' });
+      const first = await gather(userId, planned, { entityId, topicId, cfg, queryText });
+      onEvent({ type: 'search', text: queryText, found: messageCount(first.chunks), round: 0, status: 'done' });
+      const searched = await searchAgain(userId, q, planned, { text: queryText, chunks: first.chunks }, { previous, entityId, topicId, cfg, signal, onEvent });
+      return { first, searched };
+    })();
+    const wantWeb = ws.on && (research.web.length || research.links.length || deep);
+    const webTask = wantWeb
+      ? researchWeb({
+        userId, question: q, plan: research, links, senderHost: focus ? latestSender(threadRows) : '', owner, settings: ws, deep, signal, onEvent, fetchers,
+      })
+      : Promise.resolve(null);
+    const [{ first, searched }, found] = await Promise.all([mailTask, webTask]);
+    const got = { ...first, chunks: searched.chunks };
+    plan = {
+      ...compactPlan(planned), queryText, retrieval: { via: first.via, chunks: got.chunks.length, floor: first.floor }, searches: searched.searches,
+      ...(focus ? { thread: { key: focus, messages: threadRows.length } } : {}),
+      research: {
+        via: research.via, web: research.web, links: research.links, deep: Boolean(deep || research.deep), searchMail,
+        ...(research.error ? { error: research.error } : {}),
+        ...(found ? { searches: found.searches, read: found.sources.filter((x) => !x.snippetOnly).length, skipped: found.skipped.length, rounds: found.rounds } : {}),
+      },
+    };
+
+    const pinned = [...threadRows.map((r) => r.id), ...(previous ? carriedSources(previous, cfg['ask.followUpSources']) : [])];
+    const webFound = found?.sources || [];
+    if (!got.chunks.length && !pinned.length && !webFound.length) {
       // Nothing above the relevance floor (or nothing at all): answer without a model call.
-      onEvent({ type: 'sources', sources: [], askLogId, plan: compactPlan(planned), coverage });
+      onEvent({ type: 'sources', sources: [], web: [], askLogId, plan: compactPlan(planned), coverage });
       onEvent({ type: 'delta', text: nothing });
       onEvent({ type: 'done', answer: nothing, citations: [], unsupported: false, notFound: true, invalidCitations: [], askLogId, coverage, model: null, lighterModel: false });
       await finish({ status: 'done', answer: nothing, citations: [], sources: [], unsupported: false, notFound: true });
-      return { answer: nothing, citations: [], sources: [], unsupported: false, notFound: true, askLogId, plan, coverage, model: null, lighterModel: false };
+      return { answer: nothing, citations: [], sources: [], web: [], unsupported: false, notFound: true, askLogId, plan, coverage, model: null, lighterModel: false };
     }
 
     const ids = [...new Set([...pinned, ...got.chunks.map((c) => c.messageId)])];
     const rows = await visibleRows(userId, ids);
-    const groups = groupByThread(got.chunks, rows, { latest: planned.latest, pinned });
-    const evidence = buildEvidence(groups, { contextTokens: cfg['ask.contextTokens'], messageChars: cfg['ask.messageChars'] });
+    const groups = groupByThread(got.chunks, rows, { latest: planned.latest, pinned, focus });
+    const evidence = buildEvidence(groups, {
+      contextTokens: cfg['ask.contextTokens'], messageChars: cfg['ask.messageChars'], focus, focusChars: cfg['ask.threadChars'],
+    });
+    const webPart = webEvidence(webFound, { startAt: evidence.sources.length + 1, contextTokens: cfg['ask.web.contextTokens'] });
     plan.retrieval.threads = groups.length;
     plan.retrieval.messages = evidence.sources.length;
     plan.retrieval.evidenceTokens = evidence.tokens;
     plan.retrieval.omitted = evidence.omitted;
+    if (found) plan.research.webTokens = webPart.tokens;
 
     const lite = new Map((await loadMessagesLite(userId, evidence.sources.map((s) => s.messageId), { dedupe: false })).map((m) => [m.id, m]));
     const sources = evidence.sources.map((s) => ({ n: s.n, message: lite.get(s.messageId) || { id: s.messageId } }));
     const sourceIds = evidence.sources.map((s) => s.messageId);
-    onEvent({ type: 'sources', sources, askLogId, plan: compactPlan(planned), coverage });
+    const webSources = webPart.used.map(publicWebSource);
+    onEvent({ type: 'sources', sources, web: webSources, askLogId, plan: compactPlan(planned), coverage });
 
-    if (!sources.length) {
+    if (!sources.length && !webSources.length) {
       onEvent({ type: 'delta', text: nothing });
       onEvent({ type: 'done', answer: nothing, citations: [], unsupported: false, notFound: true, invalidCitations: [], askLogId, coverage, model: null, lighterModel: false });
       await finish({ status: 'done', answer: nothing, citations: [], sources: [], unsupported: false, notFound: true });
-      return { answer: nothing, citations: [], sources, unsupported: false, notFound: true, askLogId, plan, coverage, model: null, lighterModel: false };
+      return { answer: nothing, citations: [], sources, web: [], unsupported: false, notFound: true, askLogId, plan, coverage, model: null, lighterModel: false };
     }
 
+    const focusNote = focus ? `The question is about the email thread "${subject || '(no subject)'}", which the user has open.` : '';
     const messages = answerMessages({
-      today: isoDay(new Date(now), cfg['insights.timezone']),
-      owner: await ownerLine(userId),
+      today,
+      owner: await ownerLine(userId, identity),
       question: q,
       evidence: evidence.block,
-      focus: await focusLine(userId, entityId, topicId),
+      web: webPart.block,
+      thread: Boolean(focus),
+      focus: [focusNote, await focusLine(userId, entityId, topicId)].filter(Boolean).join('\n'),
       previous: previous ? { question: previous.question, answer: previous.answer } : null,
     });
     let answer = '';
@@ -300,7 +383,7 @@ export async function answerQuestion(userId, question, { entityId = null, topicI
         meta = { model: ev.model, aiCallId: ev.aiCallId, fellBack: Boolean(ev.fellBack), lighterModel: ev.lighterModel };
       }
     }
-    const checked = checkCitations(answer.trim(), sources.length);
+    const checked = checkCitations(answer.trim(), sources.length + webSources.length);
     const lighterModel = ranOnLighterModel(meta, cfg['llm.models.long']);
     plan.answer = { model: meta.model || null, lighterModel };
     onEvent({
@@ -308,11 +391,11 @@ export async function answerQuestion(userId, question, { entityId = null, topicI
       notFound: checked.notFound, invalidCitations: checked.invalid, askLogId, coverage, model: meta.model || null, lighterModel,
     });
     await finish({
-      status: 'done', answer: checked.answer, citations: checked.citations, sources: sourceIds,
+      status: 'done', answer: checked.answer, citations: checked.citations, sources: sourceIds, web: webSources,
       unsupported: checked.unsupported, notFound: checked.notFound, model: meta.model, aiCallId: meta.aiCallId,
     });
     return {
-      answer: checked.answer, citations: checked.citations, sources, unsupported: checked.unsupported, notFound: checked.notFound,
+      answer: checked.answer, citations: checked.citations, sources, web: webSources, unsupported: checked.unsupported, notFound: checked.notFound,
       askLogId, plan, coverage, model: meta.model || null, lighterModel,
     };
   } catch (err) {

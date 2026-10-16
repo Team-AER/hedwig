@@ -43,8 +43,9 @@ SSE streams: `Content-Type: text/event-stream`; each event is `data: <json>\n\n`
 | PATCH | `/context/commitments/:id` | `{ status?, what?, due_at? }` | `Commitment` |
 | PATCH | `/context/facts/:id` | `{ value?, dismissed?, pinned? }` | `Fact` |
 | POST | `/context/search` | `{ q, limit?, entityId?, topicId?, after?, before? }` | `{ results: (MessageLite & { score })[] }` |
-| POST | `/context/ask` (SSE) | `{ question, entityId?, topicId? }` | events below |
-| GET | `/context/ask/history` | | `[{ id, question, created_at }]` |
+| POST | `/context/ask` (SSE) | `{ question, entityId?, topicId?, threadKey?, web?, deep?, followUpOf? }` | events below |
+| GET | `/context/ask/history` | `limit`, `threadKey` | `[{ id, question, created_at, threadKey, web: WebSource[], … }]` |
+| GET | `/context/ask/options` | | `{ web: { allowed, available } }` |
 
 ```ts
 EntityCard = { entity: EntityLite & { addresses: [{ email, name }], org: EntityLite|null, pinned },
@@ -66,6 +67,27 @@ the question's own; later rounds are searches Ask chose itself, see `ask.searchR
 search again; then `{ type: 'sources', sources: [{ n, message: MessageLite }] }`,
 `{ type: 'delta', text }`, `{ type: 'done', answer, citations: [n] }`. Answers cite sources as
 `[n]`. A saved answer's `plan.searches` lists the searches as `[{ text, found }]`.
+
+`threadKey` (Ask about this, in the reader; a message id stands for its thread) puts the open thread
+first: it is read whole (`ask.threadChars` per message) and the rest of the mailbox is searched for
+what it leaves out. A follow-up stays on its conversation's thread; history with `?threadKey=` lists
+that thread's questions. It adds `{ type: 'thread', status, messages, subject }` before `plan`.
+
+`web` (`true`/`false`; omitted: the user's `ask.web.enabled`) lets Ask look beyond the mail when
+`ask.web.searchUrl` names a SearXNG service. The Reflex prompt `ask.research` names web searches and
+links from the thread by id (it never writes an address); the web stage (`ask2/web.js`) runs beside
+the mail search and adds `{ type: 'web', query, round, status, found }`, `{ type: 'read', round,
+status, count | pages: [{ host, title, ok, via }] }`, `{ type: 'links', opened, skipped: [{ text,
+host, reason }] }`, and with `deep` (Dig deeper) `{ type: 'dig', round, status, enough }`.
+Pages are numbered after the mail: `sources` carries `web: WebSource[]` and citations count both.
+Sign-in, confirm, unsubscribe, payment and invitation links are never opened; click-tracked links
+are found by searching for their text unless `ask.web.openTrackedLinks` is on; searches never carry
+the owner's names, addresses or long numbers (`research/scrub.js`).
+
+```ts
+WebSource = { n, url, title, host, published: string|null, via: 'search'|'link'|'link-search',
+              snippetOnly: boolean, excerpt }
+```
 
 Service exports (`context/service.js`) other modules may import:
 `searchMessages(userId, opts)`, `findEntities(userId, q, limit)`, `getEntityCard(userId, id)`,

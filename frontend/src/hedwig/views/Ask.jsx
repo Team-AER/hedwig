@@ -3,6 +3,10 @@
 // what the citation check found (unsupported, nothing found, citations that named no source), a
 // "Wrong answer" mark (POST /context/ask/:id/feedback), and the saved answers
 // (GET /context/ask/history), which open as they were (GET /context/ask/:id) instead of asking again.
+// Opened from the reader ("Ask about this", props.threadKey) it is about that thread: the thread is
+// read first, its earlier questions are the history, and the latest of them opens again. With a
+// search service set up (GET /context/ask/options) answers may also read the web; the globe in the
+// composer turns that off or on for this chat, and Dig deeper looks further.
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { useHedwig } from '../store.js';
 import { getView } from '../registry.js';
@@ -34,6 +38,46 @@ function sourceItem(m) {
   return { messageId: m.id, threadId: m.thread_key || undefined, subject: m.subject, from: { name: m.from_name, email: m.from_email }, date: m.date };
 }
 
+/** The scope the pane was opened with: a person, a topic, or the thread open in the reader. */
+function scopeOf(props) {
+  return {
+    entityId: props.entityId || null,
+    topicId: props.topicId || null,
+    threadKey: typeof props.threadKey === 'string' && props.threadKey ? props.threadKey : null,
+    subject: props.subject || null,
+    stream: props.stream || null,
+  };
+}
+
+/** Questions to start a chat about a thread with, by the stream it was sorted into. No model call. */
+export function threadStarters(stream) {
+  switch (stream) {
+    case 'reading':
+      return [
+        tv('hedwig.v2.ask.starter.summarise', 'Summarise the main articles'),
+        tv('hedwig.v2.ask.starter.whatsNew', 'What is new since the last one?'),
+        tv('hedwig.v2.ask.starter.worthReading', 'Which of these is worth reading for me?'),
+      ];
+    case 'records':
+      return [
+        tv('hedwig.v2.ask.starter.usual', 'Is this what I usually pay?'),
+        tv('hedwig.v2.ask.starter.earlier', 'Show me the earlier ones like this'),
+      ];
+    default:
+      return [
+        tv('hedwig.v2.ask.starter.agreed', 'What have we agreed so far?'),
+        tv('hedwig.v2.ask.starter.owe', 'Do I owe anyone a reply or anything else here?'),
+        tv('hedwig.v2.ask.starter.background', 'Give me the background on this'),
+      ];
+  }
+}
+
+/** A web source opens in a new tab, without telling the page where it was opened from. */
+function openWebSource(w) {
+  if (!/^https?:\/\//i.test(String(w?.url || ''))) return;
+  window.open(w.url, '_blank', 'noopener,noreferrer');
+}
+
 function markLabel(mark) {
   if (mark === 'wrong') return tv('hedwig.v2.ask.markWrong', 'marked wrong');
   if (mark === 'notFound') return tv('hedwig.v2.ask.markNotFound', 'nothing found');
@@ -52,7 +96,8 @@ export default function Ask({ paneId = null, props = {} }) {
   const setAskPrompt = useHedwig((s) => s.setAskPrompt);
   const openView = useHedwig((s) => s.openView);
   const [question, setQuestion] = useState(props.question || '');
-  const [scope, setScope] = useState({ entityId: props.entityId || null, topicId: props.topicId || null });
+  const [scope, setScope] = useState(() => scopeOf(props));
+  const [webPref, setWebPref] = useState(null); // null: the user's setting (ask.web.enabled)
   const [state, setState] = useState(ASK2_INITIAL);
   const [chain, setChain] = useState([]); // earlier answers of this follow-up conversation
   const [error, setError] = useState(null);
@@ -62,29 +107,51 @@ export default function Ask({ paneId = null, props = {} }) {
   const pinned = useRef(true);
   const inputRef = useRef(null);
   const autoRan = useRef('');
-  const history = useV2Resource('/context/ask/history', { refreshOn: [] });
+  const history = useV2Resource(scope.threadKey ? `/context/ask/history?threadKey=${encodeURIComponent(scope.threadKey)}&limit=50` : '/context/ask/history', { refreshOn: [] });
+  const options = useV2Resource('/context/ask/options', { refreshOn: [] });
+  const webAvailable = options.data?.web?.available === true;
+  const webOn = webAvailable && (webPref ?? options.data?.web?.allowed !== false);
+  const reopened = useRef('');
 
-  useEffect(() => { setScope({ entityId: props.entityId || null, topicId: props.topicId || null }); }, [props.entityId, props.topicId]);
+  useEffect(() => { setScope(scopeOf(props)); }, [props.entityId, props.topicId, props.threadKey, props.subject, props.stream]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Another thread in the same pane is another conversation, unless a question for the new scope
+  // is already being asked (lastRunKey: the thread of the latest question, null for all mail).
+  const lastRunKey = useRef(undefined);
+  useEffect(() => {
+    if (lastRunKey.current === scope.threadKey) return;
+    ctlRef.current?.abort();
+    setState(ASK2_INITIAL);
+    setChain([]);
+    setError(null);
+    setShowHistory(false);
+  }, [scope.threadKey]);
   // Leaving aborts the answer in flight; a remount (StrictMode in development) may ask it again.
   useEffect(() => () => { ctlRef.current?.abort(); autoRan.current = ''; }, []);
 
   const reloadHistory = history.reload;
   const followingUp = state.status === 'done' && state.id && !state.unfinished ? state : null;
 
-  const run = useCallback(async (raw, { followUp = null, fresh = false } = {}) => {
+  // `on`: the scope to ask in when it is changing in the same breath (a question handed over with new props).
+  const run = useCallback(async (raw, { followUp = null, fresh = false, deep = false, on = null } = {}) => {
     const q = String(raw || '').trim();
     if (!q) return;
+    const sc = on || scope;
     ctlRef.current?.abort();
     const ctl = new AbortController();
     ctlRef.current = ctl;
+    lastRunKey.current = sc.threadKey;
+    reopened.current = sc.threadKey || '';
     setError(null);
     setQuestion('');
     setChain((c) => (followUp && !fresh ? [...c, followUp] : []));
-    setState(askStarted(q, { followUpOf: followUp?.id || null }));
+    setState({ ...askStarted(q, { followUpOf: followUp?.id || null }), deep });
     const body = { question: q };
-    if (scope.entityId) body.entityId = scope.entityId;
-    if (scope.topicId) body.topicId = scope.topicId;
+    if (sc.entityId) body.entityId = sc.entityId;
+    if (sc.topicId) body.topicId = sc.topicId;
+    if (sc.threadKey) body.threadKey = sc.threadKey;
     if (followUp?.id) body.followUpOf = followUp.id;
+    if (webPref !== null || deep) body.web = deep ? true : webPref;
+    if (deep) body.deep = true;
     try {
       await v2Stream('/context/ask', body, { signal: ctl.signal, onEvent: (ev) => setState((s) => reduceAsk2(s, ev)) });
       setState((s) => (s.status === 'streaming' ? { ...s, status: 'done' } : s));
@@ -94,7 +161,7 @@ export default function Ask({ paneId = null, props = {} }) {
       setError(err);
       setState((s) => ({ ...s, status: 'error' }));
     }
-  }, [scope, reloadHistory]);
+  }, [scope, webPref, reloadHistory]);
 
   // Autorun once for a question handed over by another view or the palette.
   // Deferred a tick, so a mount that is undone at once (StrictMode in development) asks nothing.
@@ -102,16 +169,20 @@ export default function Ask({ paneId = null, props = {} }) {
     if (!props.question || autoRan.current === props.question) return undefined;
     const q = props.question;
     autoRan.current = q;
-    const t = setTimeout(() => run(q), 0);
+    const on = scopeOf(props);
+    const t = setTimeout(() => run(q, { on }), 0);
     return () => { clearTimeout(t); if (autoRan.current === q) autoRan.current = ''; };
-  }, [props.question, run]);
+  }, [props.question, run]); // eslint-disable-line react-hooks/exhaustive-deps -- the scope travels with the question
+  // A question from the rail, the palette or the Brief is about all mail, also in a pane on a thread.
   useEffect(() => {
     if (!askPrompt) return;
     setAskPrompt('');
     // The rail and the Brief hand the question over both ways; ask it once.
     if (askPrompt === autoRan.current) return;
-    run(askPrompt);
-  }, [askPrompt, setAskPrompt, run]);
+    const on = { ...scope, threadKey: null, subject: null, stream: null };
+    if (scope.threadKey) setScope(on);
+    run(askPrompt, { on });
+  }, [askPrompt, setAskPrompt, run]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (!props.question) inputRef.current?.focus({ preventScroll: true }); }, [props.question]);
 
   // A saved answer opens as its conversation: the answers it followed up on come first.
@@ -139,6 +210,15 @@ export default function Ask({ paneId = null, props = {} }) {
     }
   };
 
+  // Ask about this, on a thread asked about before: its latest conversation opens again.
+  useEffect(() => {
+    if (!scope.threadKey || props.question || reopened.current === scope.threadKey || state.status !== 'idle') return;
+    const list = listOf(history.data, 'items').filter((h) => h && h.id);
+    if (history.data === undefined) return;
+    reopened.current = scope.threadKey;
+    if (list.length) openSaved(list[0]);
+  }, [scope.threadKey, history.data]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const startOver = () => { ctlRef.current?.abort(); setState(ASK2_INITIAL); setChain([]); setError(null); setShowHistory(false); inputRef.current?.focus(); };
   const submit = (e) => { e.preventDefault(); pinned.current = true; setShowHistory(false); run(question, { followUp: followingUp }); };
   const streaming = state.status === 'streaming';
@@ -147,7 +227,8 @@ export default function Ask({ paneId = null, props = {} }) {
   const followUpMode = Boolean(followingUp || state.followUpOf);
   const title = tv('hedwig.v2.ask.title', 'Ask');
   const turns = [...chain, ...(state.status !== 'idle' ? [state] : [])];
-  const label = followUpMode ? tv('hedwig.v2.ask.followUpLabel', 'Ask a follow-up') : tv('hedwig.v2.brief.askLabel', 'Ask your mail');
+  const label = followUpMode ? tv('hedwig.v2.ask.followUpLabel', 'Ask a follow-up') : scope.threadKey ? tv('hedwig.v2.ask.threadLabel', 'Ask about this thread') : tv('hedwig.v2.brief.askLabel', 'Ask your mail');
+  const starters = scope.threadKey ? threadStarters(scope.stream) : [];
 
   // The conversation stays scrolled to its newest line while the answer streams in, unless the
   // reader has scrolled up to read; asking again brings it back down (scrollRef, pinned).
@@ -199,10 +280,24 @@ export default function Ask({ paneId = null, props = {} }) {
         <span style={{ width: 44, height: 44, borderRadius: 22, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: V.accentTint, color: V.accentInk }}>
           <Icon name="sparkles" size={22} strokeWidth={1.6} />
         </span>
-        <span style={{ fontSize: 13, maxWidth: 360 }}>{tv('hedwig.v2.ask.intro', 'Answers cite the messages they come from. Tap a number to open it.')}</span>
+        <span style={{ fontSize: 13, maxWidth: 360 }}>
+          {scope.threadKey
+            ? tv('hedwig.v2.ask.threadIntro', 'Ask about this thread. Hedwig reads it whole, looks through the rest of your mail{{web}}, and cites what it used.', { web: webOn ? tv('hedwig.v2.ask.threadIntroWeb', ' and the web') : '' })
+            : tv('hedwig.v2.ask.intro', 'Answers cite the messages they come from. Tap a number to open it.')}
+        </span>
         <CoverageNote what="ask" />
       </div>
-      {historyList}
+      {starters.length > 0 && (
+        <div role="group" aria-label={tv('hedwig.v2.ask.starters', 'Suggestions')} style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}>
+          {starters.map((q) => (
+            <button key={q} type="button" className="hw-chip" onClick={() => { pinned.current = true; run(q); }}
+              style={{ minHeight: phone ? 44 : 30, padding: '4px 12px', border: `1px solid ${V.line}`, borderRadius: 15, background: V.field, color: V.ink, font: 'inherit', fontSize: 13, cursor: 'pointer' }}>
+              {q}
+            </button>
+          ))}
+        </div>
+      )}
+      {!scope.threadKey && historyList}
     </div>
   );
 
@@ -212,6 +307,7 @@ export default function Ask({ paneId = null, props = {} }) {
         <article key={t.id || `${i}:${t.question}`} className="hw-turn" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
             <div className="hw-ask-bubble" style={{ maxWidth: '82%', padding: '8px 14px', borderRadius: '18px 18px 4px 18px', background: V.accent, color: V.onAccent, fontSize: phone ? 16 : 14, lineHeight: 1.4, overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>
+              {t.deep && <span style={{ display: 'block', fontSize: 11, fontWeight: 600, opacity: 0.85 }}>{tv('hedwig.v2.ask.deeper', 'Dig deeper')}</span>}
               {t.question}
             </div>
           </div>
@@ -224,6 +320,7 @@ export default function Ask({ paneId = null, props = {} }) {
               reloadHistory({ quiet: true });
             }}
             onAgain={() => run(t.question, { fresh: true })}
+            onDeeper={webAvailable && i === turns.length - 1 && t.status === 'done' && !t.deep && t.id ? () => { pinned.current = true; run(t.question, { followUp: t, deep: true }); } : null}
             onAgent={getView('hedwig.agent') ? () => openView('hedwig.agent', { prompt: t.question }) : null}
           />
         </article>
@@ -235,6 +332,15 @@ export default function Ask({ paneId = null, props = {} }) {
   const composer = (
     <form onSubmit={submit} style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 8, padding: phone ? '8px 12px calc(8px + var(--hw-tabbar-space, 0px))' : '10px 16px 14px', borderTop: `1px solid ${V.line}` }}>
       <TierNote />
+      {scope.threadKey && (
+        <div data-ask-scope="thread" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', fontSize: 13, color: V.muted, minWidth: 0 }}>
+          <span title={scope.subject || undefined} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0, maxWidth: '100%', padding: '2px 10px', borderRadius: 12, background: V.accentTint, color: V.accentInk }}>
+            <Icon name="mail" size={12} strokeWidth={1.8} />
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tv('hedwig.v2.ask.about', 'About: {{subject}}', { subject: scope.subject || tv('hedwig.v2.ask.thisThread', 'this thread') })}</span>
+          </span>
+          <LinkBtn muted hit={phone} onClick={() => setScope((sc) => ({ ...sc, threadKey: null, subject: null, stream: null }))}>{tv('hedwig.v2.ask.dropThread', 'Ask about all mail')}</LinkBtn>
+        </div>
+      )}
       {(scope.entityId || scope.topicId) && (
         <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 13, color: V.muted }}>
           {scope.topicId && <LinkBtn muted hit={phone} onClick={() => setScope((s) => ({ ...s, topicId: null }))}>{tv('hedwig.v2.ask.dropTopic', 'Ask about everything, not just this topic')}</LinkBtn>}
@@ -250,10 +356,22 @@ export default function Ask({ paneId = null, props = {} }) {
           onChange={(e) => setQuestion(e.target.value)}
           // Enter asks; Shift+Enter starts a new line.
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }}
-          placeholder={followUpMode ? tv('hedwig.v2.ask.followUpPlaceholder', 'and what about…') : tv('hedwig.v2.brief.askLabel', 'Ask your mail')}
+          placeholder={followUpMode ? tv('hedwig.v2.ask.followUpPlaceholder', 'and what about…') : scope.threadKey ? tv('hedwig.v2.ask.threadLabel', 'Ask about this thread') : tv('hedwig.v2.brief.askLabel', 'Ask your mail')}
           aria-label={label}
           style={{ ...askInputStyle, height: 'auto', resize: 'none', alignSelf: 'center', padding: '5px 0', lineHeight: '20px', maxHeight: 140, fontSize: phone ? 16 : 14, outline: 'none' }}
         />
+        {webAvailable && (
+          <IconButton
+            icon="globe"
+            data-web={webOn ? 'on' : 'off'}
+            label={webOn ? tv('hedwig.v2.ask.webOn', 'Uses the web too. Turn off for this chat') : tv('hedwig.v2.ask.webOff', 'Mail only. Let it use the web too')}
+            active={webOn}
+            aria-pressed={webOn}
+            size={30}
+            onClick={() => setWebPref(!webOn)}
+            style={{ borderRadius: 15, flexShrink: 0, color: webOn ? V.accentInk : V.muted }}
+          />
+        )}
         {streaming
           ? (
             <button type="button" onClick={() => ctlRef.current?.abort()} aria-label={tv('hedwig.v2.ask.stop', 'Stop')} title={tv('hedwig.v2.ask.stop', 'Stop')}
@@ -270,7 +388,7 @@ export default function Ask({ paneId = null, props = {} }) {
     <ViewHead
       phone={phone}
       title={title}
-      sub={phone ? undefined : tv('hedwig.v2.ask.sub', 'across all your mail')}
+      sub={phone ? undefined : scope.threadKey ? tv('hedwig.v2.ask.subThread', 'about this thread') : tv('hedwig.v2.ask.sub', 'across all your mail')}
       actions={(
         <span style={{ display: 'inline-flex', gap: 2, alignSelf: 'center' }}>
           <IconButton icon="history" label={tv('hedwig.v2.ask.history', 'Earlier questions')} active={showHistory} size={phone ? 44 : 28} onClick={() => setShowHistory((v) => !v)} style={{ color: showHistory ? V.accentInk : V.muted }} />
@@ -293,16 +411,22 @@ export default function Ask({ paneId = null, props = {} }) {
   );
 }
 
-function AnswerBlock({ state, phone, onFeedback, onAgain, onAgent }) {
+function AnswerBlock({ state, phone, onFeedback, onAgain, onAgent, onDeeper = null }) {
   const [wrongOpen, setWrongOpen] = useState(false);
   const [note, setNote] = useState('');
   const [sending, setSending] = useState(false);
   const [fbError, setFbError] = useState(null);
   const streaming = state.status === 'streaming' || state.status === 'loading';
   const done = state.status === 'done';
-  const sources = state.sources || [];
-  const bySource = new Map(sources.map((s) => [s.n, s.message]));
-  const openSource = (n) => { const m = bySource.get(n); if (m?.id) openThread(sourceItem(m)); };
+  const mailSources = state.sources || [];
+  // Web pages are numbered after the mail; one list, so citations renumber across both.
+  const sources = [...mailSources, ...(state.web || []).map((w) => ({ n: w.n, web: w }))];
+  const bySource = new Map(sources.map((s) => [s.n, s]));
+  const openSource = (n) => {
+    const s = bySource.get(n);
+    if (s?.web) { openWebSource(s.web); return; }
+    if (s?.message?.id) openThread(sourceItem(s.message));
+  };
   // Citations renumbered 1, 2, 3 in reading order, the uncited sources after them.
   const ro = readingOrder(state.answer, sources);
   const anyCited = ro.sources.some((s) => s.cited);
@@ -313,6 +437,7 @@ function AnswerBlock({ state, phone, onFeedback, onAgain, onAgent }) {
   // Nothing close enough to the question was found: no model was asked, and the canned sentence
   // the server sends says less than this line does.
   const nothing = done && state.notFound && !sources.length;
+  const webUsed = (state.web || []).length > 0;
   const wrong = state.feedback?.wrong === true;
   const status = useHedwig((st) => st.status);
   const lighter = done && !nothing && Boolean(state.answer) && isLighter(state.provenance, status, { expected: 'reasoning' });
@@ -349,7 +474,7 @@ function AnswerBlock({ state, phone, onFeedback, onAgain, onAgent }) {
         </div>
       )}
       {!nothing && (state.answer
-        ? <Markdown text={tidyCites(ro.text)} onCite={(d) => openSource(ro.toSource(d))} />
+        ? <Markdown text={tidyCites(ro.text)} onCite={(d) => openSource(ro.toSource(d))} links={(state.web || []).map((w) => w.url)} />
         // The progress above says what is happening; this line is for a server that sends no steps.
         : streaming && !(state.steps || []).length && <Quiet style={{ padding: 0 }}>{sources.length ? tvn(sources.length, ['hedwig.v2.ask.readingOne', 'Reading 1 message…'], ['hedwig.v2.ask.readingMany', 'Reading {{n}} messages…']) : tv('hedwig.v2.ask.searching', 'Searching your mail…')}</Quiet>)}
       {(lighter || (done && coverageGap(state.coverage) && !nothing)) && (
@@ -371,7 +496,7 @@ function AnswerBlock({ state, phone, onFeedback, onAgain, onAgent }) {
       {done && state.unsupported && (
         <div style={{ display: 'flex', gap: 10, alignItems: 'baseline', flexWrap: 'wrap' }}>
           <Reason glyph="alert" tone="attention">{tv('hedwig.v2.ask.unsupported', 'Unsupported')}</Reason>
-          <span style={{ fontSize: 12, color: V.muted }}>{tv('hedwig.v2.ask.unsupportedWhy', 'The answer cites none of your messages. Check it before you rely on it.')}</span>
+          <span style={{ fontSize: 12, color: V.muted }}>{webUsed ? tv('hedwig.v2.ask.unsupportedWhyAny', 'The answer cites none of its sources. Check it before you rely on it.') : tv('hedwig.v2.ask.unsupportedWhy', 'The answer cites none of your messages. Check it before you rely on it.')}</span>
         </div>
       )}
       {done && state.invalidCitations?.length > 0 && (
@@ -391,6 +516,7 @@ function AnswerBlock({ state, phone, onFeedback, onAgain, onAgent }) {
             </>
           )}
           {state.answer && <IconButton icon="copy" data-copy="" label={tv('hedwig.v2.ask.copy', 'Copy')} size={phone ? 44 : 28} onClick={() => navigator.clipboard?.writeText(ro.text)} style={{ color: V.muted }} />}
+          {onDeeper && <LinkBtn hit={phone} onClick={onDeeper}>{tv('hedwig.v2.ask.digDeeper', 'Dig deeper')}</LinkBtn>}
           {onAgent && <LinkBtn muted hit={phone} onClick={onAgent}>{tv('hedwig.v2.ask.agent', 'Ask the agent instead')}</LinkBtn>}
         </div>
       )}
@@ -418,6 +544,31 @@ function AnswerBlock({ state, phone, onFeedback, onAgain, onAgent }) {
             {listed.map((s, i) => {
               const m = s.message || {};
               const isCited = !anyCited || s.cited;
+              if (s.web) {
+                const w = s.web;
+                return (
+                  <li key={s.source}>
+                    {i > 0 && <Hair />}
+                    <a
+                      href={w.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      data-web-source=""
+                      title={w.url}
+                      style={{ display: 'grid', gridTemplateColumns: '28px minmax(0, 1fr) auto', columnGap: 10, alignItems: 'baseline', width: '100%', padding: '10px 0', minHeight: 44, boxSizing: 'border-box', color: isCited ? V.ink : V.muted, fontSize: 13, textDecoration: 'none' }}
+                    >
+                      <Mono size={11} color={isCited ? V.accentInk : V.muted} style={{ fontWeight: 600 }}>{s.n}</Mono>
+                      <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        <Icon name="globe" size={12} strokeWidth={1.8} style={{ display: 'inline-block', verticalAlign: '-1px', marginRight: 5 }} />
+                        <span style={{ fontWeight: 500 }}>{w.host}</span>
+                        {w.title && w.title !== w.host ? ` · ${w.title}` : ''}
+                        {w.snippetOnly ? <span style={{ color: V.muted }}>{` · ${tv('hedwig.v2.ask.snippetOnly', 'search result only')}`}</span> : null}
+                      </span>
+                      <Icon name="external" size={12} strokeWidth={1.8} style={{ color: V.muted }} />
+                    </a>
+                  </li>
+                );
+              }
               return (
                 <li key={s.source}>
                   {i > 0 && <Hair />}
@@ -439,7 +590,9 @@ function AnswerBlock({ state, phone, onFeedback, onAgain, onAgent }) {
           </ol>
           {moreSources > 0 && (
             <LinkBtn muted hit={phone} onClick={() => setAllSources(true)} style={{ alignSelf: 'flex-start', marginTop: 4, fontSize: 12 }}>
-              {tvn(moreSources, ['hedwig.v2.ask.moreSourcesOne', 'Show 1 more message it read'], ['hedwig.v2.ask.moreSourcesMany', 'Show {{n}} more messages it read'])}
+              {webUsed
+                ? tvn(moreSources, ['hedwig.v2.ask.moreSourcesAnyOne', 'Show 1 more source it read'], ['hedwig.v2.ask.moreSourcesAnyMany', 'Show {{n}} more sources it read'])
+                : tvn(moreSources, ['hedwig.v2.ask.moreSourcesOne', 'Show 1 more message it read'], ['hedwig.v2.ask.moreSourcesMany', 'Show {{n}} more messages it read'])}
             </LinkBtn>
           )}
         </section>

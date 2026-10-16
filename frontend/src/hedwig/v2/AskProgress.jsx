@@ -49,6 +49,38 @@ export function stepLine(step) {
           ? tvn(step.count, ['hedwig.v2.ask.progress.readingOne', 'Reading 1 message'], ['hedwig.v2.ask.progress.readingMany', 'Reading {{n}} messages'])
           : tvn(step.count, ['hedwig.v2.ask.progress.readOne', 'Read 1 message'], ['hedwig.v2.ask.progress.readMany', 'Read {{n}} messages']),
       };
+    case 'thread':
+      return live
+        ? { text: tv('hedwig.v2.ask.progress.threadReading', 'Reading this thread') }
+        : { text: tv('hedwig.v2.ask.progress.threadRead', 'Read this thread'), detail: tvn(step.count, ['hedwig.v2.ask.progress.messagesOne', '1 message'], ['hedwig.v2.ask.progress.messagesMany', '{{n}} messages']) };
+    case 'web': {
+      const text = live ? tv('hedwig.v2.ask.progress.webSearching', 'Searching the web') : tv('hedwig.v2.ask.progress.webSearched', 'Searched the web');
+      if (live) return { text, query: step.text };
+      return { text, query: step.text, detail: tvn(Number(step.found) || 0, ['hedwig.v2.ask.progress.resultsOne', '1 result'], ['hedwig.v2.ask.progress.resultsMany', '{{n}} results']) };
+    }
+    case 'webread': {
+      if (live) return { text: tvn(step.count || 0, ['hedwig.v2.ask.progress.pagesReadingOne', 'Reading 1 page'], ['hedwig.v2.ask.progress.pagesReadingMany', 'Reading {{n}} pages']) };
+      const hosts = [...new Set((step.pages || []).filter((x) => x && x.ok && x.host).map((x) => x.host))];
+      const failed = (step.pages || []).filter((x) => x && !x.ok).length;
+      return {
+        text: tvn(step.count || 0, ['hedwig.v2.ask.progress.pagesReadOne', 'Read 1 page'], ['hedwig.v2.ask.progress.pagesReadMany', 'Read {{n}} pages']),
+        query: hosts.slice(0, 3).join(', ') || undefined,
+        detail: failed ? tvn(failed, ['hedwig.v2.ask.progress.pagesFailedOne', '1 would not open'], ['hedwig.v2.ask.progress.pagesFailedMany', '{{n}} would not open']) : undefined,
+      };
+    }
+    case 'links': {
+      const skipped = step.skipped || [];
+      const reasons = [...new Set(skipped.map((x) => linkReason(x?.reason)).filter(Boolean))].join(', ');
+      return {
+        text: step.opened
+          ? tvn(step.opened, ['hedwig.v2.ask.progress.linksOne', 'Followed 1 link from the mail'], ['hedwig.v2.ask.progress.linksMany', 'Followed {{n}} links from the mail'])
+          : tv('hedwig.v2.ask.progress.linksNone', 'Followed no links from the mail'),
+        detail: skipped.length ? tvn(skipped.length, ['hedwig.v2.ask.progress.skippedOne', 'skipped 1 ({{why}})'], ['hedwig.v2.ask.progress.skippedMany', 'skipped {{n}} ({{why}})'], { why: reasons }) : undefined,
+      };
+    }
+    case 'dig':
+      if (live) return { text: tv('hedwig.v2.ask.progress.dig', 'Deciding what else to read') };
+      return { text: step.enough ? tv('hedwig.v2.ask.progress.digEnough', 'Read enough') : tv('hedwig.v2.ask.progress.digMore', 'Looking further') };
     case 'write':
       return { text: live ? tv('hedwig.v2.ask.progress.writing', 'Writing the answer') : tv('hedwig.v2.ask.progress.written', 'Wrote the answer') };
     default:
@@ -56,13 +88,31 @@ export function stepLine(step) {
   }
 }
 
-/** The folded line once the answer is there: searches, messages read, time taken. */
+/** Why a link in the mail was not followed, in words. */
+export function linkReason(reason) {
+  switch (reason) {
+    case 'unsubscribe': return tv('hedwig.v2.ask.progress.whyUnsubscribe', 'unsubscribe');
+    case 'confirm': return tv('hedwig.v2.ask.progress.whyConfirm', 'confirm');
+    case 'password': return tv('hedwig.v2.ask.progress.whyPassword', 'password');
+    case 'sign-in': case 'token': return tv('hedwig.v2.ask.progress.whySignIn', 'sign-in');
+    case 'respond': return tv('hedwig.v2.ask.progress.whyRespond', 'reply to an invitation');
+    case 'payment': return tv('hedwig.v2.ask.progress.whyPayment', 'payment');
+    case 'tracker': return tv('hedwig.v2.ask.progress.whyTracker', 'click tracker');
+    default: return reason ? String(reason) : '';
+  }
+}
+
+/** The folded line once the answer is there: searches, messages and pages read, time taken. */
 export function summaryLine(steps, ms) {
   const searches = steps.filter((x) => x.kind === 'search').length;
   const read = steps.find((x) => x.kind === 'read')?.count || 0;
+  const web = steps.filter((x) => x.kind === 'web').length;
+  const pages = steps.filter((x) => x.kind === 'webread').reduce((n, x) => n + (Number(x.count) || 0), 0);
   return [
     searches ? tvn(searches, ['hedwig.v2.ask.progress.waysOne', 'Searched once'], ['hedwig.v2.ask.progress.waysMany', 'Searched {{n}} ways']) : null,
     read ? tvn(read, ['hedwig.v2.ask.progress.readOne', 'Read 1 message'], ['hedwig.v2.ask.progress.readMany', 'Read {{n}} messages']) : null,
+    web && !pages ? tvn(web, ['hedwig.v2.ask.progress.webOne', 'Searched the web once'], ['hedwig.v2.ask.progress.webMany', 'Searched the web {{n}} times']) : null,
+    pages ? tvn(pages, ['hedwig.v2.ask.progress.pagesReadOne', 'Read 1 page'], ['hedwig.v2.ask.progress.pagesReadMany', 'Read {{n}} pages']) : null,
     duration(ms) || null,
   ].filter(Boolean).join(' · ');
 }

@@ -5,7 +5,7 @@ import { loadMessagesLite } from '../context/shapes.js';
 import { httpError, isUuid } from '../context/util.js';
 
 const COLS = `id, question, created_at, completed_at, status, answer, citations, sources, unsupported, not_found,
-  follow_up_of, plan, feedback, entity_id, topic_id, model`;
+  follow_up_of, plan, feedback, entity_id, topic_id, model, thread_key, web, web_sources`;
 
 function shape(row, lite) {
   const ids = Array.isArray(row.sources) ? row.sources : [];
@@ -24,6 +24,10 @@ function shape(row, lite) {
     followUpOf: row.follow_up_of || null,
     entityId: row.entity_id || null,
     topicId: row.topic_id || null,
+    threadKey: row.thread_key || null,
+    webAllowed: row.web ?? null,
+    // Numbered after the mail sources, as the answer cites them; never fetched again.
+    web: Array.isArray(row.web_sources) ? row.web_sources : [],
     feedback: row.feedback || null,
     plan: row.plan || null,
     model: row.model || null,
@@ -37,11 +41,18 @@ async function liteFor(userId, rows) {
   return new Map((await loadMessagesLite(userId, ids, { dedupe: false })).map((m) => [m.id, m]));
 }
 
-/** Newest first. Each entry: { id, question, created_at, status, answer, citations, sources: [{ n, message }], … }. */
-export async function askHistory(userId, { limit = 50 } = {}) {
+/**
+ * Newest first. Each entry: { id, question, created_at, status, answer, citations, sources: [{ n, message }], web, … }.
+ * threadKey: only the answers asked about that thread (Ask about this reopens the thread's chat).
+ */
+export async function askHistory(userId, { limit = 50, threadKey = null } = {}) {
+  const max = Math.max(1, Math.min(200, Number(limit) || 50));
+  const key = typeof threadKey === 'string' && threadKey.trim() ? threadKey.trim().slice(0, 1000) : null;
   const { rows } = await query(
-    `SELECT ${COLS} FROM hedwig_ask_log WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2`,
-    [userId, Math.max(1, Math.min(200, Number(limit) || 50))],
+    key
+      ? `SELECT ${COLS} FROM hedwig_ask_log WHERE user_id = $1 AND thread_key = $3 ORDER BY created_at DESC LIMIT $2`
+      : `SELECT ${COLS} FROM hedwig_ask_log WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2`,
+    key ? [userId, max, key] : [userId, max],
   );
   const lite = await liteFor(userId, rows);
   return rows.map((r) => shape(r, lite));
