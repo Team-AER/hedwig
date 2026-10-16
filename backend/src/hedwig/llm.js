@@ -326,16 +326,20 @@ export async function llmAvailable(userId) {
 // probe and the API's /status agree and a call that fails in one process spares the other.
 const health = new Map(); // model -> record (see blankHealth)
 const HEALTH_KEY = 'hedwig:model-health:';
+const READINESS_KEY = 'hedwig:model-readiness:';
+const readiness = new Map(); // separate from inference verdicts, including in Redis
 const HEALTH_TTL_SEC = 1800;
 const HEALTH_SYNC_MS = 5000;
 let lastHealthSync = 0;
 const probing = new Map(); // model -> in-flight probe promise
+const probingKinds = new Map();
 let lastProbeRun = 0;
 
 function blankHealth(model) {
   return {
     model, degraded: false, source: null, reason: null, since: 0, until: 0,
     checkedAt: 0, probedAt: 0, latencyMs: null, okStreak: 0, failStreak: 0, lastOkAt: 0, lastError: null, updatedAt: 0,
+    probeKind: null,
   };
 }
 
@@ -348,16 +352,54 @@ function healthOf(model) {
 /** Is this model degraded right now (probe verdict, catalog, or a recent failed call)? */
 export function primaryDegraded(model, now = Date.now()) {
   const h = health.get(model);
-  if (!h || !h.degraded) return false;
-  if (h.source === 'call') return h.until > now;
-  return true;
+  if (h?.degraded && (h.source !== 'call' || h.until > now)) return true;
+  return Boolean(readiness.get(model)?.degraded);
 }
 
-function publishHealth(h) {
+function observedHealth(model) {
+  const h = health.get(model) || blankHealth(model);
+  const r = readiness.get(model);
+  if (!r) return h;
+  const recent = r.checkedAt >= h.checkedAt;
+  const routeFailure = r.degraded && !(h.degraded && (h.source !== 'call' || h.until > Date.now()));
+  return { ...h, ...(routeFailure ? { source: 'readiness', reason: r.failureReason || r.error, since: r.since, lastError: r.failureReason || r.error } : {}),
+    checkedAt: Math.max(h.checkedAt, r.checkedAt), probedAt: Math.max(h.probedAt, r.probedAt),
+    probeKind: recent ? 'readiness' : h.probeKind, latencyMs: recent ? null : h.latencyMs,
+    readinessCheckedAt: r.checkedAt, readinessOk: r.ready, readinessLatencyMs: r.latencyMs };
+}
+
+function publishHealth(h, prefix = HEALTH_KEY) {
   const record = JSON.stringify(h);
   runtimeRedis({ waitMs: 0 })
-    .then((c) => (c && typeof c.set === 'function' ? c.set(HEALTH_KEY + h.model, record, { EX: HEALTH_TTL_SEC }) : null))
+    .then((c) => (c && typeof c.set === 'function' ? c.set(prefix + h.model, record, { EX: HEALTH_TTL_SEC }) : null))
     .catch(() => {});
+}
+
+// A GET that began before another process recorded an outage must not clear that outage.
+// Only the real-inference recovery path may publish an unguarded readiness verdict.
+const PUBLISH_READINESS = `-- hedwig-readiness-observation
+local incoming = cjson.decode(ARGV[1])
+local raw = redis.call('GET', KEYS[1])
+if raw then
+  local old = cjson.decode(raw)
+  if old.degraded then
+    incoming.degraded = true
+    incoming.since = old.since
+    incoming.failureReason = old.failureReason or old.error
+    incoming.failStreak = math.max(incoming.failStreak or 0, old.failStreak or 0)
+  end
+end
+local value = cjson.encode(incoming)
+redis.call('SET', KEYS[1], value, 'EX', ARGV[2])
+return value`;
+
+async function publishReadiness(r) {
+  try {
+    const c = await runtimeRedis({ waitMs: 0 });
+    if (!c || typeof c.eval !== 'function') return;
+    const saved = await c.eval(PUBLISH_READINESS, { keys: [READINESS_KEY + r.model], arguments: [JSON.stringify(r), String(HEALTH_TTL_SEC)] });
+    if (readiness.get(r.model) === r) Object.assign(r, JSON.parse(saved));
+  } catch { /* local observation remains usable when Redis is unavailable */ }
 }
 
 /** Pull other processes' verdicts for these models from Redis (throttled; never throws). */
@@ -370,13 +412,18 @@ async function syncHealth(models, { force = false } = {}) {
   try {
     const c = await runtimeRedis({ waitMs: 0 });
     if (!c || typeof c.mGet !== 'function') return;
-    const values = await c.mGet(list.map((m) => HEALTH_KEY + m));
+    const values = await c.mGet([...list.map((m) => HEALTH_KEY + m), ...list.map((m) => READINESS_KEY + m)]);
     (values || []).forEach((v, i) => {
       if (!v) return;
       let remote;
       try { remote = JSON.parse(v); } catch { return; }
-      const h = healthOf(list[i]);
-      if ((Number(remote.updatedAt) || 0) > h.updatedAt) Object.assign(h, remote, { model: list[i] });
+      const model = list[i % list.length];
+      if (i >= list.length) {
+        if ((Number(remote.updatedAt) || 0) > (readiness.get(model)?.updatedAt || 0)) readiness.set(model, { ...remote, model });
+      } else {
+        const h = healthOf(model);
+        if ((Number(remote.updatedAt) || 0) > h.updatedAt) Object.assign(h, remote, { model });
+      }
     });
   } catch { /* health sharing is best effort */ }
 }
@@ -401,6 +448,48 @@ function probeTargets(cfg) {
 }
 
 const OFFLINE = /^(offline|disabled|error|down|unavailable)$/i;
+
+/** A fresh route-readiness observation; it never claims a model generated a token. */
+async function probeReadiness(model, endpoint, cfg, fetchFn) {
+  const started = Date.now();
+  const previous = readiness.get(model);
+  const timeoutMs = Number(cfg['llm.probe.timeoutMs']) || 10_000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let ready = false; let error = null;
+  try {
+    const url = new URL(endpoint);
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('invalid readiness URL');
+    // These opt-in endpoints must authorize the trusted network themselves. Do not send the
+    // gateway's bearer key to another origin, follow redirects, or reuse its cached catalog.
+    const res = await fetchFn(url.href, {
+      method: 'GET', cache: 'no-store', redirect: 'error', signal: controller.signal,
+      headers: { Accept: 'application/json', 'Cache-Control': 'no-cache', ...gatewayHeaders('runtime.readiness') },
+    });
+    if (!res.ok) throw new Error(`readiness answered ${res.status}`);
+    const body = await res.json();
+    if (!Array.isArray(body?.data) || !body.data.some((item) => item?.id === model)) throw new Error('readiness response does not contain the expected model');
+    ready = true;
+  } catch (err) {
+    error = controller.signal.aborted ? `readiness did not answer within ${timeoutMs} ms` : errorText(err);
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
+  }
+  const now = Date.now();
+  const failStreak = ready ? 0 : (previous?.failStreak || 0) + 1;
+  const r = { model, checkedAt: now, probedAt: started, updatedAt: now, ready, error,
+    latencyMs: ready ? now - started : null, failStreak,
+    degraded: Boolean(previous?.degraded) || failStreak >= Math.max(1, Number(cfg['llm.probe.degradeAfter']) || 1),
+    failureReason: previous?.degraded ? previous.failureReason || previous.error : error,
+    since: previous?.degraded ? previous.since : ready ? 0 : (previous?.since || now) };
+  // Never write the inference record: an HTTP success cannot overwrite a concurrent call
+  // failure in this process or another Redis-sharing process. Readiness is a distinct signal.
+  readiness.set(model, r);
+  await publishReadiness(r);
+  return { model, kind: 'readiness', ok: null, ready, latencyMs: null,
+    readinessLatencyMs: r.latencyMs, error, degraded: primaryDegraded(model, now) };
+}
 
 /** One probe: a tiny completion outside the lanes, not logged to hedwig_ai_calls. */
 async function probeOne(model, cfg, catalog, fetchFn) {
@@ -460,9 +549,16 @@ async function probeOne(model, cfg, catalog, fetchFn) {
   const h = healthOf(model);
   h.checkedAt = now;
   h.updatedAt = now;
+  h.probeKind = 'inference';
   if (ok) {
+    if (readiness.get(model)?.degraded && h.lastOkAt <= readiness.get(model).checkedAt) h.okStreak = 0;
     h.latencyMs = latencyMs; h.okStreak++; h.failStreak = 0; h.lastOkAt = now; h.lastError = null;
     const recoverAfter = Math.max(1, Number(cfg['llm.probe.recoverAfter']) || 2);
+    const r = readiness.get(model);
+    if (r?.degraded && h.okStreak >= recoverAfter) {
+      Object.assign(r, { degraded: false, failStreak: 0, updatedAt: now });
+      publishHealth(r, READINESS_KEY);
+    }
     if (h.degraded && (h.okStreak >= recoverAfter || (h.source === 'call' && h.until <= now))) {
       console.warn(`[hedwig] model ${model} answers again (${latencyMs} ms); traffic returns to it`);
       Object.assign(h, { degraded: false, source: null, reason: null, since: 0, until: 0 });
@@ -493,7 +589,7 @@ async function probeOne(model, cfg, catalog, fetchFn) {
 function probeEveryMs(model, cfg, now = Date.now()) {
   const every = (Number(cfg['llm.probe.everySec']) || 60) * 1000;
   const h = health.get(model);
-  if (!h || !primaryDegraded(model, now) || h.source === 'catalog' || h.okStreak > 0) return every;
+  if (!primaryDegraded(model, now) || h?.source === 'catalog' || h?.okStreak > 0) return every;
   return Math.max(every, (Number(cfg['llm.probe.degradedEverySec']) || 300) * 1000);
 }
 
@@ -505,7 +601,7 @@ function probeEveryMs(model, cfg, now = Date.now()) {
  * without a restart; the slack absorbs the worker loop's tick jitter.
  */
 function probeDue(model, cfg, now = Date.now()) {
-  const h = health.get(model);
+  const h = observedHealth(model);
   const last = h ? (h.probedAt || h.checkedAt) : 0;
   if (!last) return true;
   return now - last >= probeEveryMs(model, cfg, now) - 3000;
@@ -526,13 +622,20 @@ export async function probeModels({ fetchFn = fetch, force = false } = {}) {
   await syncHealth(targets, { force: true });
   const catalog = await getCatalog({ fetchFn }).catch(() => ({ models: [] }));
   const now = Date.now();
-  const models = await Promise.all(targets.map((model) => {
+  const models = await Promise.all(targets.map(async (model) => {
+    while (force && probingKinds.get(model) === 'readiness') await probing.get(model);
     if (probing.has(model)) return probing.get(model);
     if (!force && !probeDue(model, cfg, now)) {
-      const h = health.get(model);
+      const h = observedHealth(model);
       return { model, ok: null, latencyMs: h?.latencyMs ?? null, error: h?.lastError ?? null, degraded: primaryDegraded(model, now), skipped: primaryDegraded(model, now) ? 'backoff' : 'recent' };
     }
-    const p = probeOne(model, cfg, catalog, fetchFn).finally(() => probing.delete(model));
+    const endpoint = cfg['llm.probe.readinessEndpoints']?.[model];
+    const h = healthOf(model);
+    // Keep inference recovery even after a failed call's cooldown expires. Readiness does not
+    // erase an unverified failure, and a forced admin probe always exercises the model itself.
+    const passive = !force && typeof endpoint === 'string' && endpoint.trim() && !primaryDegraded(model) && !h.degraded && !h.failStreak && !h.lastError;
+    const p = (passive ? probeReadiness(model, endpoint, cfg, fetchFn) : probeOne(model, cfg, catalog, fetchFn)).finally(() => { probing.delete(model); probingKinds.delete(model); });
+    probingKinds.set(model, passive ? 'readiness' : 'inference');
     probing.set(model, p);
     return p;
   }));
@@ -543,9 +646,9 @@ export async function probeModels({ fetchFn = fetch, force = false } = {}) {
 /** Before the first verdict on a model exists anywhere (this process or Redis), probe once. */
 async function firstProbe(model, cfg, fetchFn) {
   if (!model || cfg['llm.probe.enabled'] !== true) return;
-  if (health.get(model)?.checkedAt) return;
+  if (observedHealth(model).checkedAt) return;
   await syncHealth([model], { force: true });
-  if (health.get(model)?.checkedAt) return;
+  if (observedHealth(model).checkedAt) return;
   await probeModels(fetchFn ? { fetchFn } : {}).catch(() => {});
 }
 
@@ -554,12 +657,15 @@ export async function modelHealth(models) {
   await syncHealth(models);
   const now = Date.now();
   return Object.fromEntries(models.map((m) => {
-    const h = health.get(m) || blankHealth(m);
+    const h = observedHealth(m);
     return [m, {
       degraded: primaryDegraded(m, now), source: primaryDegraded(m, now) ? h.source : null, reason: primaryDegraded(m, now) ? h.reason : null,
       since: h.since && primaryDegraded(m, now) ? new Date(h.since).toISOString() : null,
       checkedAt: h.checkedAt ? new Date(h.checkedAt).toISOString() : null, latencyMs: h.latencyMs, lastError: h.lastError,
       lastOkAt: h.lastOkAt ? new Date(h.lastOkAt).toISOString() : null,
+      probeKind: h.probeKind ?? null, readinessOk: h.readinessOk ?? null,
+      readinessCheckedAt: h.readinessCheckedAt ? new Date(h.readinessCheckedAt).toISOString() : null,
+      readinessLatencyMs: h.readinessLatencyMs ?? null,
     }];
   }));
 }
@@ -604,7 +710,7 @@ export async function tierStatus(userId = null, { fetchFn } = {}) {
   const describe = (tier, role, label) => {
     const model = cfg[`llm.models.${role}`] || null;
     const fb = fallback && fallback !== model ? fallback : null;
-    const h = health.get(model) || blankHealth(model);
+    const h = observedHealth(model);
     const degraded = primaryDegraded(model, now);
     const active = degraded && fb ? fb : model;
     return {
@@ -615,6 +721,8 @@ export async function tierStatus(userId = null, { fetchFn } = {}) {
       since: degraded && h.since ? new Date(h.since).toISOString() : null,
       checkedAt: h.checkedAt ? new Date(h.checkedAt).toISOString() : null,
       latencyMs: h.latencyMs ?? null,
+      probeKind: h.probeKind ?? null, readinessOk: h.readinessOk ?? null,
+      readinessLatencyMs: h.readinessLatencyMs ?? null,
     };
   };
   const reflex = describe('reflex', 'fast', TIER_INFO.reflex.label);
@@ -623,10 +731,10 @@ export async function tierStatus(userId = null, { fetchFn } = {}) {
   const everySec = Number(cfg['llm.probe.everySec']) || 60;
   const enabled = cfg['llm.probe.enabled'] !== false && Boolean(cfg.enabled && cfg['llm.baseUrl']);
   // Only when the key is really on (the schema default), not merely absent from a test's config.
-  if (enabled && cfg['llm.probe.enabled'] === true && targets.some((m) => !((health.get(m)?.checkedAt || 0) > now - 3 * probeEveryMs(m, cfg, now)))) {
+  if (enabled && cfg['llm.probe.enabled'] === true && targets.some((m) => !(observedHealth(m).checkedAt > now - 3 * probeEveryMs(m, cfg, now)))) {
     probeModels(fetchFn ? { fetchFn } : {}).catch(() => {});
   }
-  const probedAt = Math.max(lastProbeRun, ...targets.map((m) => health.get(m)?.checkedAt || 0));
+  const probedAt = Math.max(lastProbeRun, ...targets.map((m) => observedHealth(m).checkedAt));
   return {
     reflex, reasoning, agent,
     notice: tierNotice(reflex, reasoning),
@@ -687,7 +795,7 @@ async function prepare(opts) {
   if (opts.noFallback && !explicitModel) {
     await syncHealth([primary]);
     if (primaryDegraded(primary)) {
-      const h = health.get(primary);
+      const h = observedHealth(primary);
       throw new LlmError(`${TIER_INFO[roleTier(role)]?.label || role} model ${primary} is degraded (${h?.reason || 'not answering'})`, { status: 503, code: 'tier_degraded' });
     }
   }
@@ -700,7 +808,7 @@ async function prepare(opts) {
       fallback = null;
       await syncHealth([primary]);
       if (primaryDegraded(primary)) {
-        throw new LlmError(`model ${primary} is degraded (${health.get(primary)?.reason || 'not answering'}) and the fallback ${cfg['llm.fallbackModel']} cannot call tools`, { status: 503, code: 'tier_degraded' });
+        throw new LlmError(`model ${primary} is degraded (${observedHealth(primary).reason || 'not answering'}) and the fallback ${cfg['llm.fallbackModel']} cannot call tools`, { status: 503, code: 'tier_degraded' });
       }
     }
   }
@@ -1152,7 +1260,9 @@ export function _resetLlmState() {
   catalogCache = { url: null, data: null, expiry: 0 };
   semaphores.clear();
   health.clear();
+  readiness.clear();
   probing.clear();
+  probingKinds.clear();
   lastHealthSync = 0;
   lastProbeRun = 0;
   exemptWarned.clear();

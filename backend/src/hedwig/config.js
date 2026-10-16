@@ -140,6 +140,7 @@ export const SCHEMA = [
   // --- end v2 runtime ---
   // --- v2 runtime audit ---
   { key: 'llm.probe.enabled', type: 'boolean', default: true, group: 'models', label: 'Probe each configured model on a schedule', help: 'A tiny completion per model. A model that does not answer is marked degraded and its calls go straight to the fallback until it answers again, so no call pays the fallback wait.' },
+  { key: 'llm.probe.readinessEndpoints', type: 'json', default: {}, group: 'models', label: 'Readiness endpoints for idle models', help: 'Map model IDs to fresh, scoped OpenAI /models readiness URLs on a trusted network. Healthy scheduled checks use GET without loading the model. No gateway credentials are forwarded. Degraded recovery and Probe now still test an actual completion.' },
   { key: 'llm.probe.everySec', type: 'number', default: 60, min: 15, max: 3600, group: 'models', label: 'Probe every (s)' },
   { key: 'llm.probe.timeoutMs', type: 'number', default: 60_000, min: 1000, max: 300_000, group: 'models', label: 'A probe that gets no answer within (ms) marks the model degraded', help: 'A one-token probe; a model that cannot start an answer within a minute is treated as unavailable until it answers again.' },
   { key: 'llm.probe.degradeAfter', type: 'number', default: 1, min: 1, max: 10, group: 'models', label: 'Failed probes in a row before a model is degraded' },

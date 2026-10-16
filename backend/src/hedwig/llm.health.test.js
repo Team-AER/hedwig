@@ -60,7 +60,13 @@ function fakeRedis() {
     isReady: true, kv,
     async set(k, v) { kv.set(k, v); return 'OK'; },
     async mGet(keys) { return keys.map((k) => kv.get(k) ?? null); },
-    async eval() { return 1; },
+    async eval(script, { keys, arguments: args } = {}) {
+      if (!script.includes('hedwig-readiness-observation')) return 1;
+      const incoming = JSON.parse(args[0]);
+      const old = JSON.parse(kv.get(keys[0]) || 'null');
+      if (old?.degraded) Object.assign(incoming, { degraded: true, since: old.since, failureReason: old.failureReason || old.error, failStreak: Math.max(incoming.failStreak || 0, old.failStreak || 0) });
+      const value = JSON.stringify(incoming); kv.set(keys[0], value); return value;
+    },
     async zRem() { return 1; },
   };
 }
@@ -211,6 +217,127 @@ describe('model probe', () => {
     _resetLlmState(); // "another process": no local verdict
     setLaneRedis(redis);
     expect((await activeModels()).long).toMatchObject({ primary: QWEN, active: GEMMA, degraded: true });
+  });
+});
+
+describe('opt-in model readiness', () => {
+  const endpoint = 'http://avifors.test/backend/text/v1/models';
+  const ready = () => new Response(JSON.stringify({ data: [{ id: GEMMA }] }), { status: 200 });
+  const configured = (answer = ready) => {
+    cfg['llm.probe.readinessEndpoints'] = { [GEMMA]: endpoint };
+    return vi.fn((url, init) => url === endpoint ? answer(init) : gw.fetch(url, init));
+  };
+
+  it('uses fresh scoped GET only for the opted-in model, without credentials or fake TTFT', async () => {
+    cfg['llm.apiKey'] = 'gateway-secret';
+    const fetchFn = configured();
+    const result = await probeModels({ fetchFn });
+    expect(result.models.find((m) => m.model === GEMMA)).toMatchObject({ kind: 'readiness', ok: null, ready: true, latencyMs: null, degraded: false });
+    expect(gw.callsFor('runtime.probe').map((c) => c.model)).toEqual([QWEN]);
+    const [, init] = fetchFn.mock.calls.find(([url]) => url === endpoint);
+    expect(init).toMatchObject({ method: 'GET', cache: 'no-store', redirect: 'error', headers: { 'X-Workflow': 'runtime.readiness' } });
+    expect(new Headers(init.headers).has('authorization')).toBe(false);
+    const health = (await llm.modelHealth([GEMMA]))[GEMMA];
+    expect(health).toMatchObject({ probeKind: 'readiness', readinessOk: true, latencyMs: null, lastOkAt: null });
+    expect((await tierStatus(USER)).reflex).toMatchObject({ probeKind: 'readiness', readinessOk: true, latencyMs: null });
+    later(61);
+    await probeModels({ fetchFn });
+    expect(fetchFn.mock.calls.filter(([url]) => url === endpoint)).toHaveLength(2);
+  });
+
+  it.each([
+    ['unavailable', () => new Response('{}', { status: 503 })],
+    ['wrong model', () => new Response(JSON.stringify({ data: [{ id: 'other' }] }))],
+    ['invalid JSON', () => new Response('not json')],
+    ['timeout', (init) => new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true }))],
+  ])('rejects %s readiness even while the cached catalog calls the model ready', async (_, response) => {
+    const fetchFn = configured(response);
+    const result = await probeModels({ fetchFn });
+    expect(result.models.find((m) => m.model === GEMMA)).toMatchObject({ ok: null, ready: false, degraded: true, latencyMs: null });
+    expect((await llm.modelHealth([GEMMA]))[GEMMA]).toMatchObject({ source: 'readiness', readinessOk: false });
+    expect(primaryDegraded(GEMMA)).toBe(true);
+  });
+
+  it('uses real inference to recover failed readiness, without counting prior successful probes', async () => {
+    await probeModels();
+    later(61);
+    const fetchFn = configured(() => new Response('{}', { status: 503 }));
+    await probeModels({ fetchFn });
+    later(301);
+    await probeModels({ fetchFn });
+    expect(primaryDegraded(GEMMA)).toBe(true);
+    later(61);
+    await probeModels({ fetchFn });
+    expect(primaryDegraded(GEMMA)).toBe(false);
+    expect(fetchFn.mock.calls.filter(([url]) => url === endpoint)).toHaveLength(1);
+    expect(gw.callsFor('runtime.probe').filter((c) => c.model === GEMMA)).toHaveLength(3);
+  });
+
+  it('retains real inference recovery for a model whose inference probe failed', async () => {
+    const fetchFn = configured();
+    gw.health(GEMMA, 503);
+    await probeModels({ fetchFn, force: true });
+    gw.health(GEMMA, 'ok');
+    later(301);
+    await probeModels({ fetchFn });
+    expect(primaryDegraded(GEMMA)).toBe(true);
+    later(61);
+    await probeModels({ fetchFn });
+    expect(primaryDegraded(GEMMA)).toBe(false);
+    expect(fetchFn.mock.calls.some(([url]) => url === endpoint)).toBe(false);
+    later(61);
+    await probeModels({ fetchFn });
+    expect(fetchFn.mock.calls.some(([url]) => url === endpoint)).toBe(true);
+  });
+
+  it('never overwrites a concurrent inference failure published by another process', async () => {
+    const redis = fakeRedis(); setLaneRedis(redis);
+    let release;
+    const fetchFn = configured(() => new Promise((resolve) => { release = resolve; }));
+    const pending = probeModels({ fetchFn });
+    await settle();
+    const failure = { model: GEMMA, degraded: true, source: 'call', reason: 'real call failed', since: Date.now(), until: Date.now() + 300000, checkedAt: 0, probedAt: 0, okStreak: 0, failStreak: 0, lastOkAt: 0, lastError: 'real call failed', updatedAt: Date.now() + 1 };
+    const record = JSON.stringify(failure);
+    redis.kv.set(`hedwig:model-health:${GEMMA}`, record);
+    release(ready()); await pending; await settle();
+    expect(redis.kv.get(`hedwig:model-health:${GEMMA}`)).toBe(record);
+    expect(JSON.parse(redis.kv.get(`hedwig:model-readiness:${GEMMA}`))).toMatchObject({ ready: true, degraded: false });
+    _resetLlmState(); setLaneRedis(redis);
+    expect((await llm.modelHealth([GEMMA]))[GEMMA]).toMatchObject({ degraded: true, source: 'call', reason: 'real call failed' });
+  });
+
+  it("a slow readiness success cannot clear another process's readiness failure", async () => {
+    const redis = fakeRedis(); setLaneRedis(redis);
+    let release;
+    const fetchFn = configured(() => new Promise((resolve) => { release = resolve; }));
+    const pending = probeModels({ fetchFn }); await settle();
+    redis.kv.set(`hedwig:model-readiness:${GEMMA}`, JSON.stringify({ model: GEMMA, degraded: true, ready: false, failStreak: 1, error: 'route unavailable', failureReason: 'route unavailable', since: Date.now(), checkedAt: Date.now(), updatedAt: Date.now() }));
+    release(ready()); await pending;
+    expect(JSON.parse(redis.kv.get(`hedwig:model-readiness:${GEMMA}`))).toMatchObject({ degraded: true, ready: true, failureReason: 'route unavailable' });
+    expect(primaryDegraded(GEMMA)).toBe(true);
+    expect((await llm.modelHealth([GEMMA]))[GEMMA]).toMatchObject({ source: 'readiness', reason: 'route unavailable', readinessOk: true });
+  });
+
+  it('shares passive cadence through Redis without creating an inference verdict', async () => {
+    const redis = fakeRedis(); setLaneRedis(redis);
+    const fetchFn = configured();
+    await probeModels({ fetchFn }); await settle();
+    expect(redis.kv.has(`hedwig:model-health:${GEMMA}`)).toBe(false);
+    _resetLlmState(); setLaneRedis(redis); later(10);
+    const result = await probeModels({ fetchFn });
+    expect(result.models.find((m) => m.model === GEMMA)).toMatchObject({ skipped: 'recent', latencyMs: null });
+    expect(fetchFn.mock.calls.filter(([url]) => url === endpoint)).toHaveLength(1);
+  });
+
+  it('an explicit force during an in-flight readiness check still runs an actual completion', async () => {
+    let release;
+    const fetchFn = configured(() => new Promise((resolve) => { release = resolve; }));
+    const pending = probeModels({ fetchFn }); await settle();
+    const forced = probeModels({ fetchFn, force: true }); await settle();
+    expect(gw.callsFor('runtime.probe').filter((c) => c.model === GEMMA)).toHaveLength(0);
+    release(ready()); await pending; await forced;
+    expect(gw.callsFor('runtime.probe').filter((c) => c.model === GEMMA)).toHaveLength(1);
+    expect((await llm.modelHealth([GEMMA]))[GEMMA].lastOkAt).not.toBeNull();
   });
 });
 

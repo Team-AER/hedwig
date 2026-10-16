@@ -152,6 +152,14 @@ const CSS = `
 }
 .hw-v2 input::placeholder { color: var(--hw-muted); opacity: 1; }
 .hw-scroll { scrollbar-width: thin; scrollbar-color: var(--hw-line2) transparent; }
+/* Settings retain desktop density in panes; phone controls need finger-sized targets and
+   16px text so focusing a field does not zoom the page on iOS. */
+.hw-settings input, .hw-settings select, .hw-settings textarea { max-width: 100%; }
+@media (max-width: 767px) {
+  .hw-settings button, .hw-settings select { min-height: 44px !important; }
+  .hw-settings input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  .hw-settings select, .hw-settings textarea { min-height: 44px; font-size: 16px !important; }
+}
 @keyframes hw-pane-flash {
   0% { box-shadow: inset 0 0 0 2px var(--hw-accent); }
   100% { box-shadow: inset 0 0 0 2px transparent; }

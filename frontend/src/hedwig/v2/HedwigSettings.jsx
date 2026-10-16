@@ -219,12 +219,12 @@ export function attachmentOpenChoices() {
 // One per-user ui.* choice as segments on the field fill, radius 8.
 function ChoiceRow({ label, help, choices, current, onChoose, ...rest }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 0', borderTop: `1px solid ${V.line}` }}>
-      <span style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12, padding: '10px 0', borderTop: `1px solid ${V.line}` }}>
+      <span style={{ flex: '1 1 180px', display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
         <span style={{ fontSize: 13 }}>{label}</span>
         <span style={{ fontSize: 12, color: V.muted }}>{help}</span>
       </span>
-      <div role="radiogroup" aria-label={label} {...rest} style={{ display: 'inline-flex', padding: 2, gap: 2, borderRadius: 8, background: V.field, flexShrink: 0 }}>
+      <div role="radiogroup" aria-label={label} {...rest} style={{ display: 'inline-flex', flexWrap: 'wrap', maxWidth: '100%', padding: 2, gap: 2, borderRadius: 8, background: V.field, flexShrink: 0 }}>
         {choices.map((c) => {
           const on = current === c.value;
           return (
