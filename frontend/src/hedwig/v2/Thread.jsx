@@ -24,6 +24,7 @@ import { useV2 } from './state.js';
 import { v2Api, isMockMode, SORT_EVENTS, announceSortChange } from './client.js';
 import { isMissing, useRegenerate, useWork } from './hooks.js';
 import { loadThread, loadFullBody, regenerateStory, regenerateTldr, isRewriting } from './threadData.js';
+import { rememberAskSource, sourceMotion, takeCitation } from './askSource.js';
 import { putTldr } from './tldrs.js';
 import { isDraftMessage, openDraft, getReplyDraft, setReplyDraft, clearReplyDraft } from './drafts.js';
 import {
@@ -840,6 +841,13 @@ export default function Thread({ props }) {
   // The reply field's text is kept per thread: leaving a thread keeps what was typed (memory and
   // localStorage), coming back restores it. Server-side drafts stay with the composer.
   const threadKey = item ? (item.threadId || item.messageId) : null;
+  useLayoutEffect(() => {
+    if (t.loading) return;
+    const title = sectionRef.current?.querySelector('h2');
+    if (!title) return;
+    const rect = takeCitation(item);
+    return rect ? sourceMotion(title, rect, { link: true }) : undefined;
+  }, [item, t.loading]);
   const draftRef = useRef(draft);
   draftRef.current = draft;
   useEffect(() => {
@@ -1043,9 +1051,16 @@ export default function Thread({ props }) {
   // as the second key of a "g" sequence (g r, g h are Hedwig's go-to keys).
   // Ask about this: the Ask pane on this conversation (views/Ask.jsx), beside the reader. An empty
   // question so a question the pane was opened with earlier is not asked again.
-  const askAbout = () => useHedwig.getState().openView('hedwig.ask', {
-    threadKey, subject: data?.subject || item?.subject || '', stream: item?.stream || null, question: undefined,
-  });
+  const askAbout = () => {
+    rememberAskSource(threadKey, {
+      messageId: latest?.id || item?.messageId, threadId: item?.threadId || threadKey,
+      subject: data?.subject || item?.subject || '', from: latest?.from || item?.from,
+      quote: latest ? snippetOf(latest).slice(0, 240) : '',
+    }, sectionRef.current?.querySelector('h2')?.getBoundingClientRect());
+    useHedwig.getState().openView('hedwig.ask', {
+      threadKey, subject: data?.subject || item?.subject || '', stream: item?.stream || null, question: undefined,
+    });
+  };
   const askLabel = tv('hedwig.v2.thread.ask', 'Ask about this');
   const keyActions = useRef(null);
   keyActions.current = {

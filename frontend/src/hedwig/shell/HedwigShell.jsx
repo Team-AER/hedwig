@@ -1,3 +1,4 @@
+import { rememberAskRect } from '../v2/askSource.js';
 import { PaneHeader } from './PaneHeader.jsx';
 // The Hedwig desktop and tablet shell: the paper ground with its one cool light field, the pane
 // tree drawn as sheets (the rail glass, every other pane opaque content, 8px gutter and gaps,
@@ -141,7 +142,7 @@ function OverlayDrawer() {
       <div style={{ height: 44, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4, padding: '0 8px 0 16px', borderBottom: '1px solid var(--hw-line)' }}>
         <span style={{ ...ui.display, fontSize: 15, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>
         <div ref={setHeaderTarget} style={{ display: 'flex', alignItems: 'center' }} />
-        <button type="button" className="hw-btn-quiet" aria-label={tr('overlay.dockNamed', 'Add {{title}} to the layout', { title })} title={tr('overlay.dock', 'Add to the layout')} onClick={() => useShell.getState().dockOverlay()} style={{ ...ui.quietIconButton, width: 28, height: 28 }}>
+        <button type="button" className="hw-btn-quiet" aria-label={tr('overlay.dockNamed', 'Add {{title}} to the layout', { title })} title={tr('overlay.dock', 'Add to the layout')} onClick={() => { const card = panelRef.current?.querySelector('[data-ask-source]'); if (card) rememberAskRect(card.dataset.askSource, card.getBoundingClientRect()); useShell.getState().dockOverlay(); }} style={{ ...ui.quietIconButton, width: 28, height: 28 }}>
           <Icon name="dock" size={15} />
         </button>
         <button type="button" className="hw-btn-quiet" aria-label={tr('overlay.close', 'Close {{title}}', { title })} title={tr('overlay.closeHint', 'Close (Esc)')} onClick={() => useShell.getState().closeOverlay()} style={{ ...ui.quietIconButton, width: 28, height: 28 }}>
