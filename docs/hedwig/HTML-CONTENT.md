@@ -39,7 +39,9 @@ existing job ledger. Model budgets and provider backoff continue to apply.
 Repair reindexes and embeds, recomputes machine sorting and triage, updates cards and existing
 summaries, re-extracts prior facts, and refreshes dependent summaries, labels, profiles, training
 features, and briefings. User overrides, edited card fields, resolved commitments, and historical
-answers survive. Historical answers whose source changed carry `evidenceStale`; the UI asks the
+answers survive. Entity/topic summaries use the strict, versioned `context.summarise` prompt and retry malformed
+outputs before replacing any stored summary. Historical answers whose source changed carry
+`evidenceStale`; the UI asks the
 reader to ask again. Historical sorting suppresses mailbox moves and plugin action hooks. It does
 not replay inbox move/forward/send rules. A future live message still applies those rules normally.
 

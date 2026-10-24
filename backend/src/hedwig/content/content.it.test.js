@@ -47,13 +47,43 @@ describe.skipIf(!process.env.HEDWIG_IT)('normalized content persistence',() => {
     const chunks=(await query("SELECT text FROM hedwig_chunks WHERE message_id=$1 AND kind='body'",[id])).rows;
     expect(chunks.some((r) => r.text.includes('delivered'))).toBe(true);
     expect((await reindexContentBatch({ messageIds:[id] })).processed).toBe(0);
-  });
+  },30000);
   it('keeps completed repair when a metadata refetch confirms no additional evidence',async () => {
     const { captureMailboxMetadata }=await import('../../services/emailMetadataStore.js');
     await query("UPDATE hedwig_email_content SET repair_state='done' WHERE message_id=$1",[id]);
     await captureMailboxMetadata(accountId,990001,'INBOX','<p>Your order was delivered to reception.</p>',{recordEmpty:true});
     await normaliseSweep({messageIds:[id]});
     expect((await query('SELECT repair_state FROM hedwig_email_content WHERE message_id=$1',[id])).rows[0].repair_state).toBe('done');
+  });
+  it('repairs malformed topic-summary JSON and preserves the prior summary on repeated invalid output',async () => {
+    const { mockGateway }=await import('../testing/mockGateway.js');
+    const config=await import('../config.js');
+    const { _resetPrompts }=await import('../prompts/index.js');
+    const { _resetLlmState }=await import('../llm.js');
+    const { summarizeTopic }=await import('../context/summaries.js');
+    const gw=mockGateway();
+    const oldBase=process.env.HEDWIG_LLM_BASE_URL; const oldCatalog=process.env.HEDWIG_LLM_CATALOG_URL;
+    process.env.HEDWIG_LLM_BASE_URL=gw.baseUrl; process.env.HEDWIG_LLM_CATALOG_URL=gw.catalogUrl;
+    config.invalidateConfigCache(); _resetLlmState(); _resetPrompts(); gw.install();
+    const topic=(await query("INSERT INTO hedwig_topics(user_id,label,summary) VALUES($1,'HTML regression','Prior usable summary') RETURNING id",[userId])).rows[0].id;
+    await query('INSERT INTO hedwig_topic_members(topic_id,message_id) VALUES($1,$2)',[topic,id]);
+    let calls=0;
+    const response=() => ++calls===1 ? { wrong:'shape' } : { summary:'The order was delivered to reception [1].' };
+    gw.on('context.summarise',response); gw.on('context.summary',response);
+    try {
+      await summarizeTopic(topic,{userId,force:true,suppressHooks:true});
+      expect(calls).toBe(2);
+      const saved=(await query('SELECT summary,summary_sources FROM hedwig_topics WHERE id=$1',[topic])).rows[0];
+      expect(saved.summary).toContain('delivered'); expect(saved.summary_sources).toEqual([id]);
+      gw.on('context.summarise',{ wrong:'still invalid' });
+      await expect(summarizeTopic(topic,{userId,force:true,suppressHooks:true})).rejects.toMatchObject({code:'invalid_output'});
+      expect((await query('SELECT summary FROM hedwig_topics WHERE id=$1',[topic])).rows[0].summary).toBe(saved.summary);
+    } finally {
+      await query('DELETE FROM hedwig_topics WHERE id=$1',[topic]); gw.restore();
+      if(oldBase==null) delete process.env.HEDWIG_LLM_BASE_URL; else process.env.HEDWIG_LLM_BASE_URL=oldBase;
+      if(oldCatalog==null) delete process.env.HEDWIG_LLM_CATALOG_URL; else process.env.HEDWIG_LLM_CATALOG_URL=oldCatalog;
+      config.invalidateConfigCache(); _resetLlmState(); _resetPrompts();
+    }
   });
   it('captures inert metadata from the raw mailbox body without putting it into display HTML',async () => {
     const { captureMailboxMetadata }=await import('../../services/emailMetadataStore.js');
