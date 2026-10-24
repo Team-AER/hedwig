@@ -741,6 +741,7 @@ describe('Ask', () => {
     assert.match(text(), /about this thread/);
     const globe = document.querySelector('[data-web]');
     assert.equal(globe.getAttribute('aria-pressed'), 'true', 'the web is on by default when a search service is set up');
+    assert.equal(globe.textContent.trim(), 'Mail + web', 'the source scope is visible without a tooltip');
     await click(byText('button', 'Summarise the main articles'));
     await settle(200);
     const log = await mock.mockRequest('GET', '/context/ask/history');
@@ -755,6 +756,7 @@ describe('Ask', () => {
     // The globe off: the next question reads mail only.
     await click(document.querySelector('[data-web]'));
     assert.equal(document.querySelector('[data-web]').getAttribute('aria-pressed'), 'false');
+    assert.equal(document.querySelector('[data-web]').textContent.trim(), 'Mail only');
     await type(byLabel('Ask a follow-up'), 'and the news?');
     await submit(byLabel('Ask a follow-up').closest('form'));
     await settle(200);

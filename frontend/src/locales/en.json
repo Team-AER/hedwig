@@ -2246,7 +2246,9 @@
         "wrongNote": "What was wrong? (optional)",
         "wrongNoteLabel": "What was wrong with the answer",
         "markWrongBtn": "Mark it wrong",
-        "sources": "Sources"
+        "sources": "Sources",
+        "mailAndWeb": "Mail + web",
+        "mailOnly": "Mail only"
       },
       "drafts": {
         "delete": "Delete draft"

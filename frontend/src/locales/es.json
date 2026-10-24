@@ -2246,7 +2246,9 @@
         "wrongNote": "¿Qué estaba mal? (opcional)",
         "wrongNoteLabel": "Qué estaba mal en la respuesta",
         "markWrongBtn": "Marcar como incorrecta",
-        "sources": "Fuentes"
+        "sources": "Fuentes",
+        "mailAndWeb": "Correo + web",
+        "mailOnly": "Solo correo"
       },
       "drafts": {
         "delete": "Eliminar borrador"

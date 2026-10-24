@@ -2246,7 +2246,9 @@
         "wrongNote": "Cosa era sbagliato? (facoltativo)",
         "wrongNoteLabel": "Cosa c’era di sbagliato nella risposta",
         "markWrongBtn": "Segna come sbagliata",
-        "sources": "Fonti"
+        "sources": "Fonti",
+        "mailAndWeb": "Posta + web",
+        "mailOnly": "Solo posta"
       },
       "drafts": {
         "delete": "Elimina bozza"

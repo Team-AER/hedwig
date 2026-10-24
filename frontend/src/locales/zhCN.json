@@ -2246,7 +2246,9 @@
         "wrongNote": "哪里错了？（可选）",
         "wrongNoteLabel": "回答哪里有误",
         "markWrongBtn": "标记为错误",
-        "sources": "来源"
+        "sources": "来源",
+        "mailAndWeb": "邮件 + 网页",
+        "mailOnly": "仅邮件"
       },
       "drafts": {
         "delete": "删除草稿"

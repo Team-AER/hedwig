@@ -2265,7 +2265,9 @@
         "wrongNote": "Co było nie tak? (opcjonalnie)",
         "wrongNoteLabel": "Co było nie tak z odpowiedzią",
         "markWrongBtn": "Oznacz jako błędną",
-        "sources": "Źródła"
+        "sources": "Źródła",
+        "mailAndWeb": "Poczta + sieć",
+        "mailOnly": "Tylko poczta"
       },
       "drafts": {
         "delete": "Usuń wersję roboczą"

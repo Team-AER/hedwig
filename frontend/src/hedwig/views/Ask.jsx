@@ -361,16 +361,18 @@ export default function Ask({ paneId = null, props = {} }) {
           style={{ ...askInputStyle, height: 'auto', resize: 'none', alignSelf: 'center', padding: '5px 0', lineHeight: '20px', maxHeight: 140, fontSize: phone ? 16 : 14, outline: 'none' }}
         />
         {webAvailable && (
-          <IconButton
-            icon="globe"
+          <button
+            type="button"
+            className="hw-btn-quiet"
             data-web={webOn ? 'on' : 'off'}
-            label={webOn ? tv('hedwig.v2.ask.webOn', 'Uses the web too. Turn off for this chat') : tv('hedwig.v2.ask.webOff', 'Mail only. Let it use the web too')}
-            active={webOn}
+            aria-label={webOn ? tv('hedwig.v2.ask.webOn', 'Uses the web too. Turn off for this chat') : tv('hedwig.v2.ask.webOff', 'Mail only. Let it use the web too')}
             aria-pressed={webOn}
-            size={30}
             onClick={() => setWebPref(!webOn)}
-            style={{ borderRadius: 15, flexShrink: 0, color: webOn ? V.accentInk : V.muted }}
-          />
+            style={{ border: 0, background: 'none', borderRadius: 15, flexShrink: 0, minHeight: phone ? 44 : 30, padding: '0 8px', display: 'inline-flex', alignItems: 'center', gap: 5, fontFamily: 'inherit', fontSize: 12, color: webOn ? V.accentInk : V.muted, cursor: 'pointer' }}
+          >
+            <Icon name="globe" size={16} />
+            <span>{webOn ? tv('hedwig.v2.ask.mailAndWeb', 'Mail + web') : tv('hedwig.v2.ask.mailOnly', 'Mail only')}</span>
+          </button>
         )}
         {streaming
           ? (

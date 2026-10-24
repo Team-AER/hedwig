@@ -2246,7 +2246,9 @@
         "wrongNote": "Qu’est-ce qui était faux ? (facultatif)",
         "wrongNoteLabel": "Ce qui était faux dans la réponse",
         "markWrongBtn": "Marquer comme fausse",
-        "sources": "Sources"
+        "sources": "Sources",
+        "mailAndWeb": "Courrier + web",
+        "mailOnly": "Courrier seul"
       },
       "drafts": {
         "delete": "Supprimer le brouillon"
