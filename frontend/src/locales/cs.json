@@ -2265,7 +2265,9 @@
         "wrongNote": "Co bylo špatně? (volitelné)",
         "wrongNoteLabel": "Co bylo na odpovědi špatně",
         "markWrongBtn": "Označit jako chybné",
-        "sources": "Zdroje"
+        "sources": "Zdroje",
+        "mailAndWeb": "Pošta + web",
+        "mailOnly": "Pouze pošta"
       },
       "drafts": {
         "delete": "Smazat koncept"

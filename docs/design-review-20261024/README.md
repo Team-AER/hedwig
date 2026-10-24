@@ -18,3 +18,29 @@ The original UI is `before-wide.png` / `before-phone.png`. The updated main UI i
 - Existing reduced-motion behavior and question selection transitions remain in place; this patch adds no animation or delay.
 
 No email was sent, classified or changed in a real account. Existing feature branches were retained.
+
+
+---
+
+# Research search scope verification · 24 October 2026
+
+The existing drawer, palette, typography and globe interaction remain. The source toggle now visibly says **Mail + web** or **Mail only**, matching its existing pressed state and accessible label. The button has a 44 px target on phones. All ten locales have the source labels. Draft text and existing research request semantics are preserved.
+
+## Supporting integration
+
+The deployed research/backend baseline was integrated into main through #6 before this UI update, preserving the running `811dcff` backend. Main's learning-question scope change and audited dependency fixes from #5 are retained. The original dirty Research checkout was preserved; this release uses the isolated source-only UI patch.
+
+## Local evidence
+
+Screenshots are retained outside Git. No review images are included in this branch.
+
+`before-research-wide.png` shows the original globe-only toggle. `after-research-1440.png`, `after-research-390.png`, and `after-research-320.png` show the actual updated source with intercepted synthetic mailbox/research APIs. Desktop is 1440×1000; phones are 390×844 and 320×844.
+
+
+## Verification
+
+- Frontend suite: 3,204 tests passed; locale validation, lint and production build passed. The isolated publication worktree also passed its focused wave2 regression, lint and build.
+- Browser at all three widths has no page overflow. Space switches the native toggle and updates visible text, retains the draft, and sends no question merely because the source changes.
+- Existing drawer transition is 180 ms; reduced-motion emulation suppresses it to 0.01 ms. Escape closes the drawer.
+
+Existing limitation observed: closing the drawer with Escape returns focus to the document body in this baseline. This UI patch does not change drawer focus management. No real mailbox or web research query was submitted. Supporting backend behavior is not claimed as live-verified.
