@@ -1812,7 +1812,9 @@
         "no": "Нет",
         "skip": "Не сейчас",
         "yes": "Да",
-        "always": "{{label}}, всегда"
+        "always": "{{label}}, всегда",
+        "thisMessage": "{{label}}, только это письмо",
+        "alwaysForSender": "{{label}}, всегда для этого отправителя"
       },
       "rail": {
         "accounts": "Учётные записи: {{n}}",
