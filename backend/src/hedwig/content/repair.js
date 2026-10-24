@@ -101,7 +101,7 @@ export async function repairMessage({ messageId, userId }) {
 
 export async function enqueueContentRepairs({ messageIds = null, limit = 100, newlyChangedOnly = false } = {}) {
   const { rows } = await query(`SELECT c.message_id,c.user_id,c.content_hash FROM hedwig_email_content c JOIN messages m ON m.id=c.message_id
-    WHERE c.changed AND c.repair_state<>'done' AND NOT m.is_deleted AND ($1::uuid[] IS NULL OR c.message_id=ANY($1)) AND (NOT $3::boolean OR c.auto_repair)
+    WHERE c.changed AND c.repair_state<>'done' AND NOT m.is_deleted AND ($1::uuid[] IS NULL OR c.message_id=ANY($1)) AND (NOT $3::boolean OR (c.auto_repair AND c.repair_state='pending'))
     ORDER BY m.date DESC NULLS LAST LIMIT $2`,[messageIds,limit,newlyChangedOnly]);
   let enqueued = 0;
   for (const row of rows) {

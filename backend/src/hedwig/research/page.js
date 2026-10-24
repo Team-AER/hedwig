@@ -23,7 +23,7 @@ const HEADERS = {
 };
 const BLOCKED_CODES = new Set(['ERR_BLOCKED_PRIVATE_IP', 'ERR_INSECURE_TRANSPORT', 'ERR_UNSUPPORTED_SCHEME', 'ERR_INVALID_URL']);
 
-const collapse = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
+const collapse = (s) => String(s ?? '').toWellFormed().replace(/\0/g, '').replace(/\s+/g, ' ').trim();
 
 function tidy(text) {
   return text
@@ -147,7 +147,7 @@ export function extractMainText(html, baseUrl) {
     if (a.at < chosen.start || a.at > chosen.end) continue;
     const url = resolveHttp(a.href, base);
     if (!url) continue;
-    const label = collapse(a.text).slice(0, LINK_TEXT_CHARS);
+    const label = collapse(a.text).slice(0, LINK_TEXT_CHARS).toWellFormed();
     const seen = byUrl.get(url);
     if (seen) {
       if (!seen.text && label) seen.text = label;

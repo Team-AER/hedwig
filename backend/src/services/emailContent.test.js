@@ -42,6 +42,13 @@ describe('shared content contract',() => {
     expect(emailContent({ body_text:'This is a HTML email and your email client software does not support HTML email!' }).state).toBe('placeholder');
     expect(emailContent({ snippet:'Preview only' }).state).toBe('partial');
   });
+  it('keeps truncated supplementary Unicode labels valid for JSONB', () => {
+    const c=extractHtmlContent('<a href="https://shop.test">'+ '𝟓'.repeat(200)+'</a>');
+    expect(c.links[0].text.isWellFormed()).toBe(true);
+    const d=extractHtmlContent('<a href="https://shop.test">a'+ '𝟓'.repeat(200)+'</a>');
+    expect(d.links[0].text.isWellFormed()).toBe(true);
+    expect(d.text.isWellFormed()).toBe(true);
+  });
   it('bounds output and nesting work on pathological input',() => {
     const huge=extractHtmlContent('<div>'+ 'abc '.repeat(MAX_TEXT_CHARS)+'</div>');
     expect(huge.text.length).toBeLessThanOrEqual(MAX_TEXT_CHARS); expect(huge.truncated).toBe(true);

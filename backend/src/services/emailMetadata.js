@@ -97,11 +97,11 @@ function addProp(obj, prop, value) {
 // Bound nested metadata and drop prototype keys before it can reach cards or model input.
 function inert(value, depth = 0) {
   if (depth > 12) return null;
-  if (typeof value === 'string') return value.slice(0, 4000);
+  if (typeof value === 'string') return value.slice(0, 4000).toWellFormed().replace(/\0/g, '');
   if (Array.isArray(value)) return value.slice(0, 100).map((v) => inert(v, depth + 1));
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).slice(0, 100)
     .filter(([k]) => !['__proto__', 'prototype', 'constructor'].includes(k))
-    .map(([k, v]) => [k.slice(0, 100), inert(v, depth + 1)]));
+    .map(([k, v]) => [k.slice(0, 100).toWellFormed(), inert(v, depth + 1)]));
   return value;
 }
 

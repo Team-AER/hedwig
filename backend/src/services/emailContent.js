@@ -7,7 +7,7 @@ export const MAX_HTML_CHARS = 2_000_000;
 export const MAX_TEXT_CHARS = 240_000;
 const BLOCK = new Set(['p', 'div', 'br', 'li', 'tr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'table', 'blockquote', 'section', 'article', 'header', 'footer', 'ul', 'ol', 'pre', 'dl', 'dt', 'dd', 'figure', 'figcaption']);
 const SKIP = new Set(['script', 'style', 'head', 'title', 'noscript', 'template', 'svg', 'iframe', 'object']);
-const clean = (s) => String(s || '').replace(/\0/g, '').replace(/\r\n?/g, '\n').replace(/\u00a0/g, ' ').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+const clean = (s) => String(s || '').toWellFormed().replace(/\0/g, '').replace(/\r\n?/g, '\n').replace(/\u00a0/g, ' ').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 const words = (s) => new Set(String(s).toLowerCase().match(/[\p{L}\p{N}]{2,}/gu) || []);
 
 export function looksLikeHtml(text) {
@@ -62,7 +62,7 @@ export function extractHtmlContent(input, { maxChars = MAX_TEXT_CHARS, linksInTe
       if (name === 'tr' && tableStack.length && tableStack[tableStack.length - 1].rows.length < 1000) { entry.row = []; tableStack[tableStack.length - 1].rows.push(entry.row); }
       if (name === 'td' || name === 'th') { if (out && !out.endsWith('\n')) add(' | '); entry.cell = out.length; }
       if (includeAltText && name === 'img' && attrs.alt && attrs.alt.trim() && !['1', '0'].includes(attrs.width) && !['1', '0'].includes(attrs.height)) {
-        add(` [Image description: ${attrs.alt.replace(/\s+/g, ' ').slice(0, 500)}] `);
+        add(` [Image description: ${attrs.alt.replace(/\s+/g, ' ').slice(0, 500).toWellFormed()}] `);
       }
     },
     ontext(text) {
@@ -79,7 +79,7 @@ export function extractHtmlContent(input, { maxChars = MAX_TEXT_CHARS, linksInTe
       if (e.skip) { hidden--; return; }
       if (hidden) return;
       if (e.link?.url) {
-        const label = out.slice(e.link.at).replace(/\s+/g, ' ').trim().slice(0, 200);
+        const label = out.slice(e.link.at).replace(/\s+/g, ' ').trim().slice(0, 200).toWellFormed().replace(/\0/g, '');
         if (!seen.has(e.link.url)) {
           seen.add(e.link.url); links.push({ url: e.link.url, text: label });
           if (linksInText && label !== e.link.url) add(` (${e.link.url})`);
@@ -87,7 +87,7 @@ export function extractHtmlContent(input, { maxChars = MAX_TEXT_CHARS, linksInTe
       }
       if (e.cell != null) {
         const row = [...stack].reverse().find((p) => p.row)?.row;
-        if (row && row.length < 100) row.push(clean(out.slice(e.cell)).slice(0, 4000));
+        if (row && row.length < 100) row.push(clean(out.slice(e.cell)).slice(0, 4000).toWellFormed());
       }
       if (e.table) tableStack.pop();
       if (e.name === 'pre') pre--;

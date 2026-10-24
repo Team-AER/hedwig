@@ -489,8 +489,9 @@ export async function runExtraction({ messageId, deferred = false, recheck = fal
   if (row.date && Date.now() - new Date(row.date).getTime() > cfg['pipeline.backfillDays'] * DAY) ex.commitments = [];
   if (repair && row.thread_key) {
     const { rows: closed } = await query(
-      `SELECT id,direction,what,thread_key,counterparty_entity_id,status,user_edited FROM hedwig_commitments
+      `SELECT id,direction,what,thread_key,counterparty_entity_id,status,user_edited,source_message_id FROM hedwig_commitments
         WHERE user_id=$1 AND thread_key=$2 AND status<>'open'`, [userId,row.thread_key]);
+    if (closed.some((o) => o.source_message_id === row.id)) ex.commitments = [];
     ex.commitments = ex.commitments.filter((c) => !closed.some((o) => sameObligation(o,c,pickCounterparty(c,participants,row.is_outgoing)?.entity_id)));
   }
   const created = await applyExtraction(row, ex, { participants, topicId, open });
