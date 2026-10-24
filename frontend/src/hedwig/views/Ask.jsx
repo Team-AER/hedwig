@@ -1,3 +1,6 @@
+import { createPortal } from 'react-dom';
+import { PaneHeader } from '../shell/PaneHeader.jsx';
+import { questionHandoff } from '../v2/questionHandoff.js';
 // hedwig.ask — ask a question across all mail on the v2 backend (stream G): a streamed answer with
 // numbered citations, the sources it read, follow-ups that carry the earlier answer (followUpOf),
 // what the citation check found (unsupported, nothing found, citations that named no source), a
@@ -7,7 +10,7 @@
 // read first, its earlier questions are the history, and the latest of them opens again. With a
 // search service set up (GET /context/ask/options) answers may also read the web; the globe in the
 // composer turns that off or on for this chat, and Dig deeper looks further.
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { useHedwig } from '../store.js';
 import { getView } from '../registry.js';
 import { v2Api, v2Stream, listOf } from '../v2/client.js';
@@ -88,6 +91,10 @@ function markLabel(mark) {
 
 export default function Ask({ paneId = null, props = {} }) {
   const inputId = useId();
+  const headerTarget = useContext(PaneHeader);
+  const pendingHandoff = useRef(null);
+  const cancelHandoff = useRef(() => {});
+  const bubbleRef = useRef(null);
   const phone = Boolean(usePhone()?.phone);
   // Docked in the layout, a pane has no header outside Arrange, so Ask brings its own close.
   // The overlay drawer and phone screens already have one.
@@ -119,6 +126,8 @@ export default function Ask({ paneId = null, props = {} }) {
   const lastRunKey = useRef(undefined);
   useEffect(() => {
     if (lastRunKey.current === scope.threadKey) return;
+    cancelHandoff.current();
+    pendingHandoff.current = null;
     ctlRef.current?.abort();
     setState(ASK2_INITIAL);
     setChain([]);
@@ -126,7 +135,7 @@ export default function Ask({ paneId = null, props = {} }) {
     setShowHistory(false);
   }, [scope.threadKey]);
   // Leaving aborts the answer in flight; a remount (StrictMode in development) may ask it again.
-  useEffect(() => () => { ctlRef.current?.abort(); autoRan.current = ''; }, []);
+  useEffect(() => () => { cancelHandoff.current(); ctlRef.current?.abort(); autoRan.current = ''; }, []);
 
   const reloadHistory = history.reload;
   const followingUp = state.status === 'done' && state.id && !state.unfinished ? state : null;
@@ -135,6 +144,7 @@ export default function Ask({ paneId = null, props = {} }) {
   const run = useCallback(async (raw, { followUp = null, fresh = false, deep = false, on = null } = {}) => {
     const q = String(raw || '').trim();
     if (!q) return;
+    cancelHandoff.current();
     const sc = on || scope;
     ctlRef.current?.abort();
     const ctl = new AbortController();
@@ -187,6 +197,8 @@ export default function Ask({ paneId = null, props = {} }) {
 
   // A saved answer opens as its conversation: the answers it followed up on come first.
   const openSaved = async (entry) => {
+    cancelHandoff.current();
+    pendingHandoff.current = null;
     ctlRef.current?.abort();
     setError(null);
     setShowHistory(false);
@@ -219,7 +231,7 @@ export default function Ask({ paneId = null, props = {} }) {
     if (list.length) openSaved(list[0]);
   }, [scope.threadKey, history.data]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const startOver = () => { ctlRef.current?.abort(); setState(ASK2_INITIAL); setChain([]); setError(null); setShowHistory(false); inputRef.current?.focus(); };
+  const startOver = () => { cancelHandoff.current(); pendingHandoff.current = null; ctlRef.current?.abort(); setState(ASK2_INITIAL); setChain([]); setError(null); setShowHistory(false); inputRef.current?.focus(); };
   const submit = (e) => { e.preventDefault(); pinned.current = true; setShowHistory(false); run(question, { followUp: followingUp }); };
   const streaming = state.status === 'streaming';
   const entries = distinctQuestions(listOf(history.data, 'items').filter((h) => h && h.id), state.id);
@@ -244,6 +256,14 @@ export default function Ask({ paneId = null, props = {} }) {
     el.style.height = 'auto';
     el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
   }, [question]);
+
+  useLayoutEffect(() => {
+    const pending = pendingHandoff.current;
+    if (!pending || pending.question !== state.question) return;
+    pendingHandoff.current = null;
+    bubbleRef.current?.focus({ preventScroll: true });
+    cancelHandoff.current = questionHandoff(bubbleRef.current, pending.rect);
+  }, [state.question, state.status]);
 
   const historyList = (
     <aside aria-label={tv('hedwig.v2.ask.history', 'Earlier questions')} style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
@@ -281,16 +301,14 @@ export default function Ask({ paneId = null, props = {} }) {
           <Icon name="sparkles" size={22} strokeWidth={1.6} />
         </span>
         <span style={{ fontSize: 13, maxWidth: 360 }}>
-          {scope.threadKey
-            ? tv('hedwig.v2.ask.threadIntro', 'Ask about this thread. Hedwig reads it whole, looks through the rest of your mail{{web}}, and cites what it used.', { web: webOn ? tv('hedwig.v2.ask.threadIntroWeb', ' and the web') : '' })
-            : tv('hedwig.v2.ask.intro', 'Answers cite the messages they come from. Tap a number to open it.')}
+          {tv('hedwig.v2.ask.intro', 'Answers link to the sources they use.')}
         </span>
         <CoverageNote what="ask" />
       </div>
       {starters.length > 0 && (
         <div role="group" aria-label={tv('hedwig.v2.ask.starters', 'Suggestions')} style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}>
           {starters.map((q) => (
-            <button key={q} type="button" className="hw-chip" onClick={() => { pinned.current = true; run(q); }}
+            <button key={q} type="button" className="hw-chip" onClick={(event) => { pendingHandoff.current = { question: q, rect: event.currentTarget.getBoundingClientRect() }; pinned.current = true; run(q); }}
               style={{ minHeight: phone ? 44 : 30, padding: '4px 12px', border: `1px solid ${V.line}`, borderRadius: 15, background: V.field, color: V.ink, font: 'inherit', fontSize: 13, cursor: 'pointer' }}>
               {q}
             </button>
@@ -306,7 +324,7 @@ export default function Ask({ paneId = null, props = {} }) {
       {turns.map((t, i) => (
         <article key={t.id || `${i}:${t.question}`} className="hw-turn" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <div className="hw-ask-bubble" style={{ maxWidth: '82%', padding: '8px 14px', borderRadius: '18px 18px 4px 18px', background: V.accent, color: V.onAccent, fontSize: phone ? 16 : 14, lineHeight: 1.4, overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>
+            <div ref={i === turns.length - 1 ? bubbleRef : null} tabIndex={-1} className="hw-ask-bubble" style={{ maxWidth: '82%', padding: '8px 14px', borderRadius: '18px 18px 4px 18px', background: V.accent, color: V.onAccent, fontSize: phone ? 16 : 14, lineHeight: 1.4, overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>
               {t.deep && <span style={{ display: 'block', fontSize: 11, fontWeight: 600, opacity: 0.85 }}>{tv('hedwig.v2.ask.deeper', 'Dig deeper')}</span>}
               {t.question}
             </div>
@@ -386,25 +404,26 @@ export default function Ask({ paneId = null, props = {} }) {
     </form>
   );
 
-  const head = (
-    <ViewHead
-      phone={phone}
-      title={title}
-      sub={phone ? undefined : scope.threadKey ? tv('hedwig.v2.ask.subThread', 'about this thread') : tv('hedwig.v2.ask.sub', 'across all your mail')}
-      actions={(
+  const actions = (
         <span style={{ display: 'inline-flex', gap: 2, alignSelf: 'center' }}>
           <IconButton icon="history" label={tv('hedwig.v2.ask.history', 'Earlier questions')} active={showHistory} size={phone ? 44 : 28} onClick={() => setShowHistory((v) => !v)} style={{ color: showHistory ? V.accentInk : V.muted }} />
           {turns.length > 0 && <IconButton icon="compose" label={tv('hedwig.v2.ask.newQuestion', 'New question')} size={phone ? 44 : 28} onClick={startOver} style={{ color: V.muted }} />}
           {docked && !phone && <IconButton icon="close" label={tv('hedwig.v2.ask.close', 'Close Ask')} size={28} onClick={() => useShell.getState().closePane(paneId)} style={{ color: V.muted }} />}
         </span>
-      )}
+  );
+  const head = (
+    <ViewHead
+      phone={phone}
+      title={title}
+      sub={phone ? undefined : scope.threadKey ? tv('hedwig.v2.ask.subThread', 'about this thread') : tv('hedwig.v2.ask.sub', 'across all your mail')}
+      actions={actions}
     />
   );
 
   return (
-    <ViewBody phone={phone} label={title} padded={false} style={{ overflowY: 'hidden', padding: phone ? 0 : '20px 0 0' }}>
+    <ViewBody phone={phone} label={title} padded={false} style={{ overflowY: 'hidden', padding: phone || headerTarget ? 0 : '20px 0 0' }}>
       <style>{ASK_CSS}</style>
-      {head}
+      {headerTarget ? createPortal(actions, headerTarget) : head}
       <div ref={scrollRef} onScroll={onScroll} className="hw-ask2 hw-scroll" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: phone ? '12px 16px' : '4px 24px 12px' }}>
         {showHistory ? historyList : turns.length ? conversation : empty}
       </div>
