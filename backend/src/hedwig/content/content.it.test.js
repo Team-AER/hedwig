@@ -48,6 +48,13 @@ describe.skipIf(!process.env.HEDWIG_IT)('normalized content persistence',() => {
     expect(chunks.some((r) => r.text.includes('delivered'))).toBe(true);
     expect((await reindexContentBatch({ messageIds:[id] })).processed).toBe(0);
   });
+  it('keeps completed repair when a metadata refetch confirms no additional evidence',async () => {
+    const { captureMailboxMetadata }=await import('../../services/emailMetadataStore.js');
+    await query("UPDATE hedwig_email_content SET repair_state='done' WHERE message_id=$1",[id]);
+    await captureMailboxMetadata(accountId,990001,'INBOX','<p>Your order was delivered to reception.</p>',{recordEmpty:true});
+    await normaliseSweep({messageIds:[id]});
+    expect((await query('SELECT repair_state FROM hedwig_email_content WHERE message_id=$1',[id])).rows[0].repair_state).toBe('done');
+  });
   it('captures inert metadata from the raw mailbox body without putting it into display HTML',async () => {
     const { captureMailboxMetadata }=await import('../../services/emailMetadataStore.js');
     await captureMailboxMetadata(accountId,990001,'INBOX','<script type="application/ld+json">{"@type":"Order","orderNumber":"1547718"}</script>');

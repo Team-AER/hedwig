@@ -37,7 +37,7 @@ export async function normaliseRows(rows) {
          state=EXCLUDED.state, links=EXCLUDED.links, tables=EXCLUDED.tables, warnings=EXCLUDED.warnings, tsv=EXCLUDED.tsv,
          changed=hedwig_email_content.changed OR hedwig_email_content.content_hash<>EXCLUDED.content_hash OR hedwig_email_content.source_hash<>EXCLUDED.source_hash,
          auto_repair=hedwig_email_content.auto_repair OR hedwig_email_content.content_hash<>EXCLUDED.content_hash,
-         repair_state=CASE WHEN hedwig_email_content.content_hash<>EXCLUDED.content_hash OR hedwig_email_content.source_hash<>EXCLUDED.source_hash THEN 'pending' ELSE hedwig_email_content.repair_state END,
+         repair_state=CASE WHEN hedwig_email_content.content_hash<>EXCLUDED.content_hash THEN 'pending' ELSE hedwig_email_content.repair_state END,
          updated_at=NOW() RETURNING changed`,
       [row.id, row.user_id, CONTENT_VERSION, sourceHash, content.hash, content.text, content.source, content.reason, content.state,
         JSON.stringify(content.links), JSON.stringify(content.tables), JSON.stringify(content.warnings), difference],

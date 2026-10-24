@@ -23,9 +23,9 @@ export async function repairDependencies({ userId }) {
   await retrainSpam(userId);
   await retrainTriage(userId);
   const { rows:entities } = await query('SELECT id FROM hedwig_entities WHERE user_id=$1 AND summary_at IS NULL AND summary IS NOT NULL',[userId]);
-  for (const e of entities) await summarizeEntity(e.id,{ userId,force:true });
+  for (const e of entities) await summarizeEntity(e.id,{ userId,force:true,suppressHooks:true });
   const { rows:topics } = await query('SELECT id FROM hedwig_topics WHERE user_id=$1 AND summary_at IS NULL AND summary IS NOT NULL',[userId]);
-  for (const t of topics) await summarizeTopic(t.id,{ userId,force:true });
+  for (const t of topics) await summarizeTopic(t.id,{ userId,force:true,suppressHooks:true });
   const { rows:profile } = await query('SELECT user_id FROM hedwig_profile WHERE user_id=$1 LIMIT 1',[userId]);
   if (profile.length) await rebuildProfile(userId);
   await judgeForUser(userId);
