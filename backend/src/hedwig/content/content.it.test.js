@@ -48,6 +48,26 @@ describe.skipIf(!process.env.HEDWIG_IT)('normalized content persistence',() => {
     expect(chunks.some((r) => r.text.includes('delivered'))).toBe(true);
     expect((await reindexContentBatch({ messageIds:[id] })).processed).toBe(0);
   },30000);
+  it('rebuilds an invalidated index even when the content checkpoint is unchanged',async () => {
+    const { repairMessage }=await import('./repair.js');
+    const { currentRecipe }=await import('../indexer/recipe.js');
+    await query("UPDATE messages SET folder='Spam' WHERE id=$1",[id]);
+    await query("UPDATE hedwig_index_msg SET chunk_version=NULL,embed_recipe=NULL WHERE message_id=$1",[id]);
+    try {
+      expect(await repairMessage({messageId:id,userId})).toMatchObject({repaired:id});
+      const indexed=(await query('SELECT chunk_version,embed_recipe FROM hedwig_index_msg WHERE message_id=$1',[id])).rows[0];
+      const recipe=await currentRecipe();
+      expect(indexed.chunk_version).toBe(recipe.version);
+      if(recipe.vectors) expect(indexed.embed_recipe).toBe(recipe.full);
+      // A later invalidation must also override a completed index-stage checkpoint.
+      await query("UPDATE hedwig_email_content SET repair_state='pending' WHERE message_id=$1",[id]);
+      await query('UPDATE hedwig_index_msg SET chunk_version=NULL,embed_recipe=NULL WHERE message_id=$1',[id]);
+      expect(await repairMessage({messageId:id,userId})).toMatchObject({repaired:id});
+      expect((await query('SELECT chunk_version FROM hedwig_index_msg WHERE message_id=$1',[id])).rows[0].chunk_version).toBe(recipe.version);
+    } finally {
+      await query("UPDATE messages SET folder='INBOX' WHERE id=$1",[id]);
+    }
+  },30000);
   it('keeps completed repair when a metadata refetch confirms no additional evidence',async () => {
     const { captureMailboxMetadata }=await import('../../services/emailMetadataStore.js');
     await query("UPDATE hedwig_email_content SET repair_state='done' WHERE message_id=$1",[id]);
