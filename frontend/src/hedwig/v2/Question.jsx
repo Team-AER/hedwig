@@ -1,7 +1,7 @@
 // One of the day's questions (GET /labels/questions): a sentence in the summary box style (no
 // serif, no italic) and one button per option. Answers go to POST /labels/questions/:id/answer with always: false: an
 // answer is about this one message. An option the server marks `always` (it can become a rule)
-// gets a second, explicit button ("Yes, always"); with more than two options that would crowd the
+// gets a second, sender-scoped button; with more than two options that would crowd the
 // row, so a single "Always for this sender" checkbox does the same. "Not now" skips it.
 import { useId, useState } from 'react';
 import { v2Api, announceSortChange } from './client.js';
@@ -50,10 +50,12 @@ export function Question({ question, index, total, onDone, compact = false, phon
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         {options.map((o, i) => (
           <span key={o.id} style={{ display: 'contents' }}>
-            <Btn accent={i === 0} size={phone ? 'phone' : 'md'} disabled={Boolean(busy)} onClick={() => act('answer', o)}>{o.label}</Btn>
+            <Btn accent={i === 0} size={phone ? 'phone' : 'md'} disabled={Boolean(busy)} onClick={() => act('answer', o)}>
+              {pairs && o.always ? tv('hedwig.v2.question.thisMessage', '{{label}}, this message', { label: o.label }) : o.label}
+            </Btn>
             {pairs && o.always && (
               <Btn size={phone ? 'phone' : 'md'} disabled={Boolean(busy)} onClick={() => act('answer', o, true)}>
-                {tv('hedwig.v2.question.always', '{{label}}, always', { label: o.label })}
+                {tv('hedwig.v2.question.alwaysForSender', '{{label}}, always for this sender', { label: o.label })}
               </Btn>
             )}
           </span>

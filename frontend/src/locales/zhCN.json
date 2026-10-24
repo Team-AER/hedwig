@@ -1812,7 +1812,9 @@
         "no": "否",
         "skip": "以后再说",
         "yes": "是",
-        "always": "{{label}}，始终如此"
+        "always": "{{label}}，始终如此",
+        "thisMessage": "{{label}}，仅此邮件",
+        "alwaysForSender": "{{label}}，始终用于此发件人"
       },
       "rail": {
         "accounts": "{{n}} 个账户",

@@ -1812,7 +1812,9 @@
         "no": "No",
         "skip": "Not now",
         "yes": "Yes",
-        "always": "{{label}}, always"
+        "always": "{{label}}, always",
+        "thisMessage": "{{label}}, this message",
+        "alwaysForSender": "{{label}}, always for this sender"
       },
       "rail": {
         "accounts": "{{n}} accounts",

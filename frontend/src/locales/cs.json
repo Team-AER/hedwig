@@ -1831,7 +1831,9 @@
         "no": "Ne",
         "skip": "Teď ne",
         "yes": "Ano",
-        "always": "{{label}}, vždy"
+        "always": "{{label}}, vždy",
+        "thisMessage": "{{label}}, jen tato zpráva",
+        "alwaysForSender": "{{label}}, vždy pro tohoto odesílatele"
       },
       "rail": {
         "accounts": "Účty: {{n}}",

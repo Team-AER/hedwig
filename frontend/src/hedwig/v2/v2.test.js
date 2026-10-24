@@ -370,8 +370,8 @@ describe('People stream', () => {
     assert.doesNotMatch(text(), /Keep her mail in People\?/, 'not on the Needs you tab');
     await click(byText('button', 'All'));
     assert.match(text(), /Keep her mail in People\?/);
-    assert.ok(byText('button', 'Yes, always'));
-    await click(byText('button', 'Yes'));
+    assert.ok(byText('button', 'Yes, always for this sender'));
+    await click(byText('button', 'Yes, this message'));
     assert.doesNotMatch(text(), /Keep her mail in People\?/);
     assert.deepEqual(mock.mockAnswers().at(-1), { id: 'q-anna', optionId: 'yes', always: false }, 'a plain Yes makes no rule');
   });
@@ -1055,7 +1055,7 @@ describe('Daily Brief', () => {
     assert.match(text(), /Question 1 of 2 today/);
     assert.match(text(), /Hedwig screened 12, bundled 40, rescued 2 from spam, blocked 9\./);
     assert.match(text(), /Written from a template: Tier 2 was not answering\./);
-    await click(byText('button', 'Yes, always'));
+    await click(byText('button', 'Yes, always for this sender'));
     assert.doesNotMatch(text(), /Keep her mail in People\?/);
     assert.deepEqual(mock.mockAnswers().at(-1), { id: 'q-anna', optionId: 'yes', always: true }, 'always only from its own button');
   });

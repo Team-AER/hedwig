@@ -1831,7 +1831,9 @@
         "no": "Nie",
         "skip": "Nie teraz",
         "yes": "Tak",
-        "always": "{{label}}, zawsze"
+        "always": "{{label}}, zawsze",
+        "thisMessage": "{{label}}, tylko ta wiadomość",
+        "alwaysForSender": "{{label}}, zawsze dla tego nadawcy"
       },
       "rail": {
         "accounts": "Konta: {{n}}",
