@@ -108,6 +108,35 @@ describe.skipIf(!process.env.HEDWIG_IT)('normalized content persistence',() => {
       config.invalidateConfigCache(); _resetLlmState(); _resetPrompts();
     }
   });
+  it('repairs non-JSON extraction and never marks malformed objects as completed',async () => {
+    const { mockGateway }=await import('../testing/mockGateway.js');
+    const config=await import('../config.js');
+    const { _resetPrompts }=await import('../prompts/index.js');
+    const { _resetLlmState }=await import('../llm.js');
+    const { runExtraction }=await import('../context/extract.js');
+    const gw=mockGateway();const oldBase=process.env.HEDWIG_LLM_BASE_URL;const oldCatalog=process.env.HEDWIG_LLM_CATALOG_URL;
+    const key=`html_regression_${id.replaceAll('-','')}`;
+    process.env.HEDWIG_LLM_BASE_URL=gw.baseUrl;process.env.HEDWIG_LLM_CATALOG_URL=gw.catalogUrl;
+    config.invalidateConfigCache();_resetLlmState();_resetPrompts();gw.install();
+    await query('INSERT INTO hedwig_msg(message_id,user_id,account_id) VALUES($1,$2,$3) ON CONFLICT(message_id) DO NOTHING',[id,userId,accountId]);
+    gw.on('context.extract',['Here are the extracted facts.',{commitments:[],facts:[{key,value:'Delivered to reception',confidence:0.95}],resolves:[]}]);
+    try {
+      await runExtraction({messageId:id,repair:true,recheck:true});
+      expect(gw.callsFor('context.extract')).toHaveLength(2);
+      const fact=(await query('SELECT value FROM hedwig_facts WHERE user_id=$1 AND source_message_id=$2 AND key=$3',[userId,id,key])).rows[0];
+      expect(fact?.value).toBe('Delivered to reception');
+      const before=(await query('SELECT extracted_at FROM hedwig_msg WHERE message_id=$1',[id])).rows[0].extracted_at;
+      gw.on('context.extract',{wrong:'shape'});
+      await expect(runExtraction({messageId:id,repair:true,recheck:true})).rejects.toMatchObject({code:'invalid_output'});
+      expect((await query('SELECT extracted_at FROM hedwig_msg WHERE message_id=$1',[id])).rows[0].extracted_at).toEqual(before);
+      expect((await query('SELECT value FROM hedwig_facts WHERE user_id=$1 AND source_message_id=$2 AND key=$3',[userId,id,key])).rows[0].value).toBe(fact.value);
+    } finally {
+      await query('DELETE FROM hedwig_facts WHERE user_id=$1 AND source_message_id=$2 AND key=$3',[userId,id,key]);gw.restore();
+      if(oldBase==null)delete process.env.HEDWIG_LLM_BASE_URL;else process.env.HEDWIG_LLM_BASE_URL=oldBase;
+      if(oldCatalog==null)delete process.env.HEDWIG_LLM_CATALOG_URL;else process.env.HEDWIG_LLM_CATALOG_URL=oldCatalog;
+      config.invalidateConfigCache();_resetLlmState();_resetPrompts();
+    }
+  });
   it('captures inert metadata from the raw mailbox body without putting it into display HTML',async () => {
     const { captureMailboxMetadata }=await import('../../services/emailMetadataStore.js');
     await captureMailboxMetadata(accountId,990001,'INBOX','<script type="application/ld+json">{"@type":"Order","orderNumber":"1547718"}</script>');
