@@ -2199,7 +2199,7 @@
         "stop": "Stop",
         "dropTopic": "Ask about everything, not just this topic",
         "dropPerson": "Ask about everyone, not just this person",
-        "intro": "Answers cite the messages they come from. Tap a number to open it.",
+        "intro": "Answers link to the sources they use.",
         "history": "Earlier questions",
         "noHistory": "Nothing asked yet.",
         "followUp": "follow-up",

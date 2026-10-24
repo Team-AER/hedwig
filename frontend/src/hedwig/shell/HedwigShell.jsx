@@ -1,3 +1,4 @@
+import { PaneHeader } from './PaneHeader.jsx';
 // The Hedwig desktop and tablet shell: the paper ground with its one cool light field, the pane
 // tree drawn as sheets (the rail glass, every other pane opaque content, 8px gutter and gaps,
 // radius 14), the overlay sheet for views opened on request, and pop-out windows. The
@@ -87,6 +88,7 @@ function OverlayDrawer() {
   useRegistryVersion();
   const overlay = useShell((s) => s.overlay);
   const panelRef = useRef(null);
+  const [headerTarget, setHeaderTarget] = useState(null);
   const returnFocus = useRef(null);
 
   useEffect(() => {
@@ -138,6 +140,7 @@ function OverlayDrawer() {
     >
       <div style={{ height: 44, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4, padding: '0 8px 0 16px', borderBottom: '1px solid var(--hw-line)' }}>
         <span style={{ ...ui.display, fontSize: 15, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>
+        <div ref={setHeaderTarget} style={{ display: 'flex', alignItems: 'center' }} />
         <button type="button" className="hw-btn-quiet" aria-label={tr('overlay.dockNamed', 'Add {{title}} to the layout', { title })} title={tr('overlay.dock', 'Add to the layout')} onClick={() => useShell.getState().dockOverlay()} style={{ ...ui.quietIconButton, width: 28, height: 28 }}>
           <Icon name="dock" size={15} />
         </button>
@@ -145,6 +148,7 @@ function OverlayDrawer() {
           <Icon name="close" size={15} />
         </button>
       </div>
+      <PaneHeader.Provider value={headerTarget}>
       <ViewHost
         key={overlay.key}
         paneKey={overlay.key}
@@ -152,6 +156,7 @@ function OverlayDrawer() {
         props={overlay.props}
         onChangeView={(id) => useShell.setState({ overlay: { ...overlay, id, props: {} } })}
       />
+      </PaneHeader.Provider>
     </aside>
   );
 }
