@@ -4,13 +4,13 @@ export function questionHandoff(target, origin, media = typeof window.matchMedia
   const rect = target.getBoundingClientRect();
   if (!rect.width || !rect.height || !origin.width || !origin.height) return () => {};
   const clone = target.cloneNode(true);
-  const visibility = target.style.visibility;
+  const opacity = target.style.opacity;
   let animation;
   let settled = false;
   const cleanup = () => {
     if (settled) return;
     settled = true;
-    target.style.visibility = visibility;
+    target.style.opacity = opacity;
     clone.remove();
     if (media.removeEventListener) media.removeEventListener('change', changed);
     else media.removeListener?.(changed);
@@ -25,7 +25,7 @@ export function questionHandoff(target, origin, media = typeof window.matchMedia
     Object.assign(clone.style, {
       position: 'fixed', left: `${rect.left}px`, top: `${rect.top}px`, width: `${rect.width}px`,
       maxWidth: 'none', margin: 0, boxSizing: 'border-box', zIndex: 1000, pointerEvents: 'none',
-      font: computed.font, background: computed.backgroundColor, color: computed.color,
+      opacity: computed.opacity, visibility: 'visible', font: computed.font, background: computed.backgroundColor, color: computed.color,
       padding: computed.padding, borderRadius: computed.borderRadius, transformOrigin: 'top left',
     });
     document.body.appendChild(clone);
@@ -33,7 +33,7 @@ export function questionHandoff(target, origin, media = typeof window.matchMedia
       { transform: `translate(${origin.left - rect.left}px, ${origin.top - rect.top}px) scale(${origin.width / rect.width}, ${origin.height / rect.height})` },
       { transform: 'translate(0, 0) scale(1)' },
     ], { duration: 160, easing: 'cubic-bezier(.2,.7,.2,1)' });
-    target.style.visibility = 'hidden';
+    target.style.opacity = '0';
     animation.finished.then(cleanup, cleanup);
     if (media.addEventListener) media.addEventListener('change', changed);
     else media.addListener?.(changed);

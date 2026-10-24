@@ -4,7 +4,7 @@ import { JSDOM } from 'jsdom';
 import { questionHandoff } from './questionHandoff.js';
 
 function fixture({ reduced = false, unavailable = false, throws = false } = {}) {
-  const dom = new JSDOM('<div id="question" style="visibility:visible">Question</div>');
+  const dom = new JSDOM('<div id="question" tabindex="-1" style="visibility:visible;opacity:1">Question</div>');
   globalThis.window = dom.window;
   globalThis.document = dom.window.document;
   globalThis.getComputedStyle = dom.window.getComputedStyle;
@@ -27,6 +27,7 @@ test('initial reduced motion and unavailable animation retain the real question'
     const f = fixture(flags);
     questionHandoff(f.target, f.origin, f.media)();
     assert.equal(f.target.style.visibility, 'visible');
+    assert.equal(f.target.style.opacity, '1');
     assert.equal(document.querySelectorAll('.hw-question-flight').length, 0);
     assert.equal(f.listeners.size, 0);
   }
@@ -34,9 +35,11 @@ test('initial reduced motion and unavailable animation retain the real question'
 
 test('live reduced motion settles immediately and removes listeners and cosmetic clones', async () => {
   const f = fixture();
+  f.target.focus();
   const cancel = questionHandoff(f.target, f.origin, f.media);
   assert.equal(document.querySelectorAll('.hw-question-flight').length, 1);
-  assert.equal(f.target.style.visibility, 'hidden');
+  assert.equal(f.target.style.visibility, 'visible');
+  assert.equal(document.activeElement, f.target);
   for (const changed of f.listeners) changed({ matches: true });
   assert.equal(f.target.style.visibility, 'visible');
   assert.equal(document.querySelectorAll('.hw-question-flight').length, 0);
@@ -48,6 +51,7 @@ test('live reduced motion settles immediately and removes listeners and cosmetic
 
 test('navigation/reversal cleanup is safe when invoked repeatedly', async () => {
   const f = fixture();
+  f.target.focus();
   const cancel = questionHandoff(f.target, f.origin, f.media);
   cancel(); cancel();
   await Promise.resolve();
