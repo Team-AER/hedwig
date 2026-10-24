@@ -35,3 +35,25 @@ output/
 
 # Hedwig local dev
 backend/.env.hedwig-dev
+
+# Generated design-review media stays local; verification notes may be tracked.
+docs/design-review-*/**/*.png
+docs/design-review-*/**/*.jpg
+docs/design-review-*/**/*.jpeg
+docs/design-review-*/**/*.webp
+docs/design-review-*/**/*.gif
+docs/design-review-*/**/*.avif
+docs/design-review-*/**/*.svg
+docs/design-review-*/**/*.mp4
+docs/design-review-*/**/*.mov
+docs/design-review-*/**/*.webm
+docs/design-implementation-*/**/*.png
+docs/design-implementation-*/**/*.jpg
+docs/design-implementation-*/**/*.jpeg
+docs/design-implementation-*/**/*.webp
+docs/design-implementation-*/**/*.gif
+docs/design-implementation-*/**/*.avif
+docs/design-implementation-*/**/*.svg
+docs/design-implementation-*/**/*.mp4
+docs/design-implementation-*/**/*.mov
+docs/design-implementation-*/**/*.webm

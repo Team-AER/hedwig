@@ -1812,7 +1812,9 @@
         "no": "Non",
         "skip": "Pas maintenant",
         "yes": "Oui",
-        "always": "{{label}}, toujours"
+        "always": "{{label}}, toujours",
+        "thisMessage": "{{label}}, pour ce message",
+        "alwaysForSender": "{{label}}, toujours pour cet expéditeur"
       },
       "rail": {
         "accounts": "{{n}} comptes",
