@@ -1,5 +1,7 @@
 import { createPortal } from 'react-dom';
 import { PaneHeader } from '../shell/PaneHeader.jsx';
+import { askSource, rememberCitation, sourceMotion } from '../v2/askSource.js';
+import { senderName } from '../v2/format.js';
 import { questionHandoff } from '../v2/questionHandoff.js';
 // hedwig.ask — ask a question across all mail on the v2 backend (stream G): a streamed answer with
 // numbered citations, the sources it read, follow-ups that carry the earlier answer (followUpOf),
@@ -32,7 +34,17 @@ import * as M from '../shell/model.js';
 
 // Answers in 14px body text; the [n] markers are 10px accent superscripts (views/ui.jsx CITE_CSS).
 const ASK_CSS = `.hw-ask2 .hw-md{font-size:14px;line-height:1.55}
-.hw-ask2 .hw-md p{margin:0 0 10px}${ASK_FIELD_CSS}`;
+.hw-ask2 .hw-md p{margin:0 0 10px}
+.hw-ask-source{position:relative;display:flex;flex-direction:column;gap:8px;padding:18px 20px;margin:14px 0 22px;border:1px solid ${V.line};border-left:3px solid ${V.accent};border-radius:3px 14px 14px 3px;background:linear-gradient(135deg,${V.paper},${V.accentTint});transform-origin:top left}
+.hw-ask-source:after{content:'';position:absolute;right:0;top:0;width:18px;height:18px;border-left:1px solid ${V.line};border-bottom:1px solid ${V.line};border-radius:0 12px 0 4px;background:${V.paper}}
+.hw-ask-source strong{font-size:17px;line-height:1.3;letter-spacing:-.015em;padding-right:12px;overflow-wrap:anywhere}
+.hw-ask-source blockquote{margin:2px 0 0;font-size:14px;line-height:1.5;color:${V.muted};display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.hw-answer-source{border-radius:10px;transition:background .2s}
+.hw-answer-source:focus-within{background:${V.accentTint}}
+.hw-source-connector{position:fixed;inset:0;width:100%;height:100%;z-index:1000;pointer-events:none;overflow:visible}
+.hw-source-connector path{fill:none;stroke:var(--hw-accent);stroke-width:2;stroke-dasharray:1;stroke-dashoffset:0}
+@media(prefers-reduced-motion:reduce){.hw-answer-source{transition:none}}
+${ASK_FIELD_CSS}`;
 
 // "renew [1]." reads as "renew¹." : the space before a citation marker goes.
 const tidyCites = (text) => String(text || '').replace(/[ \t]+(\[(?:\d{1,3}(?:\s*,\s*\d{1,3})*|msg:[A-Za-z0-9_-]+)\])/g, '$1');
@@ -296,17 +308,17 @@ export default function Ask({ paneId = null, props = {} }) {
 
   const empty = (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18, padding: phone ? '8px 0' : '12px 0' }}>
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, padding: '28px 12px 8px', textAlign: 'center', color: V.muted }}>
-        <span style={{ width: 44, height: 44, borderRadius: 22, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: V.accentTint, color: V.accentInk }}>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: scope.threadKey ? 'flex-start' : 'center', gap: 10, padding: scope.threadKey ? '2px 0 8px' : '28px 12px 8px', textAlign: scope.threadKey ? 'left' : 'center', color: V.muted }}>
+        {!scope.threadKey && <span style={{ width: 44, height: 44, borderRadius: 22, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: V.accentTint, color: V.accentInk }}>
           <Icon name="sparkles" size={22} strokeWidth={1.6} />
-        </span>
+        </span>}
         <span style={{ fontSize: 13, maxWidth: 360 }}>
           {tv('hedwig.v2.ask.intro', 'Answers link to the sources they use.')}
         </span>
         <CoverageNote what="ask" />
       </div>
       {starters.length > 0 && (
-        <div role="group" aria-label={tv('hedwig.v2.ask.starters', 'Suggestions')} style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}>
+        <div role="group" aria-label={tv('hedwig.v2.ask.starters', 'Suggestions')} style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: scope.threadKey ? 'flex-start' : 'center' }}>
           {starters.map((q) => (
             <button key={q} type="button" className="hw-chip" onClick={(event) => { pendingHandoff.current = { question: q, rect: event.currentTarget.getBoundingClientRect() }; pinned.current = true; run(q); }}
               style={{ minHeight: phone ? 44 : 30, padding: '4px 12px', border: `1px solid ${V.line}`, borderRadius: 15, background: V.field, color: V.ink, font: 'inherit', fontSize: 13, cursor: 'pointer' }}>
@@ -425,6 +437,7 @@ export default function Ask({ paneId = null, props = {} }) {
       <style>{ASK_CSS}</style>
       {headerTarget ? createPortal(actions, headerTarget) : head}
       <div ref={scrollRef} onScroll={onScroll} className="hw-ask2 hw-scroll" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: phone ? '12px 16px' : '4px 24px 12px' }}>
+        {scope.threadKey && <AskSourceCard threadKey={scope.threadKey} subject={scope.subject} />}
         {showHistory ? historyList : turns.length ? conversation : empty}
       </div>
       {composer}
@@ -432,7 +445,25 @@ export default function Ask({ paneId = null, props = {} }) {
   );
 }
 
+function AskSourceCard({ threadKey, subject }) {
+  const ref = useRef(null);
+  const origin = askSource(threadKey);
+  const source = origin?.source;
+  useLayoutEffect(() => sourceMotion(ref.current, origin?.rect), [threadKey, origin]);
+  return (
+    <aside ref={ref} className="hw-ask-source" data-ask-source={threadKey} aria-label={tv('hedwig.v2.ask.sourceThread', 'This conversation')}>
+      <span style={{ display: 'flex', gap: 7, alignItems: 'center', fontSize: 12, color: V.accentInk }}><Icon name="mail" size={14} />{source?.from ? senderName(source.from) : tv('hedwig.v2.ask.thisThread', 'this thread')}</span>
+      <strong>{subject || source?.subject || tv('hedwig.v2.ask.thisThread', 'this thread')}</strong>
+      {source?.quote && <blockquote>{source.quote}</blockquote>}
+      <LinkBtn onClick={() => openThread(source || { threadId: threadKey, subject })} style={{ alignSelf: 'flex-start', fontSize: 12 }}>{tv('hedwig.v2.ask.openThread', 'Open conversation')}</LinkBtn>
+    </aside>
+  );
+}
+
 function AnswerBlock({ state, phone, onFeedback, onAgain, onAgent, onDeeper = null }) {
+  const sourceRows = useRef(new Map());
+  const stopLink = useRef(() => {});
+  useEffect(() => () => stopLink.current(), []);
   const [wrongOpen, setWrongOpen] = useState(false);
   const [note, setNote] = useState('');
   const [sending, setSending] = useState(false);
@@ -445,8 +476,12 @@ function AnswerBlock({ state, phone, onFeedback, onAgain, onAgent, onDeeper = nu
   const bySource = new Map(sources.map((s) => [s.n, s]));
   const openSource = (n) => {
     const s = bySource.get(n);
-    if (s?.web) { openWebSource(s.web); return; }
-    if (s?.message?.id) openThread(sourceItem(s.message));
+    const rect = document.activeElement?.getBoundingClientRect();
+    if (s?.web) openWebSource(s.web);
+    else if (s?.message?.id) { rememberCitation(s.message, rect); openThread(sourceItem(s.message)); }
+    const row = sourceRows.current.get(n);
+    stopLink.current();
+    if (row) { row.scrollIntoView?.({ block: 'nearest', behavior: 'instant' }); stopLink.current = sourceMotion(row, rect, { link: true }); }
   };
   // Citations renumbered 1, 2, 3 in reading order, the uncited sources after them.
   const ro = readingOrder(state.answer, sources);
@@ -571,7 +606,7 @@ function AnswerBlock({ state, phone, onFeedback, onAgain, onAgent, onDeeper = nu
               if (s.web) {
                 const w = s.web;
                 return (
-                  <li key={s.source}>
+                  <li key={s.source} className="hw-answer-source" ref={(node) => { if (node) sourceRows.current.set(s.source, node); else sourceRows.current.delete(s.source); }}>
                     {i > 0 && <Hair />}
                     <a
                       href={w.url}
@@ -594,7 +629,7 @@ function AnswerBlock({ state, phone, onFeedback, onAgain, onAgent, onDeeper = nu
                 );
               }
               return (
-                <li key={s.source}>
+                <li key={s.source} className="hw-answer-source" ref={(node) => { if (node) sourceRows.current.set(s.source, node); else sourceRows.current.delete(s.source); }}>
                   {i > 0 && <Hair />}
                   <button
                     type="button"

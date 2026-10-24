@@ -57,3 +57,6 @@ docs/design-implementation-*/**/*.svg
 docs/design-implementation-*/**/*.mp4
 docs/design-implementation-*/**/*.mov
 docs/design-implementation-*/**/*.webm
+
+# Local review media stays outside source history.
+/docs/design-expression-20261024/evidence/
