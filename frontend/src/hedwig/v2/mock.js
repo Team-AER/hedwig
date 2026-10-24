@@ -559,6 +559,9 @@ export function mockSetAskPace(ms) { askPace = Math.max(0, Number(ms) || 0); }
  * /context/ask: "passport", "lottery" or "nothing" finds nothing (no sources, no model call);
  * "guess" gives an answer that cites nothing (unsupported); "cite" adds a citation to a source
  * that is not there, which the check removes; anything else answers about the deposit.
+ * With body.threadKey the thread is read first; "article", "web", "news", "pizza" or "summar" (web not
+ * turned off) searches the web, reads two pages (one link from the mail, one search result) and
+ * skips an unsubscribe link, and the answer cites a page as source 3.
  */
 export async function mockStream(path, body, { onEvent, signal } = {}) {
   requestLog.push(`STREAM ${path}`);
@@ -573,6 +576,7 @@ export async function mockStream(path, body, { onEvent, signal } = {}) {
   const entry = {
     id, question: q, created_at: new Date().toISOString(), completed_at: null, status: 'running', answer: null, citations: [], sources: [], unsupported: null, notFound: null,
     followUpOf: body.followUpOf || null, entityId: body.entityId || null, topicId: body.topicId || null, feedback: null, plan: null,
+    threadKey: body.threadKey || null, web: [],
   };
   db.asks.unshift(entry);
   const emit = (ev) => onEvent?.(clone(ev));
@@ -595,8 +599,28 @@ export async function mockStream(path, body, { onEvent, signal } = {}) {
   const pause = async (n = 1) => { if (askPace) await new Promise((r) => setTimeout(r, askPace * n)); await tick(); };
   const words = q.replace(/^(?:what|when|who|how|did|does|is|are)\b\s*/i, '').replace(/\?$/, '') || q;
   const searches = flags.notFound ? [[words, 0]] : [[words, 3], ['tenancy deposit scheme', 2], ['deposit return', 0]];
+  if (body.threadKey) {
+    emit({ type: 'thread', status: 'running' }); await pause(1);
+    emit({ type: 'thread', status: 'done', messages: 2, subject: 'AI, ML and Data Engineering Round-Up' });
+  }
+  const useWeb = body.web !== false && (body.deep === true || /article|web|news|pizza|summar/i.test(q));
   emit({ type: 'plan', status: 'running' }); await pause(2);
-  emit({ type: 'plan', status: 'done', text: words });
+  emit({ type: 'plan', status: 'done', text: words, web: { on: body.web !== false, allowed: true, available: true } });
+  let web = [];
+  if (useWeb) {
+    const query = 'Pizza Bot open-source inbox AI agents';
+    emit({ type: 'web', query, round: 0, status: 'running' }); await pause(2);
+    emit({ type: 'web', query, round: 0, status: 'done', found: 6 });
+    emit({ type: 'links', opened: 1, skipped: [{ text: 'Unsubscribe', host: 'mail.infoq.example', reason: 'unsubscribe' }] });
+    emit({ type: 'read', round: 0, status: 'running', count: 2 }); await pause(2);
+    emit({ type: 'read', round: 0, status: 'done', pages: [{ host: 'infoq.example', title: 'Pizza Bot: Open-Source Inbox for Background AI Agents', ok: true, via: 'link-search' }, { host: 'github.example', title: 'pizza-bot', ok: true, via: 'search' }] });
+    web = [
+      { n: 3, url: 'https://www.infoq.example/news/2026/10/pizza-bot/', title: 'Pizza Bot: Open-Source Inbox for Background AI Agents', host: 'infoq.example', published: '2026-10-04', via: 'link-search', snippetOnly: false, excerpt: 'Pizza Bot is an open-source inbox where background agents post their work for review.' },
+      { n: 4, url: 'https://github.example/pizza-bot/pizza-bot', title: 'pizza-bot', host: 'github.example', published: null, via: 'search', snippetOnly: false, excerpt: 'An inbox for background AI agents.' },
+      { n: 5, url: 'https://news.example/agents-inbox', title: 'Agents get an inbox', host: 'news.example', published: '2026-10-05', via: 'search', snippetOnly: true, excerpt: 'Background agents need somewhere to report.' },
+    ];
+    answer = 'Pizza Bot is an open-source inbox where background AI agents post their results for a person to review, according to infoq.example [3]. Its code is public [4]. The round-up lists it first among this month\'s news [1].';
+  }
   emit({ type: 'search', text: words, round: 0, status: 'running' }); await pause(2);
   emit({ type: 'search', text: words, round: 0, status: 'done', found: searches[0][1] });
   emit({ type: 'review', round: 1, status: 'running' }); await pause(3);
@@ -610,7 +634,8 @@ export async function mockStream(path, body, { onEvent, signal } = {}) {
     emit({ type: 'review', round: 2, status: 'done', enough: true, searches: [] });
   }
   entry.plan = { text: words, searches: searches.map(([text, found]) => ({ text, found })) };
-  emit({ type: 'sources', sources, askLogId: id, plan: { text: q }, coverage: clone(db.coverage) });
+  emit({ type: 'sources', sources, web, askLogId: id, plan: { text: q }, coverage: clone(db.coverage) });
+  entry.web = web;
   await pause(3);
   for (const word of answer.split(/(?<= )/)) { emit({ type: 'delta', text: word }); if (askPace) await new Promise((r) => setTimeout(r, 40)); await tick(); }
   const checked = flags.invalidCitations.length ? answer.replace(/\s?\[4\]/, '') : answer;
@@ -1197,7 +1222,11 @@ function route(method, path, body) {
 
   // ── G: Ask (the stream itself is mockStream) ────────────────────────────
   if (seg[0] === 'context' && seg[1] === 'ask') {
-    if (method === 'GET' && seg[2] === 'history') return clone(db.asks.slice(0, Number(params.get('limit')) || 50));
+    if (method === 'GET' && seg[2] === 'options') return { web: { allowed: true, available: true } };
+    if (method === 'GET' && seg[2] === 'history') {
+      const key = params.get('threadKey');
+      return clone(db.asks.filter((x) => !key || x.threadKey === key).slice(0, Number(params.get('limit')) || 50));
+    }
     const a = db.asks.find((x) => x.id === decodeURIComponent(seg[2] || ''));
     if (!a) throw notFound();
     if (method === 'GET' && !seg[3]) return clone(a);

@@ -1,3 +1,4 @@
+import { contentRowsHash } from '../content/store.js';
 // Summaries written eagerly (AI-rebuild PRD "Summaries", v2 PRD "The story so far"): the thread
 // story for every thread of two or more messages with a real person in it, and a one-line TL;DR for
 // every People and Screener message, both from the one summarise prompt family (work.summarise).
@@ -165,14 +166,14 @@ export async function saveStory(userId, threadKey, messages, entry, prov, { sour
   const s = prov?.story || {};
   await query(
     `INSERT INTO hedwig_work_stories (user_id, thread_key, up_to_message_id, message_count, story, provenance,
-                                      prompt_id, prompt_version, model, ai_call_id, tier, lighter, source, error, attempted_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NULL, NOW())
+                                      prompt_id, prompt_version, model, ai_call_id, tier, lighter, source, error, attempted_at, input_hash)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NULL, NOW(), $14)
      ON CONFLICT (user_id, thread_key) DO UPDATE SET up_to_message_id = EXCLUDED.up_to_message_id, message_count = EXCLUDED.message_count,
        story = EXCLUDED.story, provenance = EXCLUDED.provenance, prompt_id = EXCLUDED.prompt_id, prompt_version = EXCLUDED.prompt_version,
        model = EXCLUDED.model, ai_call_id = EXCLUDED.ai_call_id, tier = EXCLUDED.tier, lighter = EXCLUDED.lighter, source = EXCLUDED.source,
-       error = NULL, attempted_at = NOW(), updated_at = NOW()`,
+       error = NULL, attempted_at = NOW(), updated_at = NOW(), input_hash=EXCLUDED.input_hash`,
     [userId, threadKey, latest.id, messages.length, JSON.stringify(entry), JSON.stringify(prov || {}),
-      s.promptId || null, s.promptVersion || null, s.model || null, s.aiCallId ?? null, s.tier || null, Boolean(lighter), source],
+      s.promptId || null, s.promptVersion || null, s.model || null, s.aiCallId ?? null, s.tier || null, Boolean(lighter), source, contentRowsHash(messages)],
   );
 }
 
@@ -259,7 +260,8 @@ export async function tldrFor(userId, messageIds) {
        FROM messages m
        JOIN messages mx ON mx.account_id = m.account_id AND (mx.id = m.id OR (m.message_id IS NOT NULL AND mx.message_id = m.message_id))
        JOIN hedwig_work_tldr x ON x.message_id = mx.id AND x.user_id = $1 AND x.text IS NOT NULL
-      WHERE m.id = ANY($2::uuid[])
+       LEFT JOIN hedwig_email_content ec ON ec.message_id=mx.id AND ec.user_id=$1
+      WHERE m.id = ANY($2::uuid[]) AND (ec.message_id IS NULL OR NOT ec.changed OR ec.repair_state='done' OR x.updated_at>=ec.updated_at)
       ORDER BY m.id, (mx.id = m.id) DESC, x.updated_at DESC`,
     [userId, ids],
   );

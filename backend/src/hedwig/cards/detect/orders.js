@@ -43,9 +43,12 @@ export function plausibleRef(ref, { lettersOk = false } = {}) {
 
 function firstRef(re, text, opts) {
   re.lastIndex = 0;
-  for (const m of text.matchAll(re)) {
+  let m;
+  while ((m = re.exec(text))) {
     const ref = plausibleRef(m[1], opts);
     if (ref) return { ref, index: m.index };
+    // A rejected word ("your order\nOrder ID") must not consume the next real label.
+    re.lastIndex = m.index + 1;
   }
   return null;
 }

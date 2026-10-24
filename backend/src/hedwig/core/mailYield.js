@@ -27,7 +27,7 @@ import { deferJob } from '../jobs.js';
 
 export const BODY_JOB = 'mail.fetchBody';
 export const ATTACHMENT_JOB = 'index.attachmentText';
-export const FETCH_KINDS = [BODY_JOB, ATTACHMENT_JOB];
+export const FETCH_KINDS = [BODY_JOB, ATTACHMENT_JOB, 'content.fetchMetadata'];
 
 const BACKOFF_KEY = 'index.fetchBackoff:';
 const BACKOFF_BASE_MS = 60_000;

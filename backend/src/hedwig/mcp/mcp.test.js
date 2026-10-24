@@ -410,7 +410,7 @@ describe('the MCP endpoint', () => {
     const names = result.tools.map((t) => t.name);
     expect(names).toEqual(expect.arrayContaining(['search', 'fetch', 'ask', 'list_mail', 'summarize_thread', 'list_accounts', 'aer_receipts__totals']));
     for (const hidden of ['categorize', 'archive_message', 'snooze', 'read_message', 'set_triage']) expect(names).not.toContain(hidden);
-    expect(result.tools.find((t) => t.name === 'search').annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false });
+    expect(result.tools.find((t) => t.name === 'search').annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false, openWorldHint: false });
     const refused = await (await rpc(tokens.access_token, 'tools/call', { name: 'categorize', arguments: { id: MSG, category: 'reading' } })).json();
     expect(refused.error.code).toBe(-32602);
     expect(svc.correct).not.toHaveBeenCalled();
@@ -430,7 +430,73 @@ describe('the MCP endpoint', () => {
     expect(sortService.streamList).toHaveBeenCalledWith(USER, 'people', expect.objectContaining({ needsYou: true, limit: 20 }));
     expect(list.items[0]).toMatchObject({ id: MSG, from: 'Ana <ana@example.com>', needs_you: true, why: 'Asked you a question', summary: `TL;DR of ${MSG}` });
     const answer = JSON.parse((await call(tokens.access_token, 'ask', { question: 'what did Ana want?' })).content[0].text);
-    expect(answer).toMatchObject({ answer: 'Ana asked about lunch [1].', answer_id: '44444444-4444-4444-8444-444444444444', sources: [{ n: 1, id: MSG, url: `${ORIGIN}/?m=${MSG}` }] });
+    expect(answer).toMatchObject({ answer: 'Ana asked about lunch [1].', answer_id: '44444444-4444-4444-8444-444444444444', sources: [{ n: 1, id: MSG, url: `${ORIGIN}/?m=${MSG}` }], web_sources: [] });
+    expect(answer.thread_id).toBeUndefined();
+    expect(svc.answerQuestion).toHaveBeenCalledWith(USER, 'what did Ana want?', expect.objectContaining({ followUpOf: null, threadKey: null, web: null, deep: false }));
+  });
+
+  it('asks about one conversation, with the web, and returns the pages it cites', async () => {
+    const { tokens } = await connect({ write: false });
+    const ask = (await (await rpc(tokens.access_token, 'tools/list')).json()).result.tools.find((t) => t.name === 'ask');
+    expect(Object.keys(ask.inputSchema.properties)).toEqual(expect.arrayContaining(['thread_id', 'use_web', 'dig_deeper']));
+    expect(ask.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false, openWorldHint: true });
+
+    svc.answerQuestion = vi.fn(async () => ({
+      answer: 'The order ships Monday [1]; the carrier says two days [2], and the recall [3].',
+      askLogId: '55555555-5555-4555-8555-555555555555',
+      notFound: false,
+      sources: [{ n: 1, message: { id: MSG, subject: 'Your order', from_name: 'Shop', from_email: 'orders@shop.example', date: '2026-10-12' } }],
+      web: [
+        { n: 2, url: 'https://carrier.example/times', title: 'Delivery times', host: 'carrier.example', published: '2026-10-01', via: 'search', snippetOnly: false, excerpt: 'Two working days' },
+        { n: 3, url: 'https://news.example/recall', title: '', host: 'news.example', published: null, via: 'search', snippetOnly: true, excerpt: 'A recall' },
+      ],
+      plan: { thread: { key: 'thread-key-1', messages: 3 }, research: { via: 'model' } },
+    }));
+    const answer = JSON.parse((await call(tokens.access_token, 'ask', { question: 'when does it arrive?', thread_id: MSG, use_web: true })).content[0].text);
+    expect(svc.answerQuestion).toHaveBeenCalledWith(USER, 'when does it arrive?', expect.objectContaining({ threadKey: MSG, web: true, deep: false, followUpOf: null }));
+    expect(answer).toEqual({
+      answer: 'The order ships Monday [1]; the carrier says two days [2], and the recall [3].',
+      answer_id: '55555555-5555-4555-8555-555555555555',
+      found_nothing: false,
+      thread_id: 'thread-key-1',
+      sources: [{ n: 1, id: MSG, subject: 'Your order', from: 'Shop <orders@shop.example>', date: '2026-10-12', url: `${ORIGIN}/?m=${MSG}` }],
+      web_sources: [
+        { n: 2, url: 'https://carrier.example/times', title: 'Delivery times', host: 'carrier.example', snippet_only: false },
+        { n: 3, url: 'https://news.example/recall', title: 'news.example', host: 'news.example', snippet_only: true },
+      ],
+    });
+    expect(db.activity).toEqual([]); // a read tool: nothing recorded as a change
+  });
+
+  it('passes dig_deeper and use_web through, with an explicit use_web winning', async () => {
+    const { tokens } = await connect({ write: false });
+    const FOLLOW = '44444444-4444-4444-8444-444444444444';
+    await call(tokens.access_token, 'ask', { question: 'anything else?', follow_up_of: FOLLOW, dig_deeper: true });
+    expect(svc.answerQuestion).toHaveBeenLastCalledWith(USER, 'anything else?', expect.objectContaining({ followUpOf: FOLLOW, web: true, deep: true }));
+    await call(tokens.access_token, 'ask', { question: 'from the mail only', use_web: false, dig_deeper: true });
+    expect(svc.answerQuestion).toHaveBeenLastCalledWith(USER, 'from the mail only', expect.objectContaining({ web: false, deep: true }));
+    await call(tokens.access_token, 'ask', { question: 'no web', use_web: false });
+    expect(svc.answerQuestion).toHaveBeenLastCalledWith(USER, 'no web', expect.objectContaining({ web: false, deep: false }));
+  });
+
+  it('says when the web was asked for but is not set up', async () => {
+    const { tokens } = await connect({ write: false });
+    svc.answerQuestion = vi.fn(async () => ({ answer: 'From the mail [1].', askLogId: null, notFound: false, sources: [], web: [], plan: { research: { via: 'unavailable' } } }));
+    const asked = JSON.parse((await call(tokens.access_token, 'ask', { question: 'q', use_web: true })).content[0].text);
+    expect(asked.note).toMatch(/Web search is not set up/);
+    const unasked = JSON.parse((await call(tokens.access_token, 'ask', { question: 'q' })).content[0].text);
+    expect(unasked.note).toBeUndefined();
+  });
+
+  it('refuses bad ask arguments and reports an unknown conversation', async () => {
+    const { tokens } = await connect({ write: false });
+    const bad = await call(tokens.access_token, 'ask', { question: 'q', use_web: 'maybe' });
+    expect(bad.isError).toBe(true);
+    expect(bad.content[0].text).toMatch(/^Invalid arguments.*use_web/);
+    expect((await call(tokens.access_token, 'ask', { question: 'q', thread_id: 'x'.repeat(1001) })).isError).toBe(true);
+    expect(svc.answerQuestion).not.toHaveBeenCalled();
+    svc.answerQuestion = vi.fn(async () => { throw Object.assign(new Error('Thread not found'), { status: 404, expose: true }); });
+    expect(await call(tokens.access_token, 'ask', { question: 'q', thread_id: 'no-such-thread' })).toMatchObject({ isError: true, content: [{ text: 'Thread not found' }] });
   });
 
   it('runs write tools on a read-write connection and records what they did', async () => {

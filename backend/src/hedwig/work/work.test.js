@@ -121,7 +121,7 @@ async function fakeQuery(sql, params = []) {
     return { rows: db.thread.filter((m) => m.thread_key === params[1]).map((m) => ({ ...m })) };
   }
   if (/FROM hedwig_commitments/.test(sql)) return { rows: db.commitments };
-  if (/SELECT \* FROM hedwig_work_stories/.test(sql)) {
+  if (/SELECT \* FROM hedwig_work_stories/.test(sql) || /SELECT w\.\*,EXISTS/.test(sql)) {
     const s = db.stories.get(`${params[0]}|${params[1]}`);
     return { rows: s ? [JSON.parse(JSON.stringify(s))] : [] };
   }
@@ -407,6 +407,7 @@ describe('thread story', () => {
     expect(grown.story.citations).toEqual([{ n: 1, messageId: 'a5' }]);
     expect(gw.callsFor('work.summarise')).toHaveLength(2);
     expect(thread.cacheValid({ up_to_message_id: 'a5' }, db.thread)).toBe(true);
+    expect(thread.cacheValid({ up_to_message_id: 'a5', content_stale: true }, db.thread)).toBe(false);
     expect(thread.cacheValid({ up_to_message_id: 'a4' }, db.thread)).toBe(false);
   });
 

@@ -1,3 +1,4 @@
+import { emailContent } from './emailContent.js';
 // Tokenizer and feature extractor for the antispam classifier (v0.2).
 //
 // Pure functions: no I/O, no DB. Converts an email into the bag-of-words
@@ -136,7 +137,7 @@ function decodeEntities(text) {
  */
 export function tokenize(message) {
   const subject = cleanText(capChars(message?.subject));
-  const rawBody = message?.body || message?.bodyHtml || '';
+  const rawBody = emailContent({ body_text: capChars(message?.body), body_html: capChars(message?.bodyHtml) }).text;
   const body = rawBody ? cleanText(capChars(rawBody)) : '';
 
   const tokens = [];

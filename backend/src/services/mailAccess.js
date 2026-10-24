@@ -1,3 +1,4 @@
+import { emailContent } from './emailContent.js';
 // Safe, fixed mail/account read capabilities for plugins (v3.0 plugin platform).
 //
 // A plugin never runs raw SQL. Instead it calls this reviewed, bounded set of read functions
@@ -126,12 +127,12 @@ export async function getMessageFields(accountId, ids) {
   if (!ids || ids.length === 0) return [];
   const { rows } = await query(
     `SELECT id, subject, from_name, from_email,
-            COALESCE(NULLIF(body_text, ''), snippet) AS content
+            body_text, body_html, snippet
        FROM messages
       WHERE id = ANY($1::uuid[]) AND account_id = $2`,
     [ids, accountId]
   );
-  return rows;
+  return rows.map(({ body_text, body_html, snippet, ...row }) => ({ ...row, content: emailContent({ body_text, body_html, snippet }).text }));
 }
 
 // A plugin's own per-message annotations for a set of message ids within an account, as

@@ -2,13 +2,15 @@
 // into it, and saved answers from GET /context/ask/history and /context/ask/:id read into the same
 // state, so a past answer shows with its citations instead of being asked again. Pure.
 //
-// Events: { type: 'sources', sources: [{ n, message }], askLogId, coverage }, { type: 'delta', text }…,
-// { type: 'done', answer, citations, unsupported, notFound, invalidCitations, askLogId, coverage,
-// model, lighterModel }, { type: 'error', error }.
+// Events: { type: 'sources', sources: [{ n, message }], web: [{ n, url, title, host, … }], askLogId,
+// coverage }, { type: 'delta', text }…, { type: 'done', answer, citations, unsupported, notFound,
+// invalidCitations, askLogId, coverage, model, lighterModel }, { type: 'error', error }; and the
+// steps: plan, search, review, thread (the open thread read), web (a web search), read (web pages
+// read), links (links in the mail opened or skipped), dig (Dig deeper deciding what else to read).
 import { citedNumbers } from '../views/helpers.js';
 
 export const ASK2_INITIAL = Object.freeze({
-  status: 'idle', id: null, question: '', sources: [], answer: '', citations: [], unsupported: false, notFound: false,
+  status: 'idle', id: null, question: '', sources: [], web: [], webInfo: null, answer: '', citations: [], unsupported: false, notFound: false,
   invalidCitations: [], error: null, followUpOf: null, feedback: null, saved: false, createdAt: null, provenance: null, coverage: null,
   searches: [], steps: [], startedAt: null, finishedAt: null,
 });
@@ -42,6 +44,17 @@ export function coverageGap(coverage) {
   return `${Math.floor(coverage.share * 100)}%`;
 }
 
+/**
+ * Web sources as the server numbers them (after the mail): only http(s) pages with a number, so a
+ * citation can never open anything else. Pure.
+ */
+export function webSources(list) {
+  return (Array.isArray(list) ? list : []).filter((w) => w && Number.isInteger(w.n) && /^https?:\/\//i.test(String(w.url || ''))).map((w) => ({
+    n: w.n, url: String(w.url), title: String(w.title || w.host || w.url), host: String(w.host || ''), published: w.published || null,
+    via: w.via || 'search', snippetOnly: w.snippetOnly === true, excerpt: typeof w.excerpt === 'string' ? w.excerpt : '',
+  }));
+}
+
 /** A new question being asked (a follow-up names the answer it follows). */
 export function askStarted(question, { followUpOf = null, now = Date.now() } = {}) {
   return { ...ASK2_INITIAL, status: 'streaming', question, followUpOf, startedAt: now };
@@ -49,8 +62,9 @@ export function askStarted(question, { followUpOf = null, now = Date.now() } = {
 
 // ── Progress ─────────────────────────────────────────────────────────────────
 // Ask's work as steps for the pane (AskProgress.jsx), in the order they happen:
-//   { id, kind: 'plan'|'search'|'review'|'read'|'write', status: 'running'|'done'|'stopped',
-//     text?, round?, found?, enough?, searches?, count? }
+//   { id, kind: 'thread'|'plan'|'search'|'review'|'web'|'webread'|'links'|'dig'|'read'|'write',
+//     status: 'running'|'done'|'stopped', text?, round?, found?, enough?, searches?, count?, pages?,
+//     opened?, skipped? }
 function upsertStep(steps, step) {
   const list = steps || [];
   const i = list.findIndex((x) => x.id === step.id);
@@ -70,7 +84,46 @@ export function reduceAsk2(state, event) {
   if (!event || typeof event !== 'object') return state;
   switch (event.type) {
     case 'plan':
-      return { ...state, status: 'streaming', steps: upsertStep(state.steps, { id: 'plan', kind: 'plan', status: stepStatus(event.status), ...(event.text ? { text: event.text } : {}) }) };
+      return {
+        ...state,
+        status: 'streaming',
+        webInfo: event.web && typeof event.web === 'object' ? event.web : state.webInfo,
+        steps: upsertStep(state.steps, { id: 'plan', kind: 'plan', status: stepStatus(event.status), ...(event.text ? { text: event.text } : {}) }),
+      };
+    case 'thread':
+      return {
+        ...state,
+        status: 'streaming',
+        steps: upsertStep(state.steps, { id: 'thread', kind: 'thread', status: stepStatus(event.status), ...(event.status === 'done' ? { count: Number(event.messages) || 0, text: event.subject || '' } : {}) }),
+      };
+    case 'web': {
+      // A web search: { query, round, status, found }.
+      if (typeof event.query !== 'string' || !event.query) return state;
+      const round = Number(event.round) || 0;
+      const status = stepStatus(event.status);
+      return { ...state, status: 'streaming', steps: upsertStep(state.steps, { id: `web:${round}:${event.query}`, kind: 'web', status, text: event.query, round, ...(status === 'done' ? { found: Number(event.found) || 0 } : {}) }) };
+    }
+    case 'read': {
+      // Web pages being read: { round, status, count } then { round, status: 'done', pages: [{ host, title, ok, via }] }.
+      const round = Number(event.round) || 0;
+      const status = stepStatus(event.status);
+      const pages = Array.isArray(event.pages) ? event.pages : null;
+      const step = { id: `webread:${round}`, kind: 'webread', status, round, ...(Number.isFinite(event.count) ? { count: event.count } : {}) };
+      if (pages) Object.assign(step, { pages, count: pages.filter((x) => x && x.ok).length });
+      return { ...state, status: 'streaming', steps: upsertStep(state.steps, step) };
+    }
+    case 'links':
+      return {
+        ...state,
+        status: 'streaming',
+        steps: upsertStep(state.steps, { id: 'links', kind: 'links', status: 'done', opened: Number(event.opened) || 0, skipped: Array.isArray(event.skipped) ? event.skipped : [] }),
+      };
+    case 'dig': {
+      const round = Number(event.round) || 0;
+      const step = { id: `dig:${round}`, kind: 'dig', status: stepStatus(event.status), round };
+      if (event.status === 'done') step.enough = event.enough !== false;
+      return { ...state, status: 'streaming', steps: upsertStep(state.steps, step) };
+    }
     case 'search': {
       // Ask searching, and searching again with its own words: { text, round, status, found }.
       if (typeof event.text !== 'string' || !event.text) return state;
@@ -92,8 +145,9 @@ export function reduceAsk2(state, event) {
     }
     case 'sources': {
       const sources = Array.isArray(event.sources) ? event.sources : [];
+      const web = webSources(event.web);
       return {
-        ...state, status: 'streaming', id: event.askLogId || state.id, sources, coverage: coverageOf(event) || state.coverage,
+        ...state, status: 'streaming', id: event.askLogId || state.id, sources, web, coverage: coverageOf(event) || state.coverage,
         steps: sources.length ? upsertStep(settleSteps(state.steps), { id: 'read', kind: 'read', status: 'running', count: sources.length }) : settleSteps(state.steps),
       };
     }
@@ -133,13 +187,18 @@ function savedSearches(plan) {
 
 /** A saved answer's steps, from what was kept: the plan's words, its searches, the messages read. */
 function savedSteps(entry, searches, sourceCount) {
-  if (!searches.length) return [];
+  const research = entry.plan?.research;
+  const webSearches = Array.isArray(research?.searches) ? research.searches.filter((x) => x && typeof x.text === 'string' && x.text) : [];
+  if (!searches.length && !webSearches.length && !entry.plan?.thread) return [];
   const steps = [];
+  if (entry.plan?.thread) steps.push({ id: 'thread', kind: 'thread', status: 'done', count: Number(entry.plan.thread.messages) || 0 });
   if (entry.plan?.text) steps.push({ id: 'plan', kind: 'plan', status: 'done', text: entry.plan.text });
   searches.forEach((x, i) => {
     if (i === 1) steps.push({ id: 'review:1', kind: 'review', status: 'done', round: 1, enough: false, searches: searches.slice(1).map((y) => y.text) });
     steps.push({ id: `search:${x.round}:${x.text}`, kind: 'search', status: 'done', text: x.text, round: x.round, found: x.found });
   });
+  webSearches.forEach((x) => steps.push({ id: `web:0:${x.text}`, kind: 'web', status: 'done', text: x.text, round: 0, found: Number(x.found) || 0 }));
+  if (Number(research?.read) > 0) steps.push({ id: 'webread:0', kind: 'webread', status: 'done', round: 0, count: Number(research.read) });
   if (sourceCount) steps.push({ id: 'read', kind: 'read', status: 'done', count: sourceCount });
   if (entry.answer) steps.push({ id: 'write', kind: 'write', status: 'done' });
   return steps;
@@ -157,9 +216,11 @@ export function fromSaved(entry) {
     id: entry.id || null,
     question: entry.question || '',
     sources: Array.isArray(entry.sources) ? entry.sources.filter((s) => s && s.message) : [],
+    web: webSources(entry.web),
     answer: typeof entry.answer === 'string' ? entry.answer : '',
     citations: Array.isArray(entry.citations) ? entry.citations : citedNumbers(entry.answer || ''),
     unsupported: entry.unsupported === true,
+    evidenceStale: entry.evidenceStale === true,
     notFound: entry.notFound === true,
     error: entry.status === 'error' || entry.status === 'aborted' ? (entry.error || null) : null,
     followUpOf: entry.followUpOf || null,

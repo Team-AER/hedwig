@@ -6,6 +6,7 @@
 import { parseDocument, DomUtils } from 'htmlparser2';
 import { query } from '../../services/db.js';
 import { convert } from '../htmlToText.js';
+import { emailContent, extractHtmlContent, CONTENT_VERSION, isPlaceholder, MAX_HTML_CHARS, MAX_TEXT_CHARS } from '../../services/emailContent.js';
 
 // ── Text rules ───────────────────────────────────────────────────────────────
 
@@ -187,8 +188,14 @@ const htmlOf = (nodes) => nodes.map((n) => DomUtils.getOuterHTML(n)).join('\n');
 
 /** Split HTML into { main, quoted, signature } texts. Returns null when it has no structure to use. */
 export function splitHtml(html) {
+  const bounded = String(html || '').slice(0, MAX_HTML_CHARS);
+  // A superset of the supported structure markers avoids building a DOM for ordinary receipts.
+  if (!/blockquote|quote|signature|cite-prefix|outlookmessageheader|divRplyFwdMsg|appendonsend|stopSpelling|zmail_extra|data-smartmail/i.test(bounded)) return null;
+  // The quote layer must honor the shared parser's limits too. Keep the bounded selected text
+  // when a DOM would exceed those limits, rather than recovering unbounded hidden content.
+  if (extractHtmlContent(html).truncated) return null;
   let doc;
-  try { doc = parseDocument(String(html || ''), { decodeEntities: true }); } catch { return null; }
+  try { doc = parseDocument(bounded, { decodeEntities: true }); } catch { return null; }
   const quotedNodes = [];
   const sigNodes = [];
   const all = DomUtils.findAll(() => true, doc.children);
@@ -234,7 +241,7 @@ export function splitHtml(html) {
  * some. The chunk sweep then re-chunks, once, the messages whose body produced no text before
  * (store.js repairEmptyBodies), without re-chunking the whole index.
  */
-export const PARSER_VERSION = '2026-09-24.1';
+export const PARSER_VERSION = CONTENT_VERSION;
 
 const HTML_START = /^\s*(<!doctype\s+html|<html[\s>]|<head[\s>]|<body[\s>]|<(div|table|p|span|style|meta|center|font)[\s>])/i;
 /** A text/plain part that is really HTML. Pure. */
@@ -256,7 +263,8 @@ export function splitBody(input) {
   const row = typeof input === 'string' ? { body_text: input } : (input || {});
   // Some senders put a bare line break in the text/plain part ("\r\n") and the whole message in
   // the HTML part, and some send HTML in the text/plain part. Neither is text to index as-is.
-  let base = String(row.body_text || '').trim() ? row.body_text : '';
+  const content = emailContent(row);
+  let base = content.state === 'placeholder' ? '' : content.text;
   let html = row.body_html || '';
   if (base && looksLikeHtml(base)) {
     if (!String(html).trim()) html = base;
@@ -264,17 +272,18 @@ export function splitBody(input) {
   }
   const quotedParts = [];
   const sigParts = [];
-  if (html) {
+  if (html && !(content.source === 'plain' && content.distinctPlain)) {
     const s = splitHtml(html);
     if (s) {
       base = s.main;
+      if (content.additionalPlain) base = `${base}\n\n[Additional plain-text alternative]\n${content.additionalPlain}`.slice(0,MAX_TEXT_CHARS).toWellFormed();
       if (s.quoted) quotedParts.push(s.quoted);
       if (s.signature) sigParts.push(s.signature);
     } else if (!base) {
       base = convert(html);
     }
   }
-  if (!base && !quotedParts.length) base = row.snippet || '';
+  if (!base && !quotedParts.length) base = isPlaceholder(row.snippet) ? '' : row.snippet || '';
   const q = splitQuotes(base);
   if (q.quoted) quotedParts.unshift(q.quoted);
   const d1 = splitDisclaimer(q.newText);

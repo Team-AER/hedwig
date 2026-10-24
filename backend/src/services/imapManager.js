@@ -1,3 +1,4 @@
+import { captureMailboxMetadata } from './emailMetadataStore.js';
 import { FolderStatusMonitor, checkpointFolderStatus } from './folderStatus.js';
 import { extractImapError } from './imapError.js';
 import { loginGate, isLoginDeferred, LoginDeferredError, LOGIN_PROBE_WAIT_MS } from './imapLoginGate.js';
@@ -637,7 +638,7 @@ export function extractBodyFromMsg(msg) {
     const rootType = (msg.bodyStructure.type || '').toLowerCase();
     results.textParts.push({
       part: msg.bodyStructure.part || '1',
-      type: (rootType === 'text/html' || rootType === 'text/plain') ? rootType : 'text/plain',
+      type: rootType === 'application/xhtml+xml' ? 'text/html' : (rootType === 'text/html' || rootType === 'text/plain') ? rootType : 'text/plain',
       encoding: msg.bodyStructure.encoding || '',
     });
   }
@@ -3922,9 +3923,10 @@ export class ImapManager {
               console.warn(`Message sync skipped: IMAP FETCH returned no UID for ${account.email}/${folder}`);
               return;
             }
-            let safeHtml = null, text = null, atts = [];
+            let safeHtml = null, text = null, atts = [], metadataHtml = null;
             if (prefetchBody && provider.fetchBody) {
               const body = extractBodyFromMsg(msg);
+              metadataHtml = body.html;
               safeHtml = body.html ? sanitizeEmail(body.html) : null;
               text = body.text;
               atts = body.attachments;
@@ -4033,6 +4035,7 @@ export class ImapManager {
               JSON.stringify(parsed.deliveryAddresses || []),
               sanitizeStr(parsed.senderName), sanitizeStr(parsed.senderEmail),
             ]);
+            if (metadataHtml) await captureMailboxMetadata(account.id, parsed.uid, folder, metadataHtml).catch((err) => console.warn('Email metadata capture failed:', err.message));
             if (result.rows[0]?.is_new) {
               insertedCount++;
               // Inbox-ingest candidate: any newly-inserted INBOX row, read OR unread (read state
@@ -4574,11 +4577,12 @@ export class ImapManager {
                   console.warn(`Backfill skipped: IMAP FETCH returned no UID for ${account.email}/${folder}`);
                   continue;
                 }
-                let safeHtml = null, bodyText = null, atts = [];
+                let safeHtml = null, bodyText = null, atts = [], metadataHtml = null;
 
                 if (cfg.fetchBody) {
                   const body = extractBodyFromMsg(msg);
-                  safeHtml = body.html ? sanitizeEmail(body.html) : null;
+                  metadataHtml = body.html;
+              safeHtml = body.html ? sanitizeEmail(body.html) : null;
                   bodyText = body.text;
                   atts = body.attachments;
                 }
@@ -4682,6 +4686,7 @@ export class ImapManager {
                   JSON.stringify(parsed.deliveryAddresses || []),
                   sanitizeStr(parsed.senderName), sanitizeStr(parsed.senderEmail),
                 ]);
+                if (metadataHtml) await captureMailboxMetadata(account.id, parsed.uid, folder, metadataHtml).catch((err) => console.warn('Email metadata capture failed:', err.message));
                 backfilledRows++;
                 // v0.2 antispam: classify genuinely-new rows — the same hook the
                 // sync path uses, so a manual reindex (or the initial population
@@ -5665,6 +5670,7 @@ export class ImapManager {
 
       // Some malformed emails include NUL bytes that PostgreSQL rejects in text
       // columns. Strip them once here so all callers are safe.
+      await captureMailboxMetadata(account.id, uid, folder, html).catch((err) => console.warn('Email metadata capture failed:', err.message));
       return { html: sanitizeStr(html), text: sanitizeStr(text), attachments };
     });
 

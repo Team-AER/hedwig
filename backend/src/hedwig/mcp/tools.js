@@ -130,22 +130,34 @@ const OWN = [
   {
     name: 'ask',
     title: 'Ask Hedwig',
-    description: "Ask a question about the person's mail in plain words ('what did the landlord say about the deposit?', 'all the AI expenses my team sent me'). Hedwig searches several ways, reads the messages and answers with [n] citations to the sources listed under the answer. Takes 5 to 30 seconds. To follow up on an answer, pass its answer_id as follow_up_of.",
+    // It can read public web pages (search results and links in the mail), so it is open-world, but
+    // it only reads: it never opens sign-in, unsubscribe or payment links, and changes no mail.
+    openWorld: true,
+    description: "Ask a question about the person's mail in plain words ('what did the landlord say about the deposit?', 'all the AI expenses my team sent me'). Hedwig searches several ways, reads the messages and answers with [n] citations to the mail in sources and, when it looked on the web, to the pages in web_sources (numbered after the mail). Pass thread_id to ask about one conversation: it is read whole first and the rest of the mail searched for what it leaves out. When the person allows it, Hedwig may also search the web and read a few pages; use_web turns that on or off for this question, and dig_deeper looks further. Takes 5 to 30 seconds, longer with the web. To follow up on an answer, pass its answer_id as follow_up_of (a follow-up stays on its conversation); to look further, ask the same question again with follow_up_of and dig_deeper.",
     inputSchema: {
       type: 'object',
       properties: {
         question: { type: 'string', minLength: 1, maxLength: 2000 },
         follow_up_of: { type: 'string', format: 'uuid', description: 'answer_id of an earlier answer this question follows up on' },
+        thread_id: { ...THREAD_OR_MESSAGE, description: 'ask about this conversation: a thread_id, or the id of any message in it' },
+        use_web: { type: 'boolean', description: "search the web and read pages for this question (true) or answer from the mail alone (false); leave out to follow the person's setting" },
+        dig_deeper: { type: 'boolean', default: false, description: 'more rounds of looking on the web, following links on the pages read; turns the web on unless use_web is false' },
       },
       required: ['question'],
     },
-    async run({ question, follow_up_of: followUpOf }, { userId, origin, signal }) {
+    async run({ question, follow_up_of: followUpOf, thread_id: threadId, use_web: useWeb, dig_deeper: deep }, { userId, origin, signal }) {
       const { answerQuestion } = await import('../context/service.js');
-      const out = await answerQuestion(userId, question, { followUpOf: followUpOf || null, signal });
+      // answerQuestion resolves thread_id (a thread_key or a message id) with findThreadKey.
+      const web = useWeb ?? (deep ? true : null);
+      const out = await answerQuestion(userId, question, {
+        followUpOf: followUpOf || null, threadKey: threadId || null, web, deep: deep === true, signal,
+      });
+      const thread = out.plan?.thread?.key || null;
       return {
         answer: out.answer,
         answer_id: out.askLogId || null,
         found_nothing: Boolean(out.notFound),
+        ...(thread ? { thread_id: thread } : {}),
         sources: (out.sources || []).map((s) => ({
           n: s.n,
           id: s.message?.id || null,
@@ -154,6 +166,11 @@ const OWN = [
           date: s.message?.date || null,
           ...(s.message?.id ? { url: messageUrl(origin, s.message.id) } : {}),
         })),
+        web_sources: (out.web || []).map((w) => ({
+          n: w.n, url: w.url, title: w.title || w.host || null, host: w.host || null, snippet_only: Boolean(w.snippetOnly),
+        })),
+        ...(web === true && out.plan?.research?.via === 'unavailable'
+          ? { note: 'Web search is not set up on this Hedwig, so the answer comes from the mail alone.' } : {}),
       };
     },
   },
@@ -528,7 +545,7 @@ export function describe(t) {
       // Nothing here deletes or sends: archive, move, snooze and sorting can all be put back.
       destructiveHint: false,
       idempotentHint: !t.write,
-      openWorldHint: false,
+      openWorldHint: Boolean(t.openWorld),
     },
   };
 }

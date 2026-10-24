@@ -9,11 +9,12 @@ const time = (d) => (d ? new Date(d).getTime() : 0);
  * Group chunks by thread, and inside a thread by message.
  * @param {object[]} chunks retrieve() chunks
  * @param {Map<string, object>} rows message rows the user can see, by id (others are dropped)
- * @param {{ latest?: boolean, pinned?: string[] }} [opts] pinned: message ids that must appear
- *   (a follow-up's earlier sources), placed first
+ * @param {{ latest?: boolean, pinned?: string[], focus?: string|null }} [opts] pinned: message ids that
+ *   must appear (a follow-up's earlier sources, the open thread), placed first; focus: the thread_key
+ *   of the thread Ask was opened on, placed before everything
  * @returns {{ key: string, score: number, latestAt: number, rollups: string[], messages: { id, row, score, chunks }[] }[]}
  */
-export function groupByThread(chunks, rows, { latest = false, pinned = [] } = {}) {
+export function groupByThread(chunks, rows, { latest = false, pinned = [], focus = null } = {}) {
   const threads = new Map();
   const pinnedSet = new Set(pinned);
   const ensure = (row, withMessage = true) => {
@@ -60,7 +61,7 @@ export function groupByThread(chunks, rows, { latest = false, pinned = [] } = {}
         || (a.attachmentIndex ?? -1) - (b.attachmentIndex ?? -1) || a.ordinal - b.ordinal) }))
       .sort((a, b) => time(a.row.date) - time(b.row.date)),
   }));
-  return out.sort((a, b) => (b.pinned - a.pinned)
+  return out.sort((a, b) => (Number(b.key === focus) - Number(a.key === focus)) || (b.pinned - a.pinned)
     || (latest ? b.latestAt - a.latestAt || b.score - a.score : b.score - a.score || b.latestAt - a.latestAt));
 }
 
@@ -108,26 +109,40 @@ export function messageEvidence(m, { messageChars = 4000 } = {}) {
 }
 
 /**
+ * The characters each message of the open thread gets: up to focusChars, less when the thread is
+ * long, so the whole thread fits in about 60% of the evidence budget (newest messages included). Pure.
+ */
+export function focusShare(count, { contextTokens = 24000, focusChars = 12000 } = {}) {
+  const share = Math.floor((contextTokens * 0.6 * 4) / Math.max(1, count));
+  return Math.max(600, Math.min(focusChars, share));
+}
+
+/**
  * Number the messages and render the evidence block, stopping at the token budget (at least one
- * message is always included).
+ * message is always included). The focus thread (Ask about this, in the reader) is read whole:
+ * each message's text up to focusShare(), whatever the search matched.
  * @returns {{ sources: { n: number, messageId: string, threadKey: string }[], block: string, tokens: number, omitted: number }}
  */
-export function buildEvidence(groups, { contextTokens = 24000, messageChars = 4000 } = {}) {
+export function buildEvidence(groups, { contextTokens = 24000, messageChars = 4000, focus = null, focusChars = 12000 } = {}) {
   const sources = [];
   const sections = [];
   let tokens = 0;
   let omitted = 0;
   for (const g of groups) {
     const lines = [];
-    const subject = g.messages[0]?.row.subject || '(no subject)';
-    const head = `## Thread: ${String(subject).replace(/^((re|fw|fwd|aw|wg|sv|tr)\s*:\s*)+/i, '')} (${g.messages.length} message${g.messages.length === 1 ? '' : 's'} shown)`;
+    const isFocus = focus != null && g.key === focus;
+    const subject = String(g.messages[0]?.row.subject || '(no subject)').replace(/^((re|fw|fwd|aw|wg|sv|tr)\s*:\s*)+/i, '');
+    const count = `${g.messages.length} message${g.messages.length === 1 ? '' : 's'}`;
+    const head = isFocus ? `## The thread the user is reading: ${subject} (${count})` : `## Thread: ${subject} (${count} shown)`;
     let cost = estimateTokens(head);
     const rollup = g.rollups[0] ? `Thread outline (not citable): ${g.rollups[0]}` : '';
     if (rollup) cost += estimateTokens(rollup);
     const entries = [];
+    const focusEach = isFocus ? focusShare(g.messages.length, { contextTokens, focusChars }) : 0;
     for (const m of g.messages) {
       const n = sources.length + entries.length + 1;
-      const entry = `${headerLine(n, m.row)}\n${messageEvidence(m, { messageChars })}`;
+      const text = isFocus ? (messageText(m.row, { maxChars: focusEach }) || '(no text)') : messageEvidence(m, { messageChars });
+      const entry = `${headerLine(n, m.row)}\n${text}`;
       const t = estimateTokens(entry);
       if (tokens + cost + t > contextTokens && (sources.length + entries.length) > 0) { omitted++; continue; }
       cost += t;

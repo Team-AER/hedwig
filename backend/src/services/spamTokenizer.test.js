@@ -244,3 +244,11 @@ describe('EXECUTABLE_EXTENSIONS', () => {
     }
   });
 });
+describe('HTML body selection in training and inference', () => {
+  it('uses the substantive HTML alternative when plain text is a MIME notice', () => {
+    const notice='This is a HTML email and your email client software does not support HTML email!';
+    const html='<p>Payment received. Your widget order is confirmed.</p>';
+    expect(tokenize({ body: notice,bodyHtml:html })).toEqual(tokenize({ bodyHtml:html }));
+    expect(tokenize({ body:notice,bodyHtml:html })).toContain('widget');
+  });
+});

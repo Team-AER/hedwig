@@ -1041,9 +1041,15 @@ export default function Thread({ props }) {
   // Keys (desktop): the toolbar's letters. Upstream's own map still runs beside this one; it
   // only acts on upstream's selection. Never inside a field, a dialog or an open menu, and never
   // as the second key of a "g" sequence (g r, g h are Hedwig's go-to keys).
+  // Ask about this: the Ask pane on this conversation (views/Ask.jsx), beside the reader. An empty
+  // question so a question the pane was opened with earlier is not asked again.
+  const askAbout = () => useHedwig.getState().openView('hedwig.ask', {
+    threadKey, subject: data?.subject || item?.subject || '', stream: item?.stream || null, question: undefined,
+  });
+  const askLabel = tv('hedwig.v2.thread.ask', 'Ask about this');
   const keyActions = useRef(null);
   keyActions.current = {
-    e: done, r: focusReply, a: replyAll, f: forward, u: unread,
+    e: done, r: focusReply, a: replyAll, f: forward, u: unread, i: askAbout,
     // Upstream's own letters where it has them: # delete, ! spam. S is Set Aside here, so Flag
     // (upstream's star on S) is Shift+S.
     '#': del, Delete: del, Backspace: del, '!': junk, S: toggleFlag,
@@ -1165,7 +1171,7 @@ export default function Thread({ props }) {
 
   // Groups, left to right: Done, Delete, Junk, Flag (always); Reply Later, Snooze, Set Aside
   // (into More below 900px); Reply, Reply all, Forward (the last two into More below 640px);
-  // then Move (into More below 900px) and More.
+  // then Ask about this (always), Move (into More below 900px) and More.
   const group = (children, key) => <div key={key} role="group" style={{ display: 'flex', alignItems: 'center', gap: 2 }}>{children}</div>;
   const toolbar = !phone && (
     <Sheet
@@ -1198,6 +1204,7 @@ export default function Thread({ props }) {
       </>, 'g3')}
       <span style={{ flexGrow: 1 }} />
       {group(<>
+        <IconButton icon="sparkles" label={askLabel} kbd="I" data-action="ask" onClick={askAbout} />
         {!narrow && (
           <span ref={moveRef} style={{ display: 'inline-flex' }} onClickCapture={loadFolders}>
             <MenuButton label={`${tv('hedwig.v2.thread.move', 'Move')} (V)`} items={moveItems} align="right" width={240} buttonClassName="hw-icon-btn" buttonStyle={iconMenuStyle}>
@@ -1478,6 +1485,7 @@ export default function Thread({ props }) {
           </MenuButton>
           <IconButton icon="reply" size={44} label={tv('hedwig.v2.thread.reply', 'Reply')} onClick={focusReply} />
           <MenuButton label={moreLabel} items={() => [
+            { id: 'ask', label: askLabel, icon: 'sparkles', onSelect: askAbout },
             ...(work ? [
               { id: 'later', label: tv('hedwig.v2.rail.replyLater', 'Reply Later'), icon: 'clock', onSelect: later },
               { id: 'aside', label: tv('hedwig.v2.thread.setAside', 'Set Aside'), icon: 'bookmark', onSelect: aside },

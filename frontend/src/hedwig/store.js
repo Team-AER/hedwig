@@ -62,7 +62,15 @@ export const useHedwig = create((set, get) => ({
   // `openView('hedwig.ask', { question })` – focus an existing pane hosting the view, otherwise
   // open it in the overlay pane.
   viewRequest: null,            // { id, props, nonce }
-  openView: (id, props = {}) => set({ viewRequest: { id, props, nonce: Date.now() + Math.random() } }),
+  // An open pane keeps the props it had and takes the new ones over them, so a question for all mail
+  // (the rail, the palette, the Brief) says so, or it would stay on the thread the reader opened Ask on.
+  openView: (id, props = {}) => set({
+    viewRequest: {
+      id,
+      props: id === 'hedwig.ask' && !('threadKey' in props) ? { threadKey: null, subject: null, stream: null, ...props } : props,
+      nonce: Date.now() + Math.random(),
+    },
+  }),
 
   // Active layout (pane tree) per device, persisted through /api/hedwig/layouts.
   activeLayout: null,

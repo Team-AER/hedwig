@@ -8,7 +8,7 @@ const DAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 /** Plain text of a message for detection: subject line, then the body with quotes kept (receipts quote little). */
 export function detectText(row, { maxChars = 20000 } = {}) {
   const body = messageText(row, { maxChars, stripQuotes: false });
-  return `${row.subject || ''}\n${body}`;
+  return `${row.subject || ''}\n${body.replace(/\s+\|\s+/g, ' ')}`;
 }
 
 /** The sentence (or line) containing position `index`, trimmed to `max` characters. Pure. */

@@ -120,6 +120,8 @@ export function freeTextTermCondition(likeIdx, ftsIdx) {
         OR m.from_email ILIKE $${likeIdx}
         OR m.subject ILIKE $${likeIdx}
         OR m.search_vector @@ plainto_tsquery('english', $${ftsIdx})
+        OR EXISTS (SELECT 1 FROM hedwig_email_content ec WHERE ec.message_id = m.id
+          AND ec.tsv @@ plainto_tsquery('english', $${ftsIdx}))
         OR to_tsvector('english', LEFT(coalesce(m.body_text,''), ${FTS_BODY_CHAR_CAP})) @@ plainto_tsquery('english', $${ftsIdx})
       )`;
 }

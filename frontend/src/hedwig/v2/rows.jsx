@@ -160,7 +160,8 @@ export const StreamRow = memo(function StreamRow({ item, onOpen, onWhy, phone = 
       <button
         type="button"
         data-row-button=""
-        onClick={synthetic ? undefined : () => onOpen(item)}
+        // The reader learns the stream it was opened from (Ask about this suggests by it).
+        onClick={synthetic ? undefined : () => onOpen(stream && !item.stream ? { ...item, stream } : item)}
         onFocus={(e) => setRing(focusVisible(e.currentTarget))}
         onBlur={() => setRing(false)}
         aria-disabled={synthetic ? 'true' : undefined}

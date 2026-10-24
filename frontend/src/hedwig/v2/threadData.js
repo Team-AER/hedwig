@@ -46,7 +46,7 @@ export function normaliseMessage(m) {
 
 /** A body route result as plain text, new text only (quoted history dropped). */
 export function textOfBody(b) {
-  const text = b?.text ? String(b.text) : htmlToPlain(b?.html);
+  const text = b?.contentText != null ? String(b.contentText) : b?.html ? htmlToPlain(b.html) : String(b?.text || '');
   return newTextOf(text) || text.trim();
 }
 

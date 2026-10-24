@@ -441,7 +441,7 @@ export async function applyExtraction(row, ex, { participants, topicId, open }) 
   return created;
 }
 
-export async function runExtraction({ messageId, deferred = false, recheck = false }) {
+export async function runExtraction({ messageId, deferred = false, recheck = false, repair = false }) {
   const row = await loadRow(messageId);
   if (!row) return;
   const userId = row.user_id;
@@ -487,6 +487,13 @@ export async function runExtraction({ messageId, deferred = false, recheck = fal
   // History older than the live window still gives facts, but not open commitments: a promise from
   // years ago would only land as overdue.
   if (row.date && Date.now() - new Date(row.date).getTime() > cfg['pipeline.backfillDays'] * DAY) ex.commitments = [];
+  if (repair && row.thread_key) {
+    const { rows: closed } = await query(
+      `SELECT id,direction,what,thread_key,counterparty_entity_id,status,user_edited,source_message_id FROM hedwig_commitments
+        WHERE user_id=$1 AND thread_key=$2 AND status<>'open'`, [userId,row.thread_key]);
+    if (closed.some((o) => o.source_message_id === row.id)) ex.commitments = [];
+    ex.commitments = ex.commitments.filter((c) => !closed.some((o) => sameObligation(o,c,pickCounterparty(c,participants,row.is_outgoing)?.entity_id)));
+  }
   const created = await applyExtraction(row, ex, { participants, topicId, open });
   await settleReplies(userId, row.thread_key, row.user_addresses || new Set());
   await markDone();

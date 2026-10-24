@@ -84,7 +84,8 @@ describe.skipIf(!process.env.HEDWIG_IT)('Ask on the index (demo mailbox)', () =>
     const events = [];
     const out = await ask(userId, 'What is the solicitor fee from Thomas?', { onEvent: (e) => events.push(e) });
     asked.push(out.askLogId);
-    expect(events.map((e) => e.type)[0]).toBe('sources');
+    expect(events.map((e) => e.type)[0]).toBe('plan'); // the progress steps come first (AskProgress)
+    expect(events.map((e) => e.type)).toContain('sources');
     expect(events.at(-1)).toMatchObject({ type: 'done', unsupported: false, askLogId: out.askLogId });
     expect(out.answer).toMatch(/£1,450 plus the government fee \[\d+\]/);
     const cited = out.sources.find((s) => s.n === out.citations[0]);
@@ -152,4 +153,27 @@ describe.skipIf(!process.env.HEDWIG_IT)('Ask on the index (demo mailbox)', () =>
     const { rows } = await query("SELECT COUNT(*)::int AS n FROM hedwig_ask_log WHERE user_id = $1 AND question LIKE '%Zanzibar%'", [userId]);
     expect(rows[0].n).toBe(0);
   }, 60_000);
+
+  it('Ask about this: reads the open thread first, keeps the chat on its thread_key, and lists it by thread', async () => {
+    const { rows: [t] } = await query(
+      `SELECT m.thread_key, MIN(m.id::text) AS message_id, COUNT(*)::int AS n FROM messages m JOIN email_accounts a ON a.id = m.account_id
+        WHERE a.user_id = $1 AND NOT m.is_deleted AND m.thread_key IS NOT NULL GROUP BY m.thread_key HAVING COUNT(*) > 1 LIMIT 1`,
+      [userId],
+    );
+    expect(t, 'the demo mailbox has a thread with replies').toBeTruthy();
+    const events = [];
+    // A message id stands for its thread, as the reader opened from a card or the Brief sends it.
+    const out = await ask(userId, 'What is this conversation about?', { threadKey: t.message_id, web: false, onEvent: (e) => events.push(e) });
+    asked.push(out.askLogId);
+    expect(events[0]).toMatchObject({ type: 'thread', status: 'running' });
+    expect(events[1]).toMatchObject({ type: 'thread', status: 'done', messages: t.n });
+    const call = gw.callsFor('ask.answer').at(-1);
+    expect(call.text).toContain('## The thread the user is reading');
+    expect(out.sources.slice(0, t.n).every((s) => s.message.thread_key === t.thread_key || s.message.id)).toBe(true);
+    const { rows: [log] } = await query('SELECT thread_key, web, web_sources FROM hedwig_ask_log WHERE id = $1', [out.askLogId]);
+    expect(log).toEqual({ thread_key: t.thread_key, web: false, web_sources: null });
+    const mine = await history(userId, { threadKey: t.thread_key });
+    expect(mine.map((h) => h.id)).toContain(out.askLogId);
+    expect(mine.every((h) => h.threadKey === t.thread_key)).toBe(true);
+  });
 });
