@@ -1,3 +1,4 @@
+import { emailContent } from './emailContent.js';
 import { query } from './db.js';
 import { resolveArchiveFolder, isAllMailFolder, resolveTrashFolder, resolveAllTrashPaths, getDeleteStrategy, adjustFolderCounts } from '../utils/mailUtils.js';
 
@@ -167,13 +168,13 @@ export async function applyInboxRules(messages, account, imapManager) {
     const ids = messages.map(m => m.id);
     try {
       const res = await query(
-        'SELECT id, body_text FROM messages WHERE id = ANY($1::uuid[])',
+        'SELECT id, body_text, body_html, snippet FROM messages WHERE id = ANY($1::uuid[])',
         [ids]
       );
       const byId = {};
       for (const row of res.rows) byId[row.id] = row;
       for (const msg of messages) {
-        msg._bodyText = byId[msg.id]?.body_text || '';
+        msg._bodyText = emailContent(byId[msg.id] || {}).text;
         if (!msg._bodyText) {
           console.warn(`inboxRules: body_text not yet available for message ${msg.id} — body rules will not match (account uses lazy body fetch)`);
         }

@@ -604,6 +604,12 @@ describe('Ask', () => {
     assert.equal(reduceAsk2(ASK2_INITIAL, { type: 'error', error: 'x' }).status, 'error');
   });
 
+  test('saved answers retain their stale-evidence marker after a content repair', () => {
+    const saved = fromSaved({ id: 'old', status: 'done', answer: 'Historical answer [1]', evidenceStale: true });
+    assert.equal(saved.evidenceStale, true);
+    assert.equal(saved.answer, 'Historical answer [1]');
+  });
+
   test('history opens a saved answer with its citations instead of asking again', async () => {
     await render(h(Ask, { props: {} }));
     // An empty chat lists the earlier questions; once one is open, the header's history button does.

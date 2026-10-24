@@ -1,3 +1,4 @@
+import { extractHtmlContent } from '../services/emailContent.js';
 import nodemailer from 'nodemailer';
 import { randomBytes } from 'crypto';
 import { Router } from 'express';
@@ -70,7 +71,7 @@ async function buildRawDraft({ accountId, aliasId, to, cc, bcc, subject, body, b
     : null;
 
   const bodyText = bodyIsHtml
-    ? sanitizeHtml(body || '', { allowedTags: [], allowedAttributes: {} })
+    ? extractHtmlContent(body || '').text
     : (body || '');
 
   const bodyHtml = bodyIsHtml

@@ -1,3 +1,4 @@
+import { messageText } from '../text.js';
 // Cards whose mail moved. Upstream deletes a message's row when the message moves to another folder
 // (the owner's phone files a bank alert to Trash) and syncs the copy there as a new row with a new
 // id, so a card's link (message_id, ON DELETE SET NULL) is lost and its row no longer opens anything
@@ -42,7 +43,7 @@ export function matchOrphan(card, rows) {
   for (const r of rows || []) {
     const t = r.date ? new Date(r.date).getTime() : null;
     if (day != null && (t == null || Math.abs(t - day) > 3 * DAY)) continue;
-    const text = alnum(`${r.subject || ''} ${r.snippet || ''} ${r.body_text || ''}`);
+    const text = alnum(`${r.subject || ''} ${messageText(r, { maxChars: 240000, stripQuotes: false })}`);
     if (!quotes.every((q) => text.includes(q))) continue;
     const gap = day != null && t != null ? Math.abs(t - day) : 0;
     if (!best || gap < best.gap) best = { id: r.id, gap };
@@ -109,7 +110,7 @@ export async function relinkOrphans(userId, { cardIds = null, limit = 20 } = {})
     const quotes = cardQuotes(card);
     if (day == null || !quotes.length) continue;
     const { rows } = await query(
-      `SELECT m.id, m.date, m.subject, m.snippet, m.body_text FROM messages m JOIN email_accounts a ON a.id = m.account_id
+      `SELECT m.id, m.date, m.subject, m.snippet, m.body_text, m.body_html FROM messages m JOIN email_accounts a ON a.id = m.account_id
         WHERE a.user_id = $1 AND NOT m.is_deleted AND m.date BETWEEN $2::timestamptz AND $3::timestamptz
           AND NOT EXISTS (SELECT 1 FROM hedwig_cards k WHERE k.user_id = $1 AND k.kind = $4 AND k.message_id = m.id)
         LIMIT 400`,

@@ -23,7 +23,7 @@ describe('cachedPage', () => {
     const client = fakeRedis();
     const load = vi.fn(async () => PAGE);
     expect(await cachedPage('https://example.com/a', load, { client, hours: 2 })).toEqual(PAGE);
-    const key = `hedwig:research:page:${createHash('sha256').update('https://example.com/a').digest('hex')}`;
+    const key = `hedwig:research:page:html-v1:${createHash('sha256').update('https://example.com/a').digest('hex')}`;
     expect(client.set).toHaveBeenCalledWith(key, JSON.stringify(PAGE), { EX: 7200 });
     expect(load).toHaveBeenCalledTimes(1);
   });

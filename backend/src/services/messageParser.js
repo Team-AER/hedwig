@@ -1,4 +1,5 @@
 import { Parser } from 'htmlparser2';
+import { emailContent } from './emailContent.js';
 
 // Regex matching invisible / zero-width / filler Unicode chars used by email marketers
 // as "preheader killers" to prevent snippet text from leaking into mail-client previews.
@@ -72,6 +73,8 @@ function isDegenerateText(text) {
 // Single canonical function used by all snippet-generation paths (IMAP sync,
 // body prefetch, backfill) so entity handling is identical everywhere.
 export function snippetFromBody(text, html) {
+  const selected = emailContent({ body_text: text, body_html: html }, { linksInText: false, includeAltText: false });
+  if (selected.source === 'html') { text = selected.text; html = ''; }
   // HTML shipped in the text/plain part must go through the HTML stripper,
   // otherwise the markup itself becomes the "preview" (<!DOCTYPE html ...).
   if (text && looksLikeHtml(text)) {

@@ -43,7 +43,7 @@ export function definedSteps() { return steps.map((s) => ({ name: s.name, order:
 export const MESSAGE_COLUMNS = `
   m.id, m.account_id, a.user_id, m.folder, m.message_id, m.subject, m.from_name, m.from_email,
   m.sender_email, m.sender_name, m.to_addresses, m.cc_addresses, m.reply_to, m.date, m.snippet,
-  m.body_text, m.body_html, m.is_read, m.is_starred, m.has_attachments, m.attachments, m.flags,
+  m.body_text, m.body_html, (SELECT data FROM hedwig_email_metadata em WHERE em.message_id = m.id) AS content_metadata, m.is_read, m.is_starred, m.has_attachments, m.attachments, m.flags,
   m.thread_id, m.thread_key, m.in_reply_to, m.thread_references, m.is_bulk, m.category,
   m.list_unsubscribe, m.plugin_annotations, f.special_use`;
 

@@ -5,7 +5,7 @@ import { loadMessagesLite } from '../context/shapes.js';
 import { httpError, isUuid } from '../context/util.js';
 
 const COLS = `id, question, created_at, completed_at, status, answer, citations, sources, unsupported, not_found,
-  follow_up_of, plan, feedback, entity_id, topic_id, model, thread_key, web, web_sources`;
+  follow_up_of, plan, feedback, entity_id, topic_id, model, thread_key, web, web_sources, evidence_stale`;
 
 function shape(row, lite) {
   const ids = Array.isArray(row.sources) ? row.sources : [];
@@ -31,6 +31,7 @@ function shape(row, lite) {
     feedback: row.feedback || null,
     plan: row.plan || null,
     model: row.model || null,
+    evidenceStale: Boolean(row.evidence_stale),
     // Answered by the fallback model while Tier 2 was degraded (null for answers saved before this was kept).
     lighterModel: typeof row.plan?.answer?.lighterModel === 'boolean' ? row.plan.answer.lighterModel : null,
   };

@@ -466,6 +466,9 @@ function AnswerBlock({ state, phone, onFeedback, onAgain, onAgent, onDeeper = nu
           <LinkBtn hit={phone} onClick={onAgain}>{tv('hedwig.v2.ask.again', 'Ask again')}</LinkBtn>
         </div>
       )}
+      {state.evidenceStale && (
+        <Reason glyph="info">{tv('hedwig.v2.ask.evidenceUpdated', 'Email content was updated after this answer. Ask again for a fresh answer.')}</Reason>
+      )}
       <AskProgress state={state} />
       {nothing && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>

@@ -1,3 +1,4 @@
+import { messageText } from '../text.js';
 // SQL shared by the triage step, schedules, jobs and the service. Every query that reads or writes
 // per-user data takes the user id and filters on it; nothing here trusts a message id on its own.
 import { query } from '../../services/db.js';
@@ -109,7 +110,7 @@ export async function loadThreads(userId, rows, addresses) {
   const { rows: found } = await query(
     `SELECT m.id, m.account_id, m.thread_key, m.from_email, m.date,
             ${outgoingSql('m', 'f', '$4')} AS outgoing,
-            LEFT(COALESCE(NULLIF(m.body_text, ''), m.snippet, ''), 2000) AS text
+            m.body_text, m.body_html, m.snippet
        FROM messages m
        JOIN email_accounts a ON a.id = m.account_id
        LEFT JOIN folders f ON f.account_id = m.account_id AND f.path = m.folder
@@ -125,7 +126,7 @@ export async function loadThreads(userId, rows, addresses) {
     const key = `${r.account_id}|${r.thread_key}`;
     if (!map.has(key)) map.set(key, []);
     const list = map.get(key);
-    if (list.length < 50) list.push(r);
+    if (list.length < 50) list.push({ ...r, text: messageText(r, { maxChars: 2000, stripQuotes: false }) });
   }
   return map;
 }

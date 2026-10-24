@@ -91,7 +91,8 @@ async function fullTextIds(userId, tsq, filters, limit) {
     `SELECT m.id
        FROM messages m JOIN email_accounts a ON a.id = m.account_id, to_tsquery('english', $2) q
       WHERE a.user_id = $1 AND ${VISIBLE_MESSAGE}
-        AND (m.search_vector @@ q OR to_tsvector('english', COALESCE(m.body_text, '')) @@ q)
+        AND (m.search_vector @@ q OR to_tsvector('english', COALESCE(m.body_text, '')) @@ q
+          OR EXISTS (SELECT 1 FROM hedwig_email_content ec WHERE ec.message_id = m.id AND ec.tsv @@ q))
         ${extra}
       ORDER BY ts_rank_cd(m.search_vector, q) * 2 + ts_rank_cd(to_tsvector('english', COALESCE(m.body_text, '')), q) DESC,
                m.date DESC NULLS LAST

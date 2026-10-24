@@ -220,6 +220,7 @@ export function fromSaved(entry) {
     answer: typeof entry.answer === 'string' ? entry.answer : '',
     citations: Array.isArray(entry.citations) ? entry.citations : citedNumbers(entry.answer || ''),
     unsupported: entry.unsupported === true,
+    evidenceStale: entry.evidenceStale === true,
     notFound: entry.notFound === true,
     error: entry.status === 'error' || entry.status === 'aborted' ? (entry.error || null) : null,
     followUpOf: entry.followUpOf || null,

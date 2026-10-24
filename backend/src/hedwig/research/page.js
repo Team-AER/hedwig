@@ -1,3 +1,4 @@
+import { hiddenElement } from '../../services/emailContent.js';
 // Read one web page for Ask's research: fetch it through safeFetch (the URL comes from search results or
 // from mail, so it is untrusted), keep only its main text, and report a short reason when that fails.
 import { Parser } from 'htmlparser2';
@@ -88,7 +89,7 @@ export function extractMainText(html, baseUrl) {
       if (name === 'base' && attrs.href && !baseSeen) { baseSeen = true; base = resolveHttp(attrs.href, base) || base; }
       // A <header> inside an <article> is that article's headline and byline, not the site banner.
       const chrome = CHROME.has(name) && !(name === 'header' && articles);
-      if (!hidden && (SKIP.has(name) || chrome)) { entry.hidden = true; hidden++; }
+      if (!hidden && (SKIP.has(name) || chrome || hiddenElement(attrs))) { entry.hidden = true; hidden++; }
       if (hidden) return;
       if (BLOCK.has(name)) lineBreak(name);
       if (name === 'li') out += '- ';
@@ -118,7 +119,7 @@ export function extractMainText(html, baseUrl) {
       }
       if (entry.pre) pre--;
       if (BLOCK.has(name) && name !== 'br') lineBreak(name);
-      else if (name === 'td' || name === 'th') out += ' ';
+      else if (name === 'td' || name === 'th') out += ' | ';
     },
   }, { decodeEntities: true });
   parser.write(String(html ?? ''));

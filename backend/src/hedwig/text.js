@@ -1,5 +1,5 @@
 // Plain-text views of a message for models and embeddings. Never used for rendering.
-import { convert } from './htmlToText.js';
+import { emailContent } from '../services/emailContent.js';
 
 const QUOTE_MARKERS = [
   /^On .{5,200} wrote:\s*$/m,
@@ -27,9 +27,8 @@ export function stripQuoted(text) {
 
 /** Best available text for a message row. */
 export function messageText(row, { maxChars = 6000, stripQuotes = true } = {}) {
-  let text = row.body_text || '';
-  if (!text && row.body_html) text = convert(row.body_html);
-  if (!text) text = row.snippet || '';
+  const content = emailContent(row);
+  let text = content.state === 'placeholder' ? '' : content.text;
   if (stripQuotes) text = stripQuoted(text) || text;
   text = text.replace(/[ \t]+/g, ' ').replace(/\u00a0/g, ' ').trim();
   return text.length > maxChars ? `${text.slice(0, maxChars)}…` : text;

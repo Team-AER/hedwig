@@ -1,3 +1,4 @@
+import { extractHtmlContent } from '../services/emailContent.js';
 import nodemailer from 'nodemailer';
 import { randomBytes, createHash, randomUUID } from 'crypto';
 import { Router } from 'express';
@@ -135,7 +136,7 @@ function sigToPlainText(html) {
 
 function bodyToPlain(body, isHtml) {
   if (!isHtml) return body;
-  return sanitizeHtml(body, { allowedTags: [], allowedAttributes: {} });
+  return extractHtmlContent(body).text;
 }
 
 function bodyToHtml(body, isHtml) {

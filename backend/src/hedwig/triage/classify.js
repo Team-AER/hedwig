@@ -168,7 +168,7 @@ async function markError(id, message) {
   );
 }
 
-export async function runTriage(rows) {
+export async function runTriage(rows, { repair = false } = {}) {
   const now = new Date();
   const byUser = new Map();
   for (const r of rows) {
@@ -181,8 +181,8 @@ export async function runTriage(rows) {
     const addresses = list[0].user_addresses || new Set();
     const outgoing = list.filter((r) => r.is_outgoing);
     const incoming = list.filter((r) => !r.is_outgoing);
-    if (outgoing.length) await resolveByOutgoing(userId, outgoing);
-    if (incoming.length) await resolveWaitingByIncoming(userId, incoming);
+    if (!repair && outgoing.length) await resolveByOutgoing(userId, outgoing);
+    if (!repair && incoming.length) await resolveWaitingByIncoming(userId, incoming);
     await markTriaged(outgoing.map((r) => r.id));
     if (!incoming.length) continue;
 
@@ -194,28 +194,29 @@ export async function runTriage(rows) {
       query('SELECT message_id FROM hedwig_triage WHERE user_id = $1 AND message_id = ANY($2::uuid[]) AND overridden', [userId, incoming.map((r) => r.id)]),
     ]);
     const skip = new Set(overridden.rows.map((r) => r.message_id));
-    const llmOn = await llmAvailable(userId).catch(() => false);
+    const llmOn = !repair && await llmAvailable(userId).catch(() => false);
     const done = [];
     for (const row of incoming) {
-      if (skip.has(row.id)) { done.push(row.id); continue; }
+      if (!repair && skip.has(row.id)) { done.push(row.id); continue; }
       try {
         const text = messageText(row, { maxChars: 4000 });
         const thread = threads.get(`${row.account_id}|${row.thread_key}`) || [];
         const sender = senders.get(String(row.from_email || '').toLowerCase()) || null;
         let plugin = { features: {}, verdict: null };
         const probe = decide({ row, text, userAddresses: addresses, sender, thread, rules, model, cfg, now });
-        const results = await collectHedwigHook(HEDWIG_HOOKS.beforeTriage, { userId, message: hookMessage(row, text), features: { ...probe.features } }).catch(() => []);
+        const results = repair ? [] : await collectHedwigHook(HEDWIG_HOOKS.beforeTriage, { userId, message: hookMessage(row, text), features: { ...probe.features } }).catch(() => []);
         plugin = mergePluginResults(results);
         const d = plugin.verdict || Object.keys(plugin.features).length
           ? decide({ row, text, userAddresses: addresses, sender, thread, rules, model, cfg, plugin, now })
           : probe;
+        if (repair) await query('UPDATE hedwig_triage_feedback SET features=$3 WHERE user_id=$1 AND message_id=$2',[userId,row.id,JSON.stringify(d.features)]);
         const stored = await storeDecision(userId, row, d);
         done.push(row.id);
         if (!stored) continue;
         if (d.askModel && llmOn && !stored.resolved_at) {
           await enqueue('triage.llm', { messageId: row.id }, { userId, dedupeKey: `triage.llm:${row.id}`, priority: 6, maxAttempts: 3 });
         }
-        runHedwigHook(HEDWIG_HOOKS.afterTriage, { userId, messageId: row.id, triage: toTriageInfo(stored) }).catch(() => {});
+        if (!repair) runHedwigHook(HEDWIG_HOOKS.afterTriage, { userId, messageId: row.id, triage: toTriageInfo(stored) }).catch(() => {});
       } catch (err) {
         console.warn(`[hedwig] triage failed for message ${row.id}:`, err.message);
         await markError(row.id, `triage: ${err.message}`).catch(() => {});

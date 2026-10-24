@@ -1,3 +1,4 @@
+import { emailContent } from '../../services/emailContent.js';
 // POST /work/sendguard — checks before sending, with no model call: an attachment mentioned but
 // missing, a recipient outside the domains of the personal thread being answered, reply-all to a
 // crowd, an empty subject; plus whatever beforeSend plugins (aer.sendguard) find, as 'custom'.
@@ -28,7 +29,7 @@ const list = (v) => (Array.isArray(v) ? v : typeof v === 'string' && v.trim() ? 
 /** The text the sender wrote now: quoted lines and everything after a reply header dropped. */
 function ownText(body) {
   const out = [];
-  for (const line of String(body || '').split('\n')) {
+  for (const line of emailContent({ body_text: body }).text.split('\n')) {
     if (/^On .{5,200} wrote:\s*$/.test(line) || /^-{2,}\s*(Original|Forwarded) Message/i.test(line)) break;
     if (/^\s*>/.test(line)) continue;
     out.push(line);
@@ -113,7 +114,7 @@ export async function sendGuard(userId, body = {}) {
       userId, accountId: body.accountId || null, preflight: true,
       from: body.from?.email ? { email: String(body.from.email) } : (owner.addresses[0] ? { email: owner.addresses[0] } : null),
       to: recipients(body.to), cc: recipients(body.cc), bcc: recipients(body.bcc),
-      subject: String(body.subject || ''), body: String(body.body || '').slice(0, 200_000), bodyIsHtml: false,
+      subject: String(body.subject || ''), body: emailContent({ body_text: body.body }).text.slice(0, 200_000), bodyIsHtml: false,
       hasAttachments: attachments.length > 0,
       attachments: attachments.map((a) => ({ filename: a?.filename || (typeof a === 'string' ? a : null), contentType: a?.contentType || null })),
       inReplyTo: body.inReplyTo || null, references: null,

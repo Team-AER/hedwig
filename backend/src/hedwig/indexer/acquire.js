@@ -1,3 +1,4 @@
+import { extractHtmlContent } from '../../services/emailContent.js';
 // Body and attachment acquisition. Every included message gets its body fetched, not only the ones
 // someone opens, through the existing API-side `mail.fetchBody` job (core/bodies.js), newest first
 // and spaced per mail host at `index.bodyRatePerSec` (or `index.bodyRateByProvider`, 0.5/s for
@@ -290,7 +291,9 @@ export function makeAttachmentHandler(imapManager, { fetchFn = fetch } = {}) {
       else if (buf.length > maxBytes) error = `larger than index.tikaMaxBytes (${buf.length} bytes)`;
       else {
         try {
-          text = (await tikaExtract(buf, { url: cfg['index.tikaUrl'], mime: a.mime, filename: a.filename, fetchFn })).slice(0, maxChars);
+          text = (/^(text\/html|application\/xhtml\+xml)$/i.test(a.mime) || /\.x?html?$/i.test(a.filename))
+            ? extractHtmlContent(decodeHtmlAttachment(buf), { maxChars }).text
+            : (await tikaExtract(buf, { url: cfg['index.tikaUrl'], mime: a.mime, filename: a.filename, fetchFn })).slice(0, maxChars);
         } catch (err) {
           if (err instanceof TikaUnavailable) { await setState('retry', err.message); return; }
           error = err.message;
@@ -308,4 +311,11 @@ export function makeAttachmentHandler(imapManager, { fetchFn = fetch } = {}) {
     if (failures === list.length) await setState('failed', lastError);
     else await setState('done', failures ? `${failures} of ${list.length}: ${lastError}` : null);
   };
+}
+
+// HTML attachments carry their own charset just like MIME bodies.
+export function decodeHtmlAttachment(buffer) {
+  const head=buffer.subarray(0,2048).toString('latin1');
+  const label=/<meta[^>]{0,200}charset\s*=\s*["']?([\w-]+)/i.exec(head)?.[1] || 'utf-8';
+  try { return new TextDecoder(label).decode(buffer); } catch { return new TextDecoder('utf-8').decode(buffer); }
 }

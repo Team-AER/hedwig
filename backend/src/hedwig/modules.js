@@ -10,6 +10,7 @@
 //
 // Order matters only for pipeline steps, which carry their own `order`.
 import core from './core/index.js';
+import content from './content/index.js';
 import context from './context/index.js';
 import triage from './triage/index.js';
 import insights from './insights/index.js';
@@ -26,4 +27,4 @@ import onboarding from './onboarding/index.js';
 import accounts from './accounts/index.js';
 import mcp from './mcp/index.js';
 
-export const MODULES = [core, context, triage, insights, agent, pluginsV2, sort, labels, indexer, work, ask2, cards, profile, onboarding, accounts, mcp];
+export const MODULES = [core, content, context, triage, insights, agent, pluginsV2, sort, labels, indexer, work, ask2, cards, profile, onboarding, accounts, mcp];

@@ -13,7 +13,7 @@ import { canonicalUrl } from './searx.js';
  * @param {{ hours?: number, keyPrefix?: string, client?: { get: Function, set: Function } }} [opts]
  * @returns {Promise<T>}
  */
-export async function cachedPage(url, load, { hours = 24, keyPrefix = 'hedwig:research:page:', client } = {}) {
+export async function cachedPage(url, load, { hours = 24, keyPrefix = 'hedwig:research:page:html-v1:', client } = {}) {
   const redis = client || (redisClient?.isReady ? redisClient : null);
   if (!redis) return load();
   const key = keyPrefix + createHash('sha256').update(String(canonicalUrl(url))).digest('hex');

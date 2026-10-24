@@ -1,97 +1,11 @@
+import { emailContent } from '../../../services/emailContent.js';
 // schema.org markup in HTML mail (JSON-LD and microdata), as senders embed it for Gmail and
 // Outlook: Order, Invoice, ParcelDelivery, Flight/Train/Bus/Lodging/RentalCar/EventReservation.
 // Every field's source is the markup property it came from.
-import { Parser } from 'htmlparser2';
 import { normFields } from '../kinds.js';
 
-const JSONLD_RE = /<script\b[^>]*type\s*=\s*["']?application\/ld\+json["']?[^>]*>([\s\S]*?)<\/script>/gi;
-
-const decodeEntities = (s) => s.replace(/&quot;/g, '"').replace(/&#34;/g, '"').replace(/&apos;|&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
-
-function typesOf(node) {
-  const t = node?.['@type'] ?? node?.type;
-  return (Array.isArray(t) ? t : [t]).filter(Boolean).map((x) => String(x).replace(/^https?:\/\/schema\.org\//i, ''));
-}
-
-/** Every typed object in a JSON-LD value (arrays, @graph, nested). */
-function flatten(value, out = []) {
-  if (Array.isArray(value)) { value.forEach((v) => flatten(v, out)); return out; }
-  if (!value || typeof value !== 'object') return out;
-  if (Array.isArray(value['@graph'])) flatten(value['@graph'], out);
-  if (typesOf(value).length) out.push(value);
-  return out;
-}
-
-/** JSON-LD blocks in an HTML body. Pure. */
-export function jsonLdItems(html) {
-  const items = [];
-  for (const m of String(html || '').matchAll(JSONLD_RE)) {
-    const raw = m[1].trim().replace(/^<!--/, '').replace(/-->$/, '').trim();
-    let parsed = null;
-    for (const candidate of [raw, decodeEntities(raw)]) {
-      try { parsed = JSON.parse(candidate); break; } catch { /* try the next form */ }
-    }
-    if (parsed) items.push(...flatten(parsed).map((n) => ({ node: n, via: 'JSON-LD' })));
-  }
-  return items;
-}
-
-const VALUE_ATTRS = { meta: 'content', link: 'href', a: 'href', img: 'src', time: 'datetime', data: 'value', meter: 'value' };
-
-/** Microdata (itemscope / itemtype / itemprop) as nested objects with @type. Pure. */
-export function microdataItems(html) {
-  const roots = [];
-  const stack = []; // { tag, scope?, prop?, text, depth }
-  let depth = 0;
-  const scopes = []; // open scope objects with their element depth
-  const parser = new Parser({
-    onopentag(name, attrs) {
-      depth++;
-      const isScope = 'itemscope' in attrs;
-      const prop = attrs.itemprop;
-      let scope = null;
-      if (isScope) {
-        scope = { '@type': (attrs.itemtype || '').split(/\s+/).filter(Boolean).map((t) => t.replace(/^https?:\/\/schema\.org\//i, '')) };
-        if (scope['@type'].length === 1) scope['@type'] = scope['@type'][0];
-      }
-      const parent = scopes[scopes.length - 1];
-      if (prop && parent && !isScope) {
-        const attr = VALUE_ATTRS[name];
-        if (attr && attrs[attr] != null) addProp(parent.obj, prop, attrs[attr]);
-        else if ('content' in attrs) addProp(parent.obj, prop, attrs.content);
-        else stack.push({ depth, prop, text: '', target: parent.obj });
-      }
-      if (scope) {
-        if (prop && parent) addProp(parent.obj, prop, scope);
-        else roots.push(scope);
-        scopes.push({ obj: scope, depth });
-      }
-    },
-    ontext(text) {
-      for (const s of stack) s.text += text;
-    },
-    onclosetag() {
-      const top = stack[stack.length - 1];
-      if (top && top.depth === depth) {
-        stack.pop();
-        addProp(top.target, top.prop, top.text.replace(/\s+/g, ' ').trim());
-      }
-      if (scopes.length && scopes[scopes.length - 1].depth === depth) scopes.pop();
-      depth--;
-    },
-  }, { decodeEntities: true, lowerCaseTags: true });
-  parser.write(String(html || ''));
-  parser.end();
-  return roots.flatMap((r) => flatten(r)).map((n) => ({ node: n, via: 'microdata' }));
-}
-
-function addProp(obj, prop, value) {
-  for (const p of String(prop).split(/\s+/).filter(Boolean)) {
-    if (obj[p] === undefined) obj[p] = value;
-    else if (Array.isArray(obj[p])) obj[p].push(value);
-    else obj[p] = [obj[p], value];
-  }
-}
+export { jsonLdItems, microdataItems } from '../../../services/emailMetadata.js';
+import { jsonLdItems, microdataItems, typesOf } from '../../../services/emailMetadata.js';
 
 // ── Mapping to cards ─────────────────────────────────────────────────────────
 
@@ -247,12 +161,19 @@ function fromNode(node, ctx) {
  */
 export function detectSchemaOrg(row) {
   const html = row?.body_html;
-  if (!html || !/schema\.org|ld\+json/i.test(html)) return [];
-  const items = [...jsonLdItems(html), ...microdataItems(html)];
+  const items = row?.content_metadata || ((!html || !/schema\.org|ld\+json/i.test(html)) ? [] : [...jsonLdItems(html), ...microdataItems(html)]);
   const out = [];
   const seen = new Set();
+  const visible = emailContent({ ...row, content_metadata: [] }).text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu,'');
   for (const { node, via } of items) {
     for (const c of fromNode(node, { messageId: row.id, via })) {
+      if (row?.content_metadata) {
+        for (const [field,value] of Object.entries(c.fields)) {
+          const v=String(value ?? '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu,'');
+          if (!v || !visible.includes(v)) { delete c.fields[field]; delete c.sources[field]; }
+        }
+        if (!Object.keys(c.fields).length) continue;
+      }
       const key = `${c.kind}:${JSON.stringify(c.fields)}`;
       if (seen.has(key)) continue;
       seen.add(key);

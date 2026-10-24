@@ -126,6 +126,7 @@ export function twinOf(card, patternCards = []) {
 // ── The job ─────────────────────────────────────────────────────────────────
 
 const ROW_SQL = `SELECT m.id, m.account_id, m.subject, m.from_name, m.from_email, m.date, m.body_text, m.body_html, m.snippet,
+  (SELECT data FROM hedwig_email_metadata em WHERE em.message_id = m.id) AS content_metadata,
                         m.attachments, m.has_attachments, m.folder, s.bundle, s.stream,
                         EXISTS (SELECT 1 FROM folders f WHERE f.account_id = m.account_id AND f.path = m.folder AND f.special_use = '\\Trash') AS trash
                    FROM messages m JOIN email_accounts a ON a.id = m.account_id

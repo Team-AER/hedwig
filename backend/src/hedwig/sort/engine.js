@@ -549,7 +549,7 @@ export async function finalize(userId, row, d, ctx, { pending = null } = {}) {
   d.held = Boolean(slot && ['reading', 'records'].includes(d.stream) && row.date && new Date(row.date) > slot);
 
   const prev = ctx.existing?.get(row.id);
-  if (cfg['spam.autoMove'] && ['phishing', 'suspected'].includes(d.spam) && d.spamConfidence >= cfg['spam.autoMoveAbove']
+  if (!ctx.suppressActions && cfg['spam.autoMove'] && ['phishing', 'suspected'].includes(d.spam) && d.spamConfidence >= cfg['spam.autoMoveAbove']
       && !d.inSpamFolder && !d.own && d.final && d.stream === 'spam' && prev?.spam !== d.spam) {
     const id = await enqueue('sort.spamMove', { messageId: row.id, to: 'junk' }, { userId, dedupeKey: `sort.spamMove:${row.id}`, maxAttempts: 3 });
     if (id !== null) {
@@ -559,7 +559,7 @@ export async function finalize(userId, row, d, ctx, { pending = null } = {}) {
 
   if (d.stream !== 'spam') ensureNeedsYouReason(row, d);
   const stored = await upsertSort(userId, row, d, { pending });
-  if (stored && !pending) {
+  if (stored && !pending && !ctx.suppressActions) {
     runHedwigHook(HEDWIG_HOOKS.afterSort, { userId, messageId: row.id, sort: toSortInfo(d) }).catch(() => {});
   }
   return stored;
@@ -647,7 +647,7 @@ export function headerSettled(d) {
  * @param {object[]} rows
  * @param {{ historical?: boolean, allowReflex?: boolean, onlyLayers?: string[]|null }} [opts]
  */
-export async function sortRows(rows, { historical = false, allowReflex = true, onlyLayers = null } = {}) {
+export async function sortRows(rows, { historical = false, allowReflex = true, onlyLayers = null, repair = false } = {}) {
   if (!rows.length) return { sorted: 0, reflex: 0 };
   await withExtras(rows);
   const byUser = new Map();
@@ -685,6 +685,7 @@ export async function sortRows(rows, { historical = false, allowReflex = true, o
     }
     if (!mail.length) continue;
     const ctx = await loadUserContext(userId, mail, cfg);
+    ctx.suppressActions = historical || repair;
     const llmOn = allowReflex && !historical && await llmAvailable(userId).catch(() => false);
     const guardOn = !historical && cfg['sort.guard.enabled'] && Boolean(cfg['sort.guard.model']);
     const toReflex = [];
@@ -810,7 +811,7 @@ export async function runGuardJob({ messageIds }, job = {}) {
 }
 
 /** Job `sort.reflex` { messageIds }: Reflex over one batch, escalating the unsure. */
-export async function runReflexJob({ messageIds }, job = {}) {
+export async function runReflexJob({ messageIds, repair = false }, job = {}) {
   const userId = job.user_id;
   if (!userId || !Array.isArray(messageIds) || !messageIds.length) return { skipped: 'bad payload' };
   const cfg = await getConfig(userId);
@@ -818,16 +819,18 @@ export async function runReflexJob({ messageIds }, job = {}) {
   const all = (await loadRows(userId, messageIds)).filter((r) => !r.is_outgoing);
   if (!all.length) return { skipped: 'no messages' };
   const spamRows = all.filter((r) => inSpamFolder(r));
-  if (spamRows.length) await rescueRows(userId, spamRows, cfg);
+  if (spamRows.length && !repair) await rescueRows(userId, spamRows, cfg);
   const rows = all.filter((r) => !spamRows.includes(r));
   if (!rows.length) return { sorted: 0, rescueChecked: spamRows.length };
   const ctx = await loadUserContext(userId, rows, cfg);
+  ctx.suppressActions = repair;
   let todo = [];
   for (const row of rows) {
     const prev = ctx.existing.get(row.id);
     if (prev?.layer === 'user') continue;
     // Judged by a model since this job was queued (a duplicate job, a sweep): nothing left to do.
-    if (prev && !prev.pending && MODEL_LAYERS.includes(prev.layer)) continue;
+    if (prev && !prev.pending && MODEL_LAYERS.includes(prev.layer) && !repair) continue;
+    if (repair && prev?.prompt_id === 'sort.guard') continue;
     const d = decideCheap(row, ctx);
     // The user's own rules and decisions are final, and so are newsletters the list headers
     // settled; the model is not asked to second-guess them.

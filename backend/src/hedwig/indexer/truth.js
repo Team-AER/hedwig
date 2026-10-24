@@ -21,6 +21,7 @@ export const BODY_REASONS = Object.freeze(['duplicate', 'fetch_failed', 'server_
 
 const REASON_SQL = `CASE
     WHEN h.skip_reason = 'duplicate' THEN 'duplicate'
+    WHEN EXISTS (SELECT 1 FROM hedwig_email_content ec WHERE ec.message_id=m.id AND ec.state IN ('placeholder','empty','image_only')) THEN 'no_text'
     WHEN x.had_body AND x.chunk_version = $1 AND EXISTS (
            SELECT 1 FROM hedwig_chunks k WHERE k.message_id = m.id AND k.recipe = $1 AND k.kind IN ('body', 'quote')) THEN 'real'
     WHEN x.body_state = 'failed' THEN 'fetch_failed'

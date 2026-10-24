@@ -1,3 +1,4 @@
+import { contentRowsHash } from '../content/store.js';
 // GET /work/thread/:threadId — the story so far ("since you last looked", cited), a timeline line
 // per message, quick replies when a short answer fits, each message's TL;DR, and the thread's
 // nearest open deadline. The story comes from the summarise family (work.summarise, work/summaries.js):
@@ -191,7 +192,8 @@ async function compute(userId, threadKey, messages, cfg) {
 /** Is a cached story still good for this thread? Only a different latest message invalidates it. Pure. */
 export function cacheValid(cached, messages) {
   if (!cached || !messages.length) return false;
-  return cached.up_to_message_id === messages[messages.length - 1].id;
+  return cached.up_to_message_id === messages[messages.length - 1].id
+    && (!cached.input_hash || cached.input_hash === contentRowsHash(messages));
 }
 
 /**

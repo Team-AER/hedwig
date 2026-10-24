@@ -1,3 +1,4 @@
+import { extractHtmlContent } from '../../services/emailContent.js';
 // compose.createDraft: build a MIME draft and APPEND it to the account's Drafts folder. It creates a
 // draft only; nothing in the plugin runtime can send. Mirrors routes/draft.js (identity, sanitizer,
 // stable Message-ID, local Drafts row) without importing it, because that route module imports the
@@ -90,7 +91,7 @@ export async function createDraftNow(userId, rawInput, engine) {
   }
   const sig = signature ? sanitizeSignature(signature) : null;
   const sigText = sig ? sanitizeHtml(sig, { allowedTags: [], allowedAttributes: {} }).trim() : null;
-  const bodyText = input.bodyIsHtml ? sanitizeHtml(input.body, { allowedTags: [], allowedAttributes: {} }) : input.body;
+  const bodyText = input.bodyIsHtml ? extractHtmlContent(input.body).text : input.body;
   const bodyHtml = (input.bodyIsHtml ? sanitizeComposeBody(input.body) : textToHtml(input.body))
     + (sig ? `<div data-mailflow-signature="1" style="margin-top:16px;color:#555;font-size:13px">${sig}</div>` : '');
   const textBody = sigText ? `${bodyText}\n\n-- \n${sigText}` : bodyText;
