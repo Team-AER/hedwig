@@ -13,6 +13,7 @@ Rules:
 - "due" must be a "YYYY-MM-DD" string or null. Confidence must be a number from 0 to 1.
 - "counterparty": the other person in the obligation (the one owed, or the one who owes), by name or email as written.
 - facts: details worth remembering about the sender or the matter: reference numbers, prices and amounts, appointment dates, addresses, roles. Use the exact value from the email.
+- Every fact must have named "key", "value" and "confidence" properties. Never put an unlabeled string after "key"; write "value": before the fact's value.
 - resolves: items from the tracked list or the earlier thread messages that THIS email completes or delivers (for example the owner attaching documents they promised, or the other side confirming what was asked). Copy the tracked wording in "what".
 - Do not repeat commitments that are already tracked.
 - Confidence reflects how explicitly the email states the item. Use empty arrays when there is nothing.
@@ -23,7 +24,7 @@ Rules:
 const text = { type: ['string','number'] };
 const confidence = { type: ['number','string'] };
 export default {
-  id: 'context.extract', version: '2026-10-24.1', tier: 'reflex', feature: 'extraction',
+  id: 'context.extract', version: '2026-10-24.2', tier: 'reflex', feature: 'extraction',
   system: SYSTEM_PROMPT,
   user: (v) => v.emailContext,
   schema: {

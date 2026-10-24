@@ -119,7 +119,7 @@ describe.skipIf(!process.env.HEDWIG_IT)('normalized content persistence',() => {
     process.env.HEDWIG_LLM_BASE_URL=gw.baseUrl;process.env.HEDWIG_LLM_CATALOG_URL=gw.catalogUrl;
     config.invalidateConfigCache();_resetLlmState();_resetPrompts();gw.install();
     await query('INSERT INTO hedwig_msg(message_id,user_id,account_id) VALUES($1,$2,$3) ON CONFLICT(message_id) DO NOTHING',[id,userId,accountId]);
-    gw.on('context.extract',['Here are the extracted facts.',{commitments:[],facts:[{key,value:'Delivered to reception',confidence:0.95}],resolves:[]}]);
+    gw.on('context.extract',['{"commitments":[],"facts":[{"key":"delivery_location","Reception","confidence":0.9}],"resolves":[]}',{commitments:[],facts:[{key,value:'Delivered to reception',confidence:0.95}],resolves:[]}]);
     try {
       await runExtraction({messageId:id,repair:true,recheck:true});
       expect(gw.callsFor('context.extract')).toHaveLength(2);
