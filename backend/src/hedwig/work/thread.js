@@ -191,7 +191,7 @@ async function compute(userId, threadKey, messages, cfg) {
 
 /** Is a cached story still good for this thread? Only a different latest message invalidates it. Pure. */
 export function cacheValid(cached, messages) {
-  if (!cached || !messages.length) return false;
+  if (!cached || !messages.length || (cached.content_stale && !cached.input_hash)) return false;
   return cached.up_to_message_id === messages[messages.length - 1].id
     && (!cached.input_hash || cached.input_hash === contentRowsHash(messages));
 }
@@ -212,7 +212,9 @@ export async function threadStory(userId, threadId, { refresh = false } = {}) {
   const tldrs = await tldrFor(userId, messages.map((m) => m.id)).catch(() => new Map());
   base.messageTldrs = Object.fromEntries([...tldrs].map(([id, t]) => [id, t.text]));
 
-  const { rows: [cached] } = await query('SELECT * FROM hedwig_work_stories WHERE user_id = $1 AND thread_key = $2', [userId, threadKey]);
+  const { rows: [cached] } = await query(`SELECT w.*,EXISTS(SELECT 1 FROM hedwig_email_content c JOIN messages m ON m.id=c.message_id
+    WHERE c.user_id=$1 AND m.thread_key=$2 AND c.changed AND c.repair_state<>'done') AS content_stale
+    FROM hedwig_work_stories w WHERE w.user_id=$1 AND w.thread_key=$2`, [userId, threadKey]);
   let result;
   if (!refresh && cacheValid(cached, messages) && !cached.error) {
     result = { entry: cached.story, provenance: cached.provenance || {}, cached: true };

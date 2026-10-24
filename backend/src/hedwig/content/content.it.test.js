@@ -40,6 +40,14 @@ describe.skipIf(!process.env.HEDWIG_IT)('normalized content persistence',() => {
     expect((await query('SELECT text FROM hedwig_email_content WHERE message_id=$1',[id])).rows[0].text).toContain('delivered');
     expect((await query('SELECT snippet FROM messages WHERE id=$1',[id])).rows[0].snippet).not.toContain('Injected');
   });
+  it('builds searchable chunks in resumable batches before model regeneration',async () => {
+    const { reindexContentBatch }=await import('./repair.js');
+    const first=await reindexContentBatch({ messageIds:[id] });
+    expect(first.processed).toBe(1);
+    const chunks=(await query("SELECT text FROM hedwig_chunks WHERE message_id=$1 AND kind='body'",[id])).rows;
+    expect(chunks.some((r) => r.text.includes('delivered'))).toBe(true);
+    expect((await reindexContentBatch({ messageIds:[id] })).processed).toBe(0);
+  });
   it('captures inert metadata from the raw mailbox body without putting it into display HTML',async () => {
     const { captureMailboxMetadata }=await import('../../services/emailMetadataStore.js');
     await captureMailboxMetadata(accountId,990001,'INBOX','<script type="application/ld+json">{"@type":"Order","orderNumber":"1547718"}</script>');

@@ -260,7 +260,8 @@ export async function tldrFor(userId, messageIds) {
        FROM messages m
        JOIN messages mx ON mx.account_id = m.account_id AND (mx.id = m.id OR (m.message_id IS NOT NULL AND mx.message_id = m.message_id))
        JOIN hedwig_work_tldr x ON x.message_id = mx.id AND x.user_id = $1 AND x.text IS NOT NULL
-      WHERE m.id = ANY($2::uuid[])
+       LEFT JOIN hedwig_email_content ec ON ec.message_id=mx.id AND ec.user_id=$1
+      WHERE m.id = ANY($2::uuid[]) AND (ec.message_id IS NULL OR NOT ec.changed OR ec.repair_state='done' OR x.updated_at>=ec.updated_at)
       ORDER BY m.id, (mx.id = m.id) DESC, x.updated_at DESC`,
     [userId, ids],
   );

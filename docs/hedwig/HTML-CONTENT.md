@@ -26,10 +26,10 @@ Run inside the deployed backend container with its existing database environment
 node scripts/hedwig-repair-content.mjs
 node scripts/hedwig-repair-content.mjs --apply --normalise-only
 node scripts/hedwig-repair-content.mjs --apply MESSAGE_UUID
-node scripts/hedwig-repair-content.mjs --apply --metadata
+node scripts/hedwig-repair-content.mjs --apply --index-first --metadata
 ```
 
-The last command normalizes stored bodies, queues scoped repairs, and queues rate-limited raw
+The last command normalizes stored bodies, builds corrected chunks in batches, queues scoped repairs, and queues rate-limited raw
 metadata refreshes for changed transactional mail whose original metadata was stripped. Use the
 message UUID with `--metadata` for a canary. The default command is read-only. Jobs are durable in
 `hedwig_jobs`; each message checkpoints successful stages in `repair_progress`, keyed by its

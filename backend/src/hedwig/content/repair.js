@@ -10,11 +10,34 @@ import { summariseMessages, summariseThreads } from '../work/summaries.js';
 import { loadThreadMessages, ownerOf } from '../work/util.js';
 import { runExtraction } from '../context/extract.js';
 import { runEmbedStep } from '../context/embed.js';
-import { enqueue } from '../jobs.js';
+import { enqueue, deferJob } from '../jobs.js';
+import { currentRecipe } from '../indexer/recipe.js';
 import { normaliseRows } from './store.js';
 
 export async function contentRepairStatus() {
   return (await query(`SELECT repair_state,state,changed,COUNT(*)::int AS messages FROM hedwig_email_content GROUP BY 1,2,3 ORDER BY 1,2`)).rows;
+}
+
+/** Build corrected chunks in batches independently of the budget for model-generated outputs. */
+export async function reindexContentBatch({ messageIds = null, limit = 100 } = {}) {
+  const { rows } = await query(
+    `SELECT ${MESSAGE_COLUMNS},c.content_hash FROM messages m JOIN email_accounts a ON a.id=m.account_id
+      LEFT JOIN folders f ON f.account_id=m.account_id AND f.path=m.folder
+      JOIN hedwig_email_content c ON c.message_id=m.id AND c.user_id=a.user_id
+      WHERE c.changed AND NOT m.is_deleted AND ($1::uuid[] IS NULL OR m.id=ANY($1))
+        AND c.repair_progress->>'chunks' IS DISTINCT FROM c.content_hash
+      ORDER BY m.date DESC NULLS LAST LIMIT $2`,[messageIds,limit],
+  );
+  if (!rows.length) return { processed:0 };
+  await decorate(rows);
+  await indexMessages(rows);
+  for (const row of rows) {
+    const { rows:state }=await query('SELECT error FROM hedwig_index_msg WHERE message_id=$1',[row.id]);
+    if (state[0]?.error) throw new Error(`index ${row.id}: ${state[0].error}`);
+    await query(`UPDATE hedwig_email_content SET repair_progress=repair_progress || jsonb_build_object('chunks',content_hash)
+      WHERE message_id=$1 AND content_hash=$2`,[row.id,row.content_hash]);
+  }
+  return { processed:rows.length };
 }
 
 /** Each successful stage is checkpointed; a failed model call leaves the previous usable output. */
@@ -46,10 +69,11 @@ export async function repairMessage({ messageId, userId }) {
   };
   try {
     await stage('index', async () => {
-      await indexMessages(rows);
+      if (progress.chunks !== expectedHash) await indexMessages(rows);
       await embedPending({ messageIds:[messageId],maxChunks:256 });
-      const indexed=(await query('SELECT error FROM hedwig_index_msg WHERE message_id=$1',[messageId])).rows[0];
+      const indexed=(await query('SELECT error,embed_recipe FROM hedwig_index_msg WHERE message_id=$1',[messageId])).rows[0];
       if (indexed?.error) throw new Error(indexed.error);
+      if ((await currentRecipe()).vectors && !indexed?.embed_recipe) deferJob('waiting for corrected content embeddings',30000);
       if (row.embedded_at) await runEmbedStep(rows);
     });
     const spam = row.special_use === '\\Junk' || /(^|[/.])(spam|junk|bulk mail)$/i.test(row.folder || '');
@@ -110,5 +134,9 @@ export async function enqueueContentRepairs({ messageIds = null, limit = 100, ne
     });
     if (id) enqueued++;
   }
+  if (rows.length) await query(`UPDATE hedwig_ask_log a SET evidence_stale=true
+    WHERE EXISTS (SELECT 1 FROM jsonb_array_elements_text(a.sources) s
+      JOIN hedwig_email_content c ON c.message_id::text=s.value AND c.user_id=a.user_id
+      WHERE c.message_id=ANY($1::uuid[]))`,[rows.map((r) => r.message_id)]);
   return { candidates:rows.length,enqueued };
 }
