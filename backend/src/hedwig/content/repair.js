@@ -68,12 +68,23 @@ export async function repairMessage({ messageId, userId }) {
     progress[name] = expectedHash;
   };
   try {
+    const recipe = await currentRecipe();
+    const priorIndex = (await query('SELECT chunk_version,embed_recipe,error FROM hedwig_index_msg WHERE message_id=$1',[messageId])).rows[0];
+    // A body refresh or recipe rebuild can invalidate the index independently of this hash.
+    const rebuild = !priorIndex || priorIndex.error || priorIndex.chunk_version !== recipe.version;
+    if (rebuild || (recipe.vectors && priorIndex.embed_recipe !== recipe.full)) delete progress.index;
     await stage('index', async () => {
-      if (progress.chunks !== expectedHash) await indexMessages(rows);
+      if (rebuild || progress.chunks !== expectedHash) {
+        await indexMessages(rows);
+        const state = (await query('SELECT error FROM hedwig_index_msg WHERE message_id=$1',[messageId])).rows[0];
+        if (state?.error) throw new Error(state.error);
+        await query(`UPDATE hedwig_email_content SET repair_progress=repair_progress || jsonb_build_object('chunks',content_hash)
+          WHERE message_id=$1 AND user_id=$2 AND content_hash=$3`,[messageId,userId,expectedHash]);
+      }
       await embedPending({ messageIds:[messageId],maxChunks:256 });
       const indexed=(await query('SELECT error,embed_recipe FROM hedwig_index_msg WHERE message_id=$1',[messageId])).rows[0];
       if (indexed?.error) throw new Error(indexed.error);
-      if ((await currentRecipe()).vectors && !indexed?.embed_recipe) deferJob('waiting for corrected content embeddings',30000);
+      if (recipe.vectors && indexed?.embed_recipe !== recipe.full) deferJob('waiting for corrected content embeddings',30000);
       if (row.embedded_at) await runEmbedStep(rows);
     });
     const spam = row.special_use === '\\Junk' || /(^|[/.])(spam|junk|bulk mail)$/i.test(row.folder || '');
@@ -96,7 +107,7 @@ export async function repairMessage({ messageId, userId }) {
         if (row.had_story && row.thread_key) {
           const messages = await loadThreadMessages(userId,row.thread_key,{ addresses:owner.addresses });
           const results = await summariseThreads(userId,[{ threadKey:row.thread_key,messages }],{ cfg,owner,save:true,source:'content-repair' });
-          if (!results[0]?.ok) throw new Error('story repair produced no usable summary');
+          if (!results[0]?.ok) throw new Error(`story repair produced no usable summary: ${results[0]?.error || 'empty result'}`);
         }
         if (row.had_tldr) {
           const result = await summariseMessages(userId,rows,{ cfg,owner });
