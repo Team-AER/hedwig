@@ -22,7 +22,7 @@ try {
     if (args.includes('--index-first')) {
       let indexed=0;
       for (;;) {
-        const result=await reindexContentBatch({ messageIds:ids.length ? ids : null });
+        const result=await reindexContentBatch({ messageIds:ids.length ? ids : null,limit:20 });
         if (!result.processed) break;
         indexed+=result.processed; console.log(JSON.stringify({ reindexed:indexed }));
       }

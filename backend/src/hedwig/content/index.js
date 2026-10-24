@@ -38,6 +38,7 @@ export async function repairDependencies({ userId }) {
     return result;
   });
   await refresh('briefing', () => generateBriefing(userId,{ period:'day' }));
+  await refresh('weekly review', () => generateBriefing(userId,{ period:'week' }));
   if (failures.length) throw new Error(`dependency refresh incomplete: ${failures.join('; ').slice(0,850)}`);
   return { refreshed:true };
 }

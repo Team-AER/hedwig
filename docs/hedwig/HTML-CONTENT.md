@@ -64,3 +64,5 @@ database recovery; it would also discard mail or user actions received after the
 the backup until repaired output and normal mail behavior have been verified.
 
 Affected entity/topic summaries use separate, scoped durable jobs, so unrelated stale topics cannot monopolize a repair run.
+
+Structural quote segmentation preserves distinct MIME alternatives and falls back to bounded selected text when parser limits are reached. The maintenance CLI reindexes in batches of 20 to limit memory during large historical repairs. Both daily and weekly briefings are refreshed.

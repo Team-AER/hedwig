@@ -111,7 +111,9 @@ export function emailContent(row = {}, options = {}) {
   if (looksLikeHtml(plain)) { if (!html.trim()) html = plain; plain = ''; }
   const parsed = extractHtmlContent(html, options);
   const usable = parsed.text && !isPlaceholder(parsed.text);
-  let source = 'plain'; let reason = 'substantive_plain'; let text = plain;
+  let source = 'plain'; let reason = 'substantive_plain'; let text = plain; let additionalPlain = '';
+  const htmlWords = usable && plain ? words(parsed.text) : new Set();
+  const distinctPlain = Boolean(usable && plain && [...words(plain)].filter((w) => !htmlWords.has(w)).length >= 8);
   if ((!plain || isPlaceholder(plain)) && usable) {
     text = parsed.text; source = 'html'; reason = plain ? 'plain_placeholder' : 'plain_empty';
   } else if (usable && plain) {
@@ -121,13 +123,12 @@ export function emailContent(row = {}, options = {}) {
       || (missingNumber && parsed.text.length > plain.length * 1.1)
       || (parsed.tables.length && extra.length >= 2 && parsed.text.length > plain.length * 1.2)) {
       text = parsed.text; source = 'html'; reason = 'html_richer';
-      const h = words(parsed.text); const uniquePlain = [...p].filter((w) => !h.has(w));
-      if (uniquePlain.length >= 8 && !isPlaceholder(plain)) text += `\n\n[Additional plain-text alternative]\n${plain}`;
+      if (distinctPlain && !isPlaceholder(plain)) { additionalPlain = plain; text += `\n\n[Additional plain-text alternative]\n${plain}`; }
     }
   } else if (!plain && !usable) { text = row.snippet || ''; source = text ? 'snippet' : 'none'; reason = 'no_readable_body'; }
   const truncated = parsed.truncated || text.length > MAX_TEXT_CHARS;
   text = clean(text.slice(0, MAX_TEXT_CHARS));
   const state = !text ? (html ? 'image_only' : 'empty') : isPlaceholder(text) ? 'placeholder' : source === 'snippet' ? 'partial' : 'readable';
   const hash = createHash('sha256').update(`${CONTENT_VERSION}\0${text}\0${JSON.stringify(row.content_metadata || [])}`).digest('hex');
-  return { ...parsed, text, source, reason, state, hash, version: CONTENT_VERSION, truncated };
+  return { ...parsed, text, source, reason, state, hash, version: CONTENT_VERSION, truncated, distinctPlain, additionalPlain };
 }

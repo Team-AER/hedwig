@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { messageText } from './text.js';
-import { splitBody } from './indexer/parse.js';
+import { splitBody,splitHtml } from './indexer/parse.js';
 import { convert } from './htmlToText.js';
 import { detectOrders } from './cards/detect/orders.js';
 import { snippetFromBody } from '../services/messageParser.js';
@@ -18,6 +18,21 @@ describe('HTML evidence reaches intelligence', () => {
   ])('%s reads the order instead of the MIME notice', (_name, read) => {
     expect(read(order)).toContain('Payment Received');
     expect(read(order)).not.toContain('does not support HTML');
+  });
+  it('keeps a distinct plain alternative when HTML quote segmentation runs', () => {
+    const r={body_text:'Please bring your signed contract and budget documents to the office meeting tomorrow.',
+      body_html:'<p>Your order 1547718 is confirmed. Payment received ₹1240 INR. Items ship to Delhi within four working days. Shipment tracking is available from your account page.</p><div class="gmail_signature">Shop support</div>'};
+    expect(messageText(r)).toContain('signed contract');
+    expect(splitBody(r).newText).toContain('signed contract');
+    expect(splitBody(r).newText).toContain('1547718');
+  });
+  it('honors selected plain evidence when a different HTML part has quote markup', () => {
+    const text='Please bring your signed contract and budget documents to the office meeting tomorrow.';
+    const row={body_text:text,body_html:'<p>Hello</p><div class="gmail_quote">Old unrelated text</div>'};
+    expect(splitBody(row).newText).toBe(text);
+  });
+  it('bounds structural quote segmentation before building a deep DOM', () => {
+    expect(splitHtml('<div class="gmail_quote">'+'<div>'.repeat(512)+'old'+'</div>'.repeat(512)+'</div>')).toBeNull();
   });
   it('keeps table cells separate', () => {
     expect(convert('<table><tr><td>Order</td><td>1547718</td><td>Total</td><td>₹1,240</td></tr></table>')).toMatch(/Order\s+\|\s+1547718\s+\|\s+Total\s+\|\s+₹1,240/);
