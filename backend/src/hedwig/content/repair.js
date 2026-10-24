@@ -111,8 +111,13 @@ export async function repairMessage({ messageId, userId }) {
       // Only the machine-generated gist is invalidated; every other plugin annotation survives.
       await query(`UPDATE messages SET plugin_annotations=jsonb_set(plugin_annotations,'{gtd}',(plugin_annotations->'gtd')-'gist')
         WHERE id=$1 AND plugin_annotations->'gtd' ? 'gist'`,[messageId]);
-      await query(`UPDATE hedwig_entities e SET summary_at=NULL WHERE e.user_id=$1 AND e.id IN (SELECT entity_id FROM hedwig_message_entities WHERE message_id=$2)`,[userId,messageId]);
-      await query(`UPDATE hedwig_topics t SET summary_at=NULL WHERE t.user_id=$1 AND t.id IN (SELECT topic_id FROM hedwig_topic_members WHERE message_id=$2)`,[userId,messageId]);
+      // One bounded job per affected summary; unrelated stale topics must not block this repair.
+      const {rows:entities}=await query(`UPDATE hedwig_entities e SET summary_at=NULL WHERE e.user_id=$1 AND e.summary IS NOT NULL
+        AND e.id IN (SELECT entity_id FROM hedwig_message_entities WHERE message_id=$2) RETURNING id`,[userId,messageId]);
+      const {rows:topics}=await query(`UPDATE hedwig_topics t SET summary_at=NULL WHERE t.user_id=$1 AND t.summary IS NOT NULL
+        AND t.id IN (SELECT topic_id FROM hedwig_topic_members WHERE message_id=$2) RETURNING id`,[userId,messageId]);
+      for (const {id} of entities) await enqueue('content.repairContext',{userId,entityId:id},{userId,dedupeKey:`content:entity:${id}`,priority:9,maxAttempts:8});
+      for (const {id} of topics) await enqueue('content.repairContext',{userId,topicId:id},{userId,dedupeKey:`content:topic:${id}`,priority:9,maxAttempts:8});
       if (!spam) await enqueue('content.repairDependencies',{ userId },{ userId,dedupeKey:`content:dependencies:${userId}`,priority:9 });
     });
     await query(`UPDATE hedwig_email_content SET repair_state='done',auto_repair=false,repaired_at=NOW(),repair_error=NULL WHERE message_id=$1 AND user_id=$2 AND content_hash=$3`,[messageId,userId,expectedHash]);

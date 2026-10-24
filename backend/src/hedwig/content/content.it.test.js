@@ -61,6 +61,7 @@ describe.skipIf(!process.env.HEDWIG_IT)('normalized content persistence',() => {
     const { _resetPrompts }=await import('../prompts/index.js');
     const { _resetLlmState }=await import('../llm.js');
     const { summarizeTopic }=await import('../context/summaries.js');
+    const { repairContext }=await import('./index.js');
     const gw=mockGateway();
     const oldBase=process.env.HEDWIG_LLM_BASE_URL; const oldCatalog=process.env.HEDWIG_LLM_CATALOG_URL;
     process.env.HEDWIG_LLM_BASE_URL=gw.baseUrl; process.env.HEDWIG_LLM_CATALOG_URL=gw.catalogUrl;
@@ -71,7 +72,9 @@ describe.skipIf(!process.env.HEDWIG_IT)('normalized content persistence',() => {
     const response=() => ++calls===1 ? { wrong:'shape' } : { summary:'The order was delivered to reception [1].' };
     gw.on('context.summarise',response); gw.on('context.summary',response);
     try {
-      await summarizeTopic(topic,{userId,force:true,suppressHooks:true});
+      expect(await repairContext({userId:'00000000-0000-0000-0000-000000000000',topicId:topic})).toEqual({refreshed:false});
+      expect(calls).toBe(0);
+      expect(await repairContext({userId,topicId:topic})).toEqual({refreshed:true});
       expect(calls).toBe(2);
       const saved=(await query('SELECT summary,summary_sources FROM hedwig_topics WHERE id=$1',[topic])).rows[0];
       expect(saved.summary).toContain('delivered'); expect(saved.summary_sources).toEqual([id]);

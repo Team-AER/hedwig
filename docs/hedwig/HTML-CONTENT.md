@@ -62,3 +62,5 @@ The additive tables and columns can remain: the previous release ignores them. D
 `content.*` jobs before returning to an old worker. Restoring the database dump is reserved for a
 database recovery; it would also discard mail or user actions received after the backup. Keep
 the backup until repaired output and normal mail behavior have been verified.
+
+Affected entity/topic summaries use separate, scoped durable jobs, so unrelated stale topics cannot monopolize a repair run.

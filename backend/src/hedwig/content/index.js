@@ -30,10 +30,6 @@ export async function repairDependencies({ userId }) {
   }
   await retrainSpam(userId);
   await retrainTriage(userId);
-  const { rows:entities } = await query('SELECT id FROM hedwig_entities WHERE user_id=$1 AND summary_at IS NULL AND summary IS NOT NULL',[userId]);
-  for (const e of entities) await refresh(`entity ${e.id}`, () => summarizeEntity(e.id,{ userId,force:true,suppressHooks:true }));
-  const { rows:topics } = await query('SELECT id FROM hedwig_topics WHERE user_id=$1 AND summary_at IS NULL AND summary IS NOT NULL',[userId]);
-  for (const t of topics) await refresh(`topic ${t.id}`, () => summarizeTopic(t.id,{ userId,force:true,suppressHooks:true }));
   const { rows:profile } = await query('SELECT user_id FROM hedwig_profile WHERE user_id=$1 LIMIT 1',[userId]);
   if (profile.length) await refresh('profile', () => rebuildProfile(userId));
   await refresh('labels', async () => {
@@ -46,6 +42,12 @@ export async function repairDependencies({ userId }) {
   return { refreshed:true };
 }
 
+export async function repairContext({ userId,entityId,topicId }) {
+  if (entityId) return { refreshed:await summarizeEntity(entityId,{userId,force:true,suppressHooks:true}) };
+  if (topicId) return { refreshed:await summarizeTopic(topicId,{userId,force:true,suppressHooks:true}) };
+  throw new Error('context repair needs an entity or topic');
+}
+
 export default {
   name:'content',
   api({ imapManager }) { defineJob(METADATA_JOB,metadataHandler(imapManager),{ timeoutMs:90000 }); },
@@ -53,6 +55,7 @@ export default {
     defineStep({ name:'content',order:5,backfill:true,spam:true,run:normaliseRows });
     defineSchedule({ name:'content.normalise',everySec:10,run:async () => { await normaliseSweep(); await enqueueContentRepairs({ newlyChangedOnly:true }); } });
     defineJob('content.repair',repairMessage,{ timeoutMs:15*60_000,needsGateway:true });
+    defineJob('content.repairContext',repairContext,{ timeoutMs:3*60_000,needsGateway:true });
     defineJob('content.repairDependencies',repairDependencies,{ timeoutMs:15*60_000,needsGateway:true });
   },
   adminRoutes(r) { r.get('/content/health',async (_req,res) => res.json(await contentRepairStatus())); },
