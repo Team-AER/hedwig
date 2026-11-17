@@ -160,7 +160,8 @@
     "react-dom": "^18.2.0",
     "react-i18next": "^17.0.6",
     "react-router-dom": "^7.18.4",
-    "zustand": "^4.5.0"
+    "zustand": "^4.5.0",
+    "@sentry/browser": "10.78.0"
   },
   "devDependencies": {
     "@capacitor/cli": "^8.3.4",

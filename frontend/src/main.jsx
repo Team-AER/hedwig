@@ -1,3 +1,4 @@
+import { reportError } from './monitoring.js';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
@@ -10,9 +11,9 @@ import './hedwig/index.js'; // Hedwig: register pane views, Hedwig views and she
 
 // ErrorBoundary sits outside the router: a throw during routing or in any screen below it
 // would otherwise unmount everything and leave a blank page with no explanation (#441).
-ReactDOM.createRoot(document.getElementById('root')).render(
+ReactDOM.createRoot(document.getElementById('root'), { onRecoverableError: reportError }).render(
   <React.StrictMode>
-    <ErrorBoundary>
+    <ErrorBoundary onError={reportError}>
       <BrowserRouter>
         <App />
       </BrowserRouter>

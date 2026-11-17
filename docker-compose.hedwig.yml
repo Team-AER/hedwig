@@ -9,6 +9,9 @@ name: hedwig
 
 x-backend-env: &backend-env
   NODE_ENV: production
+  GLITCHTIP_DSN: ${GLITCHTIP_DSN:-}
+  SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-production}
+  SENTRY_RELEASE: ${SENTRY_RELEASE:-hedwig@3.5.2}
   SESSION_SECRET: ${SESSION_SECRET}
   APP_URL: ${APP_URL:-}
   FRONTEND_URL: ${APP_URL:-}

@@ -24,6 +24,7 @@ export default class ErrorBoundary extends React.Component {
   }
 
   componentDidCatch(error, info) {
+    this.props.onError?.(error);
     // Keep the full component stack in the console for anyone with devtools open; the UI
     // below shows only the message, which is what a user can reasonably be asked to relay.
     console.error('Unhandled render error:', error, info?.componentStack);
