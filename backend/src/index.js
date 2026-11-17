@@ -1,3 +1,4 @@
+import { reportError } from './monitoring.js';
 import express from 'express';
 import 'express-async-errors'; // route a rejected async handler to the error middleware (Express 4 doesn't)
 import session from 'express-session';
@@ -229,6 +230,7 @@ app.get('/api/update', async (_req, res) => {
 // rejections here; without both pieces, a thrown DB error hangs the request.
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, _next) => {
+  reportError(err);
   console.error('Unhandled route error:', err);
   if (res.headersSent) return;
   res.status(500).json({ error: 'Internal server error' });

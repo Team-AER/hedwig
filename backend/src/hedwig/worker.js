@@ -1,3 +1,4 @@
+import { reportError } from '../monitoring.js';
 // hedwig-worker: runs the intelligence pipeline, jobs and schedules in its own process so model
 // calls, embedding batches and retraining never block the API's event loop or IMAP sync.
 // Same image as the backend; started with `node src/hedwig/worker.js`.
@@ -52,6 +53,7 @@ async function scanLoop() {
       // Keep going without a pause while there is backlog.
       if (res.backfill > 0 || res.realtime >= cfg['pipeline.batchSize']) waitSec = 1;
     } catch (err) {
+      reportError(err);
       console.warn('[hedwig-worker] scan failed:', err.message);
     }
     await sleep(waitSec * 1000);
