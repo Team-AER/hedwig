@@ -68,6 +68,10 @@ services:
       context: .
       dockerfile: frontend/Dockerfile
       args:
+        VITE_GLITCHTIP_DSN: ${VITE_GLITCHTIP_DSN:-${GLITCHTIP_DSN:-}}
+        VITE_GLITCHTIP_TUNNEL: ${VITE_GLITCHTIP_TUNNEL:-}
+        VITE_SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-production}
+        VITE_SENTRY_RELEASE: ${SENTRY_RELEASE:-}
         VITE_BUILD_SHA: ${GIT_SHA:-dev}
         VITE_EMAIL_DIV_RENDER: ${VITE_EMAIL_DIV_RENDER:-false}
         NGINX_BASE: ${NGINX_BASE:-nginx:alpine}
